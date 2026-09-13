@@ -106,6 +106,24 @@ export default function BestellungDetail() {
               )}
             </Card>
 
+            {o.trackingNumber ? (
+              <Card testID="order-shipping-card">
+                <View style={styles.statusHead}>
+                  <Text style={styles.cardTitle}>Versand</Text>
+                  <Truck size={20} color={colors.brandPrimary} weight="bold" />
+                </View>
+                <InfoRow label="Sendungsnummer" value={o.trackingNumber} />
+                {o.estimatedDelivery ? (
+                  <InfoRow label="Voraussichtliche Lieferung" value={dateDE(o.estimatedDelivery)} />
+                ) : null}
+                {o.status === "Abgeschlossen" ? (
+                  <Text style={[styles.deliveredTxt, { color: colors.success }]}>Zugestellt</Text>
+                ) : (
+                  <Muted style={{ marginTop: 4 }}>Ihre Bestellung ist unterwegs.</Muted>
+                )}
+              </Card>
+            ) : null}
+
             <Card testID="order-items-card">
               <Text style={styles.cardTitle}>Positionen</Text>
               {o.items.map((it: any, idx: number) => {
@@ -178,4 +196,5 @@ const useStyles = makeStyles((c) => ({
   totalRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingTop: 4 },
   totalLabel: { fontSize: 15, color: c.muted, fontWeight: "600" },
   totalValue: { fontSize: 20, fontWeight: "800", color: c.onSurface },
+  deliveredTxt: { fontSize: 14, fontWeight: "800", marginTop: 4 },
 }));

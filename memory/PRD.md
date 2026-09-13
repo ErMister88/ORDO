@@ -43,5 +43,5 @@
 - **P2**: Multi-item offers/orders (currently single line item in UI).
 
 ## Next Tasks
-- Multi-line-item offers in the UI.
-- Delivery date / tracking number on shipped orders.
+- Delivery push updates when an order ships (needs native build).
+- Downloadable monthly statement (all invoices of a month as one PDF).

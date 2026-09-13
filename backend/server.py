@@ -245,12 +245,33 @@ async def update_product(product_id: str, body: ProductIn, user: Annotated[dict,
 
 @api_router.post("/customer-prices")
 async def upsert_customer_price(body: CustomerPriceIn, user: Annotated[dict, Depends(require_roles("admin"))]):
+    existing = await db.customer_prices.find_one({"companyId": body.companyId, "productId": body.productId})
+    old_price = existing["price"] if existing else None
+    if old_price != body.price:
+        await db.price_history.insert_one({
+            "companyId": body.companyId,
+            "productId": body.productId,
+            "oldPrice": old_price,
+            "newPrice": body.price,
+            "changedBy": user["id"],
+            "changedByName": user.get("name", ""),
+            "changedAt": datetime.now(timezone.utc).isoformat(),
+        })
     await db.customer_prices.update_one(
         {"companyId": body.companyId, "productId": body.productId},
         {"$set": {"price": body.price}},
         upsert=True,
     )
     return {"ok": True, **body.model_dump()}
+
+
+@api_router.get("/companies/{company_id}/price-history")
+async def get_price_history(company_id: str, user: Annotated[dict, Depends(require_roles("admin", "sales"))]):
+    ids = await visible_company_ids(user)
+    if company_id not in ids:
+        raise HTTPException(status_code=403, detail="Keine Berechtigung")
+    rows = await db.price_history.find({"companyId": company_id}).sort("changedAt", -1).to_list(500)
+    return [strip_id(r) for r in rows]
 
 
 @api_router.delete("/customer-prices")
@@ -413,7 +434,15 @@ async def set_order_status(order_id: str, body: OrderStatusIn, user: Annotated[d
     ids = await visible_company_ids(user)
     if o["companyId"] not in ids:
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
-    await db.orders.update_one({"id": order_id}, {"$set": {"status": body.status}})
+    update = {"status": body.status}
+    # When shipped, attach tracking + estimated delivery (once)
+    if body.status == "Versendet" and not o.get("trackingNumber"):
+        now = datetime.now(timezone.utc)
+        eta = now + timedelta(days=2)
+        update["trackingNumber"] = f"SS{now.strftime('%y%m%d')}{o['id'].split('-')[-1]}"
+        update["shippedAt"] = now.isoformat()
+        update["estimatedDelivery"] = eta.date().isoformat()
+    await db.orders.update_one({"id": order_id}, {"$set": update})
     return {"ok": True, "status": body.status}
 
 
@@ -432,6 +461,21 @@ async def get_invoices(user: Annotated[dict, Depends(current_user)]):
     ids = await visible_company_ids(user)
     rows = await db.invoices.find({"companyId": {"$in": ids}}).sort("date", -1).to_list(1000)
     return [strip_id(r) for r in rows]
+
+
+@api_router.put("/invoices/{invoice_id}/pay")
+async def mark_invoice_paid(invoice_id: str, user: Annotated[dict, Depends(require_roles("admin", "sales"))]):
+    inv = await db.invoices.find_one({"id": invoice_id})
+    if not inv:
+        raise HTTPException(status_code=404, detail="Rechnung nicht gefunden")
+    ids = await visible_company_ids(user)
+    if inv["companyId"] not in ids:
+        raise HTTPException(status_code=403, detail="Keine Berechtigung")
+    await db.invoices.update_one(
+        {"id": invoice_id},
+        {"$set": {"status": "Bezahlt", "paidAt": datetime.now(timezone.utc).isoformat()}},
+    )
+    return {"ok": True, "status": "Bezahlt"}
 
 
 # --------------------------------------------------------------------------

@@ -1,0 +1,44 @@
+{
+  "summary": "Iteration 3 tested end-to-end (backend + mobile UI 390x844). All 4 new features PASS. Backend: 57/57 pytest cases pass (43 regression + 14 new iteration-3). Frontend: 4/4 critical flows pass. FEATURE 1 Preis-Historie – POST /api/customer-prices with a different price writes a price_history row (oldPrice/newPrice/changedByName), same price NO row; GET /api/companies/{id}/price-history is admin+sales only (customer 403), sales cannot query other-company (c2 -> 403), returns newest-first. UI: /kunde/c1 Konditionen after price-save-p1 with new price shows history-0 card with '15,75 € → 15,60 €' and 'Sergio (Admin)'. FEATURE 2 Lieferdatum – PUT /orders/{id}/status 'Versendet' sets trackingNumber (format SSyymmdd+orderNo, e.g. SS26091301013), shippedAt, estimatedDelivery (now+2d). Setting Versendet again does NOT overwrite tracking (idempotent, code guarded by `not o.get('trackingNumber')`). UI: admin advances a Neu order 3 times → order-shipping-card renders with Sendungsnummer + Voraussichtliche Lieferung; customer logging into the same order sees the shipping card and NO advance-status button. FEATURE 3 Mehrere Positionen – POST /offers with multi-item array: all ok -> Freigegeben, one below salesFloor -> Freigabe nötig, one below absoluteFloor -> 400. UI: add-line-button stages positions, second product added, remove-line-1 removes staged line, add is blocked with 'Unter absoluter Preisgrenze' hint when price < absFloor, submit label reads 'Angebot erstellen (2)' and the created offer card (A-2026-0226) lists BOTH 'Gambilongo Espresso Bar · 20 kg · 16,90 €/kg' and 'Caffè Aiello Strong · 5 kg · 18,90 €/kg'. FEATURE 4 Rechnung bezahlen – PUT /invoices/{id}/pay is admin+sales (customer 403), missing 404, sets status Bezahlt + paidAt; dashboard.openInvoices drops by exactly the paid amount. UI: /kunde/c1 Rechnungen segment, pay-invoice-RE-2026-0921 button tap flips badge to 'Bezahlt' and hides the button. Regression: 3-role login, /products /companies /offers /orders /invoices /contracts /dashboard /analytics all 200; two rapid /offers get unique sequential IDs.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "components using shadow* styles (StyleSheet)", "issue": "Console warning: 'shadow*' style props are deprecated. Use 'boxShadow'. Non-blocking; migrate shadow* -> boxShadow on RN 0.76+/Expo SDK 52+. Reference: /app/frontend/src/components/ui.tsx (Card shadow styles) and any other component using shadowColor/Offset/Opacity/Radius."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration3.py",
+    "/app/backend/tests/test_iteration2.py",
+    "/app/backend/tests/test_ss_backend.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_results.xml",
+    "/app/test_reports/pytest/pytest_iter3.xml"
+  ],
+  "action_items": [
+    "Optional: migrate shadow* StyleSheet props (Card shadow) to boxShadow to silence RN web deprecation warning.",
+    "Optional: previous iteration-2 PDF bug (share-offer / invoice-pdf crash on web due to expo-print printToFileAsync returning undefined) was NOT re-tested this round — verify if src/lib/pdf.ts was patched.",
+    "Optional: consider exposing an admin 'un-pay' invoice endpoint or a test-only reset so demo data (RE-2026-0921) can be restored — currently we reset via direct Mongo."
+  ],
+  "critical_code_review_comments": [
+    "server.py:437-446 correctly guards trackingNumber generation with `not o.get('trackingNumber')` so repeated Versendet PUTs don't overwrite (verified). trackingNumber format 'SS'+yymmdd+orderNoSuffix is deterministic per order — good.",
+    "server.py:248-259 price_history only writes when old_price != body.price (verified). oldPrice may be None on first-ever price set — surfaces in UI as 'Neu: xx,xx €' (kunde/[id].tsx line 134) — good UX.",
+    "server.py:466-478 invoice pay endpoint does NOT check inv['status'] is currently open — paying an already-paid invoice silently updates paidAt again. Consider returning 409 if already Bezahlt, minor.",
+    "server.py:466 pay endpoint is exposed to sales as well (matches feature spec 'staff'). Good.",
+    "server.py still uses @app.on_event('startup') (line 736) — FastAPI deprecated in 0.109+. Migrate to lifespan handler when convenient.",
+    "kunde/[id].tsx PriceEditorRow (line 250) uses only successful onSuccess -> onSaved; error path shows no message. Minor.",
+    "angebote.tsx CreateOffer: adding a line does not verify the same product isn't already staged (duplicates allowed). Backend accepts duplicates, so functionally fine, but consider merging or blocking."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration3.py",
+    "/app/test_reports/iteration_3.json"
+  ],
+  "success_rate": {"backend": "100% (57/57)", "frontend": "100% on the 4 iteration-3 flows (multi-line offer create, invoice pay, price history display, order shipping card + role-gated advance-button)"},
+  "seed_data_creation": "Cleaned up after tests: restored c1/p1 price to 15.90 and c4/p1 to 16.20 via Mongo; restored RE-2026-0921 status to 'Offen' (unset paidAt); reset order B-2026-01013 to 'Neu' (unset trackingNumber/shippedAt/estimatedDelivery). price_history rows were left in place (append-only log). New offers created during multi-line test (A-2026-021x .. A-2026-0226) were NOT removed — considered normal user activity.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Test admin login: admin@ss-coffee.de/Admin#2026. Customer/company mapping: kunde@ss-coffee.de -> c1. Sales rep u-sales sees c1/c3/c4 (NOT c2). Kunde detail testIDs: segment-{konditionen|rechnungen|historie}, price-input-{pid}, price-save-{pid}, history-{idx}, pay-invoice-{invoiceId}, invoice-{invoiceId}. Angebote CreateOffer testIDs: select-company, company-opt-{cid}, select-product, product-opt-{pid}, offer-qty-input, offer-price-input, add-line-button, offer-line-{idx}, remove-line-{idx}, create-offer-submit. Order detail testIDs: order-status-card, advance-status, order-shipping-card. IMPORTANT: history entries only appear when the saved price DIFFERS from the current DB price (backend skips no-op writes). If a test saves the same value twice, no new history-0 is rendered — this is BY DESIGN and covered in test_iteration3.TestPriceHistory.",
+  "rca_of_issue": "No unresolved issues found. Initial appearance of 'history-0 not visible' during first UI pass was actually correct behaviour: an earlier test in the same session had already written price 15.75 for c1/p1, so re-saving 15.75 was a no-op (backend correctly skips history insert when oldPrice == newPrice). Re-running with a different value (15.60) surfaced the history card with '15,75 € → 15,60 €' and admin name."
+}

@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { View, Text, ScrollView, Pressable, KeyboardAvoidingView, Platform } from "react-native";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocalSearchParams } from "expo-router";
-import { CaretDown, Export } from "phosphor-react-native";
+import { CaretDown, Export, Plus } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
@@ -66,10 +66,11 @@ export default function Angebote() {
             <EmptyState title="Keine offenen Angebote" subtitle="Erstellte Angebote erscheinen hier" />
           ) : (
             (offers.data ?? []).map((o: any) => {
-              const i = o.items[0];
-              const p = prodMap[i.productId];
               const comp = compMap[o.companyId];
-              const db = p ? (i.price - p.cost) * i.qty : null;
+              const monthlyDb = o.items.reduce((s: number, it: any) => {
+                const p = prodMap[it.productId];
+                return s + (p ? (it.price - p.cost) * it.qty : 0);
+              }, 0);
               return (
                 <Card key={o.id} testID={`offer-${o.id}`}>
                   <View style={styles.offerTop}>
@@ -77,9 +78,14 @@ export default function Angebote() {
                     <StatusBadge status={o.status} />
                   </View>
                   {comp ? <Text style={styles.offerCompany}>{comp.name}</Text> : null}
-                  <Muted>
-                    {p ? `${p.brand} ${p.name}` : i.productId} · {num(i.qty)} kg · {euro(i.price)}/kg
-                  </Muted>
+                  {o.items.map((it: any, idx: number) => {
+                    const p = prodMap[it.productId];
+                    return (
+                      <Muted key={idx}>
+                        {p ? `${p.brand} ${p.name}` : it.productId} · {num(it.qty)} kg · {euro(it.price)}/kg
+                      </Muted>
+                    );
+                  })}
                   {o.reason ? <Muted style={{ fontStyle: "italic" }}>{`„${o.reason}"`}</Muted> : null}
 
                   {o.status === "Freigegeben" && (
@@ -95,9 +101,7 @@ export default function Angebote() {
 
                   {isAdmin && o.status === "Freigabe nötig" && (
                     <View style={styles.actions}>
-                      {db != null ? (
-                        <Muted>DB: {euro(db)}/Monat · Vertrag ca. {euro(db * o.termMonths)}</Muted>
-                      ) : null}
+                      <Muted>DB: {euro(monthlyDb)}/Monat · Vertrag ca. {euro(monthlyDb * o.termMonths)}</Muted>
                       <View style={styles.actionRow}>
                         <Button
                           testID={`approve-${o.id}`}
@@ -145,6 +149,7 @@ function CreateOffer({
   const [productId, setProductId] = useState(products[0]?.id || "");
   const [qty, setQty] = useState("60");
   const [price, setPrice] = useState("");
+  const [items, setItems] = useState<{ productId: string; qty: number; price: number }[]>([]);
   const [showComp, setShowComp] = useState(false);
   const [showProd, setShowProd] = useState(false);
   const [msg, setMsg] = useState("");
@@ -171,16 +176,35 @@ function CreateOffer({
 
   const db = product && parsed ? (parsed - product.cost) * q : 0;
 
+  const addItem = () => {
+    if (!product || !parsed || !q) return;
+    if (parsed < product.absoluteFloor) {
+      setMsg("Position unter absoluter Preisgrenze – nicht zulässig.");
+      return;
+    }
+    setItems((prev) => [...prev, { productId, qty: q, price: parsed }]);
+    setPrice("");
+    setQty("60");
+    setMsg("");
+  };
+
+  const removeItem = (idx: number) => setItems((prev) => prev.filter((_, i) => i !== idx));
+
+  const needsApproval = items.some((it) => {
+    const p = products.find((x) => x.id === it.productId);
+    return p && it.price < p.salesFloor;
+  });
+
   const create = useMutation({
     mutationFn: () =>
       apiPost("/offers", {
         companyId,
         termMonths: 48,
-        items: [{ productId, qty: q, price: parsed }],
+        items,
       }),
     onSuccess: () => {
       setMsg("Angebot erstellt");
-      setPrice("");
+      setItems([]);
       onCreated();
     },
     onError: (e: any) => setMsg(e.message),
@@ -213,6 +237,30 @@ function CreateOffer({
             <Text style={styles.optionText}>{c.name}</Text>
           </Pressable>
         ))}
+
+      {items.length > 0 && (
+        <View style={styles.lineList}>
+          {items.map((it, idx) => {
+            const p = products.find((x) => x.id === it.productId);
+            const below = p && it.price < p.salesFloor;
+            return (
+              <View key={idx} style={styles.lineRow} testID={`offer-line-${idx}`}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.lineTitle}>
+                    {p ? `${p.brand} ${p.name}` : it.productId}
+                  </Text>
+                  <Text style={styles.lineSub}>
+                    {num(it.qty)} kg · {euro(it.price)}/kg{below ? " · Freigabe nötig" : ""}
+                  </Text>
+                </View>
+                <Pressable testID={`remove-line-${idx}`} onPress={() => removeItem(idx)} hitSlop={10}>
+                  <Text style={[styles.removeTxt, { color: colors.error }]}>Entfernen</Text>
+                </Pressable>
+              </View>
+            );
+          })}
+        </View>
+      )}
 
       <Text style={styles.fieldLabel}>Produkt</Text>
       <Pressable style={styles.select} testID="select-product" onPress={() => setShowProd((s) => !s)}>
@@ -277,12 +325,26 @@ function CreateOffer({
         <Text style={[styles.hint, { color: colors.success }]}>Direkt freigabefähig.</Text>
       )}
 
+      <Pressable
+        testID="add-line-button"
+        style={[styles.addLineBtn, (!parsed || !q || state === "invalid") && { opacity: 0.5 }]}
+        disabled={!parsed || !q || state === "invalid"}
+        onPress={addItem}
+      >
+        <Plus size={16} color={colors.brandPrimary} weight="bold" />
+        <Text style={styles.addLineTxt}>Position hinzufügen</Text>
+      </Pressable>
+
+      {items.length > 0 && needsApproval ? (
+        <Muted style={{ marginTop: 4 }}>Enthält Positionen unter Vertriebslimit → Admin-Freigabe.</Muted>
+      ) : null}
+
       {msg ? <Text style={[styles.hint, { color: colors.brandPrimary }]}>{msg}</Text> : null}
 
       <Button
         testID="create-offer-submit"
-        title="Angebot erstellen"
-        disabled={!parsed || !q || state === "invalid" || !companyId}
+        title={`Angebot erstellen${items.length ? ` (${items.length})` : ""}`}
+        disabled={items.length === 0 || !companyId}
         loading={create.isPending}
         onPress={() => {
           setMsg("");
@@ -334,4 +396,29 @@ const useStyles = makeStyles((c) => ({
     backgroundColor: c.brandTertiary,
   },
   shareText: { color: c.brandPrimary, fontWeight: "700", fontSize: 14 },
+  lineList: { gap: 8, marginTop: 8 },
+  lineRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: c.surfaceTertiary,
+    borderRadius: 12,
+    padding: 12,
+    gap: 10,
+  },
+  lineTitle: { fontSize: 14, fontWeight: "700", color: c.onSurface },
+  lineSub: { fontSize: 13, color: c.muted, marginTop: 1 },
+  removeTxt: { fontSize: 13, fontWeight: "700" },
+  addLineBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    marginTop: 8,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: c.brandPrimary,
+    borderStyle: "dashed",
+  },
+  addLineTxt: { color: c.brandPrimary, fontWeight: "700", fontSize: 14 },
 }));

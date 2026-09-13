@@ -7,7 +7,7 @@ import { ArrowLeft, Phone, EnvelopeSimple, MapPin, Check } from "phosphor-react-
 
 import { makeStyles, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
-import { apiGet, apiPost } from "@/src/api/client";
+import { apiGet, apiPost, apiPut } from "@/src/api/client";
 import { euro, num, dateDE } from "@/src/lib/format";
 import { Card, InfoRow, Button, Input, StatusBadge, EmptyState, Muted } from "@/src/components/ui";
 
@@ -17,19 +17,34 @@ export default function KundeDetail() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user } = useAuth();
+  const qc = useQueryClient();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const [tab, setTab] = useState<"konditionen" | "historie">("konditionen");
+  const [tab, setTab] = useState<"konditionen" | "rechnungen" | "historie">("konditionen");
   const isAdmin = user?.role === "admin";
 
   const company = useQuery({ queryKey: ["company", id], queryFn: () => apiGet(`/companies/${id}`) });
   const prices = useQuery({ queryKey: ["prices", id], queryFn: () => apiGet(`/companies/${id}/prices`) });
   const products = useQuery({ queryKey: ["products"], queryFn: () => apiGet("/products") });
   const orders = useQuery({ queryKey: ["orders"], queryFn: () => apiGet("/orders") });
+  const invoices = useQuery({ queryKey: ["invoices"], queryFn: () => apiGet("/invoices") });
+  const history = useQuery({
+    queryKey: ["price-history", id],
+    queryFn: () => apiGet(`/companies/${id}/price-history`),
+  });
 
   const c = company.data;
   const prodMap: Record<string, any> = {};
   (products.data ?? []).forEach((p: any) => (prodMap[p.id] = p));
   const custOrders = (orders.data ?? []).filter((o: any) => o.companyId === id);
+  const custInvoices = (invoices.data ?? []).filter((i: any) => i.companyId === id);
+
+  const payInvoice = useMutation({
+    mutationFn: (invId: string) => apiPut(`/invoices/${invId}/pay`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["invoices"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+  });
 
   return (
     <View style={styles.root}>
@@ -67,7 +82,7 @@ export default function KundeDetail() {
         )}
 
         <View style={styles.segment}>
-          {(["konditionen", "historie"] as const).map((t) => (
+          {(["konditionen", "rechnungen", "historie"] as const).map((t) => (
             <Pressable
               key={t}
               testID={`segment-${t}`}
@@ -75,35 +90,82 @@ export default function KundeDetail() {
               onPress={() => setTab(t)}
             >
               <Text style={[styles.segText, tab === t && styles.segTextActive]}>
-                {t === "konditionen" ? "Konditionen" : "Historie"}
+                {t === "konditionen" ? "Konditionen" : t === "rechnungen" ? "Rechnungen" : "Historie"}
               </Text>
             </Pressable>
           ))}
         </View>
 
         {tab === "konditionen" ? (
-          isAdmin ? (
-            <AdminConditions
-              companyId={id!}
-              products={products.data ?? []}
-              prices={prices.data ?? []}
-            />
-          ) : (prices.data ?? []).length === 0 ? (
-            <Muted>Keine individuellen Konditionen hinterlegt.</Muted>
+          <>
+            {isAdmin ? (
+              <AdminConditions
+                companyId={id!}
+                products={products.data ?? []}
+                prices={prices.data ?? []}
+              />
+            ) : (prices.data ?? []).length === 0 ? (
+              <Muted>Keine individuellen Konditionen hinterlegt.</Muted>
+            ) : (
+              (prices.data ?? []).map((cp: any) => {
+                const p = prodMap[cp.productId];
+                return (
+                  <Card key={cp.productId} testID={`price-${cp.productId}`}>
+                    <Text style={styles.prodTitle}>
+                      {p ? `${p.brand} ${p.name}` : cp.productId}
+                    </Text>
+                    <InfoRow label="Kundenpreis" value={`${euro(cp.price)}/${p?.unit ?? "kg"}`} />
+                    {p ? <InfoRow label="Standardpreis" value={euro(p.standardPrice)} /> : null}
+                    {p?.salesFloor ? <InfoRow label="Vertriebslimit" value={euro(p.salesFloor)} /> : null}
+                  </Card>
+                );
+              })
+            )}
+            <Text style={styles.histTitle}>Preisänderungen</Text>
+            {(history.data ?? []).length === 0 ? (
+              <Muted>Noch keine Preisänderungen erfasst.</Muted>
+            ) : (
+              (history.data ?? []).map((h: any, idx: number) => {
+                const p = prodMap[h.productId];
+                return (
+                  <Card key={idx} testID={`history-${idx}`}>
+                    <Text style={styles.prodTitle}>{p ? `${p.brand} ${p.name}` : h.productId}</Text>
+                    <Muted>
+                      {h.oldPrice != null ? `${euro(h.oldPrice)} → ` : "Neu: "}
+                      {euro(h.newPrice)}
+                    </Muted>
+                    <Muted>
+                      {dateDE(h.changedAt)} · {h.changedByName}
+                    </Muted>
+                  </Card>
+                );
+              })
+            )}
+          </>
+        ) : tab === "rechnungen" ? (
+          custInvoices.length === 0 ? (
+            <EmptyState title="Keine Rechnungen" subtitle="Für diesen Kunden liegen keine Rechnungen vor" />
           ) : (
-            (prices.data ?? []).map((cp: any) => {
-              const p = prodMap[cp.productId];
-              return (
-                <Card key={cp.productId} testID={`price-${cp.productId}`}>
-                  <Text style={styles.prodTitle}>
-                    {p ? `${p.brand} ${p.name}` : cp.productId}
-                  </Text>
-                  <InfoRow label="Kundenpreis" value={`${euro(cp.price)}/${p?.unit ?? "kg"}`} />
-                  {p ? <InfoRow label="Standardpreis" value={euro(p.standardPrice)} /> : null}
-                  {p?.salesFloor ? <InfoRow label="Vertriebslimit" value={euro(p.salesFloor)} /> : null}
-                </Card>
-              );
-            })
+            custInvoices.map((inv: any) => (
+              <Card key={inv.id} testID={`invoice-${inv.id}`}>
+                <View style={styles.orderTop}>
+                  <Text style={styles.prodTitle}>{inv.id}</Text>
+                  <StatusBadge status={inv.status} />
+                </View>
+                <InfoRow label="Datum" value={dateDE(inv.date)} />
+                <InfoRow label="Betrag" value={euro(inv.amount)} />
+                {inv.status !== "Bezahlt" ? (
+                  <Button
+                    testID={`pay-invoice-${inv.id}`}
+                    title="Als bezahlt markieren"
+                    kind="success"
+                    loading={payInvoice.isPending && payInvoice.variables === inv.id}
+                    onPress={() => payInvoice.mutate(inv.id)}
+                    style={{ marginTop: 8 }}
+                  />
+                ) : null}
+              </Card>
+            ))
           )
         ) : custOrders.length === 0 ? (
           <EmptyState title="Keine Bestellungen" subtitle="Für diesen Kunden liegen keine Bestellungen vor" />
@@ -159,7 +221,10 @@ function AdminConditions({
           product={p}
           companyId={companyId}
           initial={priceMap[p.id]}
-          onSaved={() => qc.invalidateQueries({ queryKey: ["prices", companyId] })}
+          onSaved={() => {
+            qc.invalidateQueries({ queryKey: ["prices", companyId] });
+            qc.invalidateQueries({ queryKey: ["price-history", companyId] });
+          }}
         />
       ))}
     </>
@@ -272,6 +337,7 @@ const useStyles = makeStyles((c) => ({
   segText: { fontSize: 14, fontWeight: "700", color: c.muted },
   segTextActive: { color: c.onSurface },
   prodTitle: { fontSize: 15, fontWeight: "800", color: c.onSurface },
+  histTitle: { fontSize: 16, fontWeight: "800", color: c.onSurface, marginTop: 12, marginBottom: 2 },
   orderTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   priceRow: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 4 },
   priceSave: {
