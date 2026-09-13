@@ -31,7 +31,8 @@ async def create_checkout(invoice_id: str, user: Annotated[dict, Depends(current
     def _create():
         return stripe.checkout.Session.create(
             mode="payment",
-            payment_method_types=["card"],
+            currency="eur",
+            locale="de",
             line_items=[{
                 "price_data": {
                     "currency": "eur",

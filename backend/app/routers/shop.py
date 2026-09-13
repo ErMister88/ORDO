@@ -95,6 +95,9 @@ async def shop_checkout(order_id: str):
         session = await run_in_threadpool(
             lambda: stripe.checkout.Session.create(
                 mode="payment",
+                currency="eur",
+                locale="de",
+                customer_email=(o.get("customer") or {}).get("email") or None,
                 line_items=[{
                     "price_data": {
                         "currency": "eur",

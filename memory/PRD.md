@@ -54,7 +54,7 @@
 ## Implemented (2026-06-13, Iteration 10) — B2C-Shop
 - **Öffentlicher Shop** (ohne Login, erreichbar über Login → „Zum Kaffee-Shop"): `GET /api/shop/products` (public, kein cost-Leak), Katalog `/shop`, Warenkorb `/shop/warenkorb` (Cart-Context `src/shop/cart.tsx`).
 - **Gast-Checkout**: `POST /api/shop/orders` (serverseitige Preisberechnung aus `b2cPrice`), Versand gratis ab Schwelle, sonst Pauschale; Bestellnr. `S-YYYY-#####`.
-- **Zahlung**: Stripe `POST /api/shop/orders/{id}/checkout` + `/payment-status` (Testmodus, erst nach Deploy live; im Preview 502 erwartet).
+- **Zahlung**: Stripe Checkout mit dynamischen Zahlarten (KEINE feste `payment_method_types` → Karte + PayPal + Klarna/Sofortüberweisung, sofern im Stripe-Konto aktiviert), `currency=eur`, `locale=de`, `customer_email`. Auch Rechnungs-Checkout (B2B) nutzt dynamische Methoden. SOFORT-Standalone von Stripe abgekündigt → Sofortüberweisung via Klarna „Pay now". Erst nach Deploy live.
 - **Admin**: B2C-Preis je Produkt (`b2cPrice` im Produktformular), Shop-Verwaltung `/shop-admin` (Versand-Schwelle/-kosten + B2C-Bestellliste). `GET/PUT /api/shop/settings`, `GET /api/shop/orders`.
 - **Noch offen**: B2C-Konten (Registrierung/Login mit Bestellverlauf) – aktuell nur Gast-Checkout.
 
