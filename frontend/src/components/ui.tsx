@@ -190,11 +190,11 @@ export function EmptyState({ title, subtitle }: { title: string; subtitle?: stri
 const useStyles = makeStyles((c) => ({
   card: {
     backgroundColor: c.surface,
-    borderRadius: 20,
-    padding: 16,
+    borderRadius: 22,
+    padding: 18,
     borderWidth: 1,
     borderColor: c.border,
-    gap: 8,
+    gap: 10,
   },
   sectionTitle: {
     fontSize: 18,
@@ -205,12 +205,12 @@ const useStyles = makeStyles((c) => ({
   kpiCard: {
     flex: 1,
     backgroundColor: c.surface,
-    borderRadius: 16,
-    padding: 14,
+    borderRadius: 20,
+    padding: 16,
     borderWidth: 1,
     borderColor: c.border,
     overflow: "hidden",
-    minHeight: 92,
+    minHeight: 108,
     justifyContent: "center",
   },
   kpiBar: {
@@ -218,18 +218,18 @@ const useStyles = makeStyles((c) => ({
     left: 0,
     top: 0,
     bottom: 0,
-    width: 4,
+    width: 5,
   },
   kpiValue: {
-    fontSize: 24,
+    fontSize: 29,
     fontWeight: "800",
     color: c.onSurface,
-    letterSpacing: -0.5,
+    letterSpacing: -0.6,
   },
   kpiLabel: {
-    fontSize: 12,
+    fontSize: 12.5,
     color: c.muted,
-    marginTop: 4,
+    marginTop: 6,
     fontWeight: "600",
   },
   badge: {
@@ -246,12 +246,12 @@ const useStyles = makeStyles((c) => ({
   badgeText: { fontSize: 12, fontWeight: "700" },
   button: {
     backgroundColor: c.brandPrimary,
-    paddingVertical: 15,
+    paddingVertical: 16,
     paddingHorizontal: 18,
-    borderRadius: 14,
+    borderRadius: 16,
     alignItems: "center",
     justifyContent: "center",
-    minHeight: 50,
+    minHeight: 52,
   },
   buttonSecondary: {
     backgroundColor: c.surfaceTertiary,
@@ -265,9 +265,9 @@ const useStyles = makeStyles((c) => ({
   buttonText: { color: c.onBrandPrimary, fontWeight: "700", fontSize: 15 },
   input: {
     backgroundColor: c.surfaceTertiary,
-    borderRadius: 14,
+    borderRadius: 16,
     paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingVertical: 15,
     color: c.onSurface,
     fontSize: 16,
     borderWidth: 1,

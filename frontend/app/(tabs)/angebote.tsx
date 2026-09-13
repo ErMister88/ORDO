@@ -145,6 +145,8 @@ function CreateOffer({
 }) {
   const styles = useStyles();
   const { colors } = useTheme();
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const [companyId, setCompanyId] = useState(defaultCompanyId || companies[0]?.id || "");
   const [productId, setProductId] = useState(products[0]?.id || "");
   const [qty, setQty] = useState("60");
@@ -307,7 +309,7 @@ function CreateOffer({
         Standard {euro(product.standardPrice)} · Vertriebslimit {euro(product.salesFloor)} · Grenze{" "}
         {euro(product.absoluteFloor)}
       </Muted>
-      {parsed ? (
+      {parsed && isAdmin ? (
         <Muted>
           DB/Monat: {euro(db)} · DB/kg: {euro(parsed - product.cost)}
         </Muted>

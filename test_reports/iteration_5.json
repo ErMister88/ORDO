@@ -1,0 +1,53 @@
+{
+  "summary": "Iteration 5 tested backend + mobile UI (390x844). All new behaviours PASS. Backend (test_iteration5.py, 17 passed + 1 skipped): (a) POST /api/upload as admin returns {url,path}; the url is /api/files/<path>; GET /api/files/<path> returns image bytes with image/* Content-Type (PNG magic bytes verified). (b) text/plain upload => 400 'Nur Bilddateien'. (c) Sales upload => 403; Customer upload => 403. (d) POST/PUT /api/products accept and persist description + imageUrl; admin GET /api/products round-trips them. (e) Role hiding on /api/products: admin has cost/salesFloor/absoluteFloor; sales has NO cost but keeps salesFloor & absoluteFloor; customer has NO cost, salesFloor, absoluteFloor. (f) Role hiding on /api/analytics?months=6: admin gets showMargin=true, totalMargin, marginPct AND per-row 'margin'; sales gets showMargin=false, NO totalMargin/marginPct and NO 'margin' key on any row; customer => 403. (g) Regression: 3-role login, offer create+approve+reject, order create+advance+cancel, customer-prices + price-history, invoice pay all still work; unique sequential IDs intact (B-2026-01001+, A-2026-0201+, p5+). Frontend (mobile 390x844): ADMIN /produkte -> add-product form contains 'Beschreibung' (p-description), 'Bild auswählen' image area (pick-image), 'Einkaufspreis' (p-cost); saving TEST_UIBrand with description shows product-saved-msg, the new product row is visible in the list, and its description text renders. Tapping the new product row opens the form pre-filled with description='UI Beschreibung Test'. ADMIN /auswertungen shows Umsatz+Marge+Menge chips, 'Marge %' pill, subtitle 'Umsatz, Marge & Menge'. ADMIN /angebote create-offer form -> after picking product+price the 'DB/Monat · DB/kg' line IS shown. SALES /auswertungen: Umsatz+Menge chips ONLY, NO Marge chip, NO 'Marge %' pill, subtitle 'Umsatz & Menge'. SALES /angebote: DB/Monat & DB/kg line is NOT shown. Cleanup performed via /app/cleanup_iter5.py: deleted 6 TEST_ products (p5..p10, counter reset to 4), 24 test orders (counter reset to 1000), 6 test offers (counter reset to 200); restored B-2026-00987 to status='Neu' with cancel/tracking fields unset; restored invoices RE-2026-0921/0850/0870 to their seeded statuses. Uploads collection audit rows preserved (bytes remain in Emergent Object Storage - not user-visible). Non-blocking pre-existing warnings: shadow* RN-web deprecation (from iter 3), 'props.pointerEvents is deprecated' + 'TouchableMixin is deprecated' from gifted-charts (harmless, per handoff note). Old test files test_iteration2/3/test_ss_backend.py use 'from tests.conftest import ...' and only import when pytest runs from /app/backend, not /app - pre-existing, not iter5 regression; iter4+iter5 (27 tests) do pass cleanly from either cwd.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "react-native-gifted-charts internals", "issue": "Console warning: 'props.pointerEvents is deprecated. Use style.pointerEvents' and 'TouchableMixin is deprecated. Please use Pressable.' Reference: /app/frontend/app/(tabs)/auswertungen.tsx uses BarChart/LineChart from react-native-gifted-charts. Non-blocking, upstream library warnings."},
+      {"component": "Card component (shadow* styles)", "issue": "Carry-over from iter 3: RN-web 'shadow*' style props are deprecated, migrate to 'boxShadow'. Reference: /app/frontend/src/components/ui.tsx (Card)."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration5.py",
+    "/app/backend/tests/test_iteration4.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_iter5.xml",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Optional: gifted-charts pointerEvents/TouchableMixin warnings come from the vendored lib; upgrade react-native-gifted-charts when a fix is released, or silence in LogBox.",
+    "Optional: migrate shadow* StyleSheet props to boxShadow (carry-over from iter 3).",
+    "Optional: fix stale imports in /app/backend/tests/test_iteration2.py, test_iteration3.py, test_ss_backend.py — they use 'from tests.conftest import ...' which requires cwd=/app/backend; either move to relative import or add a pytest.ini rootdir=backend at /app level.",
+    "Optional: server.py still uses @app.on_event('startup') — migrate to lifespan handlers when convenient.",
+    "Optional consideration: /api/products for role=sales hides 'cost' but the frontend angebote screen gates the DB display purely on isAdmin (frontend/(tabs)/angebote.tsx:312). Both defenses are correct; no action needed."
+  ],
+  "critical_code_review_comments": [
+    "server.py:265-279 get_products cleanly strips cost for sales and cost+salesFloor+absoluteFloor for customer. Good defense-in-depth (backend also hides on top of frontend gating).",
+    "server.py:302-329 upload_image validates content-type against ALLOWED_IMAGE_TYPES, 8 MB cap, uses run_in_threadpool to avoid blocking the event loop, stores a uploads-collection audit row keyed by storagePath. Path scheme '{APP_NAME}/uploads/{userId}/{uuid}.{ext}' avoids collisions.",
+    "server.py:332-341 serve_file requires the storagePath to exist in db.uploads before fetching -> prevents arbitrary storage-path enumeration. Returns Cache-Control: public max-age=86400 which is appropriate.",
+    "server.py:664-720 analytics gates margin behind is_admin — row-level 'margin' key is only added for admin (not just zeroed). Correct — a client dumping the JSON as sales sees no margin footprint at all.",
+    "server.py:302 ALLOWED_IMAGE_TYPES includes image/heic and image/heif — good for iPhone camera roll; PIL/browsers won't render heic though, consider re-encoding server-side later.",
+    "server.py:44-58 init_storage caches _storage_key process-wide with lazy init; get_object catches 503 to re-init. Good resiliency pattern.",
+    "server.py:311 8 MB upload cap: implemented by reading file into memory first — for large uploads a streaming approach would be safer, but 8 MB is fine as-is.",
+    "frontend/(tabs)/auswertungen.tsx:35 metrics filtered by isAdmin AND effect at line 37 auto-resets metric to 'revenue' if sales somehow lands on 'margin' -> defensive, prevents stale query state.",
+    "frontend/(tabs)/angebote.tsx:312 DB/Monat + DB/kg line gated on `parsed && isAdmin` (product.cost is also undefined for sales because backend strips it — no NaN leak).",
+    "frontend/produkte.tsx form loads image via pick-image (native picker) and uploads to /api/upload; on web the picker is not automatable. Backend upload path is fully covered by test_iteration5.TestUpload.",
+    "frontend/produkte.tsx OK save flow keeps form open on create for rapid multi-add (verified in iter 4) and closes on edit — still working; description now round-trips into the row."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration5.py",
+    "/app/cleanup_iter5.py",
+    "/app/test_reports/iteration_5.json",
+    "/app/test_reports/pytest/pytest_iter5.xml",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "success_rate": {"backend": "100% (17/17 iter5 pass + 1 skipped invoice_pay when no Offen invoice remained after prior test-run had paid all; on fresh cleanup all pass). Combined iter4+iter5: 27/27 pass.", "frontend": "100% (8/8 iter5 flows: admin add-product with description+image controls, admin edit prefill, admin Auswertungen Marge chip+pill+subtitle, admin Angebote DB line, sales Auswertungen no Marge chip/pill + 'Umsatz & Menge' subtitle, sales Angebote no DB line)"},
+  "seed_data_creation": "Cleanup script /app/cleanup_iter5.py (idempotent) restored DB: 4 seeded products (p1..p4, product counter=4), 25 seeded orders (24 historical + B-2026-00987 Neu, order counter=1000), 2 seeded offers (A-2026-0187, A-2026-0181, offer counter=200), invoice statuses RE-2026-0921=Offen, RE-2026-0850=Überfällig, RE-2026-0870=Offen, RE-2026-0987=Bezahlt. Uploads audit rows kept in db.uploads (bytes remain in Emergent Object Storage but are not exposed via any admin UI, only used to authorize /api/files/{path} serving).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iter 5 added: (1) POST /api/upload (admin, image, 8 MB, whitelist png/jpeg/webp/heic/heif) -> {url:'/api/files/<path>', path:'<path>'} backed by Emergent Object Storage via requests + run_in_threadpool. (2) GET /api/files/{path:path} — public, requires db.uploads row to exist, streams bytes. (3) Product model has 'description: str = \"\"' and 'imageUrl: str = \"\"' — persisted on POST/PUT /api/products. (4) get_products strips 'cost' for role=sales (in addition to prior stripping for customer). (5) /api/analytics adds 'showMargin' flag; role=sales gets NO 'margin' key on rows, no totalMargin, no marginPct. Frontend testIDs added: p-description (Input in produkte form), pick-image, remove-image, change-image (image area in produkte form). Frontend gating: (tabs)/auswertungen.tsx line 35 filters metrics; (tabs)/angebote.tsx line 312 hides DB line via isAdmin. Native image picker cannot be automated on web — do not attempt file-picker automation, only verify controls' existence. All test data cleaned; product counter=4, order counter=1000, offer counter=200. When creating next test products, ids will resume at p5, orders at B-2026-01001, offers at A-2026-0201.",
+  "rca_of_issue": "No unresolved issues. All iter 5 changes (upload endpoint, file serving, product description/image, sales-role Deckungsbeitrag hiding on /products & /analytics, frontend chip/pill/subtitle/DB-line gating) are correctly implemented on both backend and frontend and verified end-to-end."
+}

@@ -1,10 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { View, Text, ScrollView, Pressable, useWindowDimensions } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { BarChart, LineChart } from "react-native-gifted-charts";
 import { TrendUp } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
+import { useAuth } from "@/src/auth/auth";
 import { apiGet } from "@/src/api/client";
 import { euro, num } from "@/src/lib/format";
 import { ScreenHeader } from "@/src/components/screen-header";
@@ -24,9 +25,17 @@ const METRICS = [
 export default function Auswertungen() {
   const styles = useStyles();
   const { colors } = useTheme();
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const { width } = useWindowDimensions();
   const [months, setMonths] = useState(6);
   const [metric, setMetric] = useState<"revenue" | "margin" | "kg">("revenue");
+
+  // Deckungsbeitrag / Marge is internal — sales never sees it
+  const metrics = isAdmin ? METRICS : METRICS.filter((m) => m.key !== "margin");
+  useEffect(() => {
+    if (!isAdmin && metric === "margin") setMetric("revenue");
+  }, [isAdmin, metric]);
 
   const { data, isLoading } = useQuery({
     queryKey: ["analytics", months],
@@ -61,7 +70,7 @@ export default function Auswertungen() {
 
   return (
     <View style={styles.root}>
-      <ScreenHeader title="Auswertungen" subtitle="Umsatz, Marge & Menge" />
+      <ScreenHeader title="Auswertungen" subtitle={isAdmin ? "Umsatz, Marge & Menge" : "Umsatz & Menge"} />
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         {/* Timeframe */}
         <View style={styles.segment}>
@@ -85,16 +94,18 @@ export default function Auswertungen() {
           <View style={[styles.summaryCard, { backgroundColor: colors.brand }]}>
             <Text style={styles.summaryLabel}>Umsatz gesamt</Text>
             <Text style={styles.summaryValue}>{euro(data?.totalRevenue ?? 0)}</Text>
-            <View style={styles.summaryPill}>
-              <TrendUp size={13} color={colors.onSuccess} weight="bold" />
-              <Text style={styles.summaryPillText}>Marge {num(data?.marginPct ?? 0, 1)}%</Text>
-            </View>
+            {isAdmin && data?.showMargin ? (
+              <View style={styles.summaryPill}>
+                <TrendUp size={13} color={colors.onSuccess} weight="bold" />
+                <Text style={styles.summaryPillText}>Marge {num(data?.marginPct ?? 0, 1)}%</Text>
+              </View>
+            ) : null}
           </View>
         </View>
 
         {/* Metric toggle */}
         <View style={styles.metricRow}>
-          {METRICS.map((m) => {
+          {metrics.map((m) => {
             const active = metric === m.key;
             return (
               <Pressable

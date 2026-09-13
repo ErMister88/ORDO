@@ -1,5 +1,7 @@
-from fastapi import FastAPI, APIRouter, Depends, HTTPException, status
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, UploadFile, File
+from fastapi.responses import Response
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from starlette.concurrency import run_in_threadpool
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from pymongo import ReturnDocument
@@ -8,6 +10,8 @@ import os
 import logging
 import jwt
 import bcrypt
+import uuid
+import requests
 from pathlib import Path
 from pydantic import BaseModel
 from typing import List, Optional, Literal, Annotated
@@ -32,6 +36,50 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 Role = Literal["admin", "sales", "customer"]
+
+
+# --------------------------------------------------------------------------
+# Emergent Managed Object Storage
+# --------------------------------------------------------------------------
+STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
+STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
+EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
+APP_NAME = "ss-grosshandel"
+_storage_key = None
+
+
+def init_storage():
+    global _storage_key
+    if _storage_key:
+        return _storage_key
+    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
+    resp.raise_for_status()
+    _storage_key = resp.json()["storage_key"]
+    return _storage_key
+
+
+def put_object(path: str, data: bytes, content_type: str) -> dict:
+    key = init_storage()
+    resp = requests.put(
+        f"{STORAGE_URL}/objects/{path}",
+        headers={"X-Storage-Key": key, "Content-Type": content_type},
+        data=data,
+        timeout=120,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_object(path: str):
+    global _storage_key
+    key = init_storage()
+    resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
+    if resp.status_code == 503:
+        _storage_key = None
+        key = init_storage()
+        resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
+    resp.raise_for_status()
+    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
 
 
 # --------------------------------------------------------------------------
@@ -110,6 +158,8 @@ class ProductIn(BaseModel):
     salesFloor: float
     absoluteFloor: float
     cost: float
+    description: str = ""
+    imageUrl: str = ""
     active: bool = True
 
 
@@ -222,6 +272,9 @@ async def get_products(user: Annotated[dict, Depends(current_user)]):
             p.pop("cost", None)
             p.pop("salesFloor", None)
             p.pop("absoluteFloor", None)
+        elif user["role"] == "sales":
+            # DB / Deckungsbeitrag is internal — hide cost so margin can't be derived
+            p.pop("cost", None)
         result.append(p)
     return result
 
@@ -241,6 +294,51 @@ async def update_product(product_id: str, body: ProductIn, user: Annotated[dict,
         raise HTTPException(status_code=404, detail="Produkt nicht gefunden")
     p = await db.products.find_one({"id": product_id})
     return strip_id(p)
+
+
+# --------------------------------------------------------------------------
+# Routes: Image upload / serving (Emergent Object Storage)
+# --------------------------------------------------------------------------
+ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
+
+
+@api_router.post("/upload")
+async def upload_image(user: Annotated[dict, Depends(require_roles("admin"))], file: UploadFile = File(...)):
+    content_type = file.content_type or "application/octet-stream"
+    if content_type not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(status_code=400, detail="Nur Bilddateien sind erlaubt")
+    data = await file.read()
+    if len(data) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Bild ist zu groß (max. 8 MB)")
+    ext = (file.filename or "img.jpg").rsplit(".", 1)[-1].lower()
+    path = f"{APP_NAME}/uploads/{user['id']}/{uuid.uuid4().hex}.{ext}"
+    try:
+        result = await run_in_threadpool(put_object, path, data, content_type)
+    except requests.HTTPError as e:
+        code = e.response.status_code if e.response is not None else 500
+        if code == 402:
+            raise HTTPException(status_code=402, detail="Speicher-Kontingent aufgebraucht")
+        raise HTTPException(status_code=502, detail="Upload fehlgeschlagen")
+    stored = result["path"]
+    await db.uploads.insert_one({
+        "storagePath": stored,
+        "ownerId": user["id"],
+        "contentType": content_type,
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+    })
+    return {"url": f"/api/files/{stored}", "path": stored}
+
+
+@api_router.get("/files/{path:path}")
+async def serve_file(path: str):
+    doc = await db.uploads.find_one({"storagePath": path})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Datei nicht gefunden")
+    try:
+        content, content_type = await run_in_threadpool(get_object, path)
+    except requests.HTTPError:
+        raise HTTPException(status_code=404, detail="Datei nicht gefunden")
+    return Response(content=content, media_type=content_type, headers={"Cache-Control": "public, max-age=86400"})
 
 
 @api_router.post("/customer-prices")
@@ -594,25 +692,32 @@ async def analytics(user: Annotated[dict, Depends(require_roles("admin", "sales"
                 buckets[key]["margin"] += (it["price"] - cost_map.get(it["productId"], 0)) * it["qty"]
 
     month_names = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"]
+    is_admin = user["role"] == "admin"
     series = []
     for key in labels:
         y, m = key.split("-")
-        series.append({
+        row = {
             "label": month_names[int(m) - 1],
             "revenue": round(buckets[key]["revenue"], 2),
             "kg": round(buckets[key]["kg"], 1),
-            "margin": round(buckets[key]["margin"], 2),
-        })
+        }
+        # DB / Deckungsbeitrag is internal — only admins get margin figures
+        if is_admin:
+            row["margin"] = round(buckets[key]["margin"], 2)
+        series.append(row)
 
     total_rev = sum(s["revenue"] for s in series)
-    total_margin = sum(s["margin"] for s in series)
-    margin_pct = (total_margin / total_rev * 100) if total_rev else 0
-    return {
+    result = {
         "series": series,
         "totalRevenue": round(total_rev, 2),
-        "totalMargin": round(total_margin, 2),
-        "marginPct": round(margin_pct, 1),
+        "showMargin": is_admin,
     }
+    if is_admin:
+        total_margin = sum(buckets[key]["margin"] for key in labels)
+        margin_pct = (total_margin / total_rev * 100) if total_rev else 0
+        result["totalMargin"] = round(total_margin, 2)
+        result["marginPct"] = round(margin_pct, 1)
+    return result
 
 
 app.include_router(api_router)
@@ -757,6 +862,11 @@ async def seed():
 async def on_startup():
     await db.command("ping")
     await seed()
+    try:
+        await run_in_threadpool(init_storage)
+        logger.info("Object storage initialised")
+    except Exception as e:
+        logger.warning(f"Object storage init failed (uploads may be unavailable): {e}")
 
 
 @app.on_event("shutdown")

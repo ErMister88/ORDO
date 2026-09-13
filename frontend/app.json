@@ -1,22 +1,26 @@
 {
   "expo": {
-    "name": "S&S Großhandel",
+    "name": "Ordo Connect",
     "slug": "frontend",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "frontend",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.emergent.mobileappbuilder.ryz89a"
+      "bundleIdentifier": "com.emergent.mobileappbuilder.ryz89a",
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "Produktbilder aus der Galerie hinzufügen"
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#000000"
       },
-      "package": "com.emergent.mobileappbuilder.ryz89a"
+      "package": "com.emergent.mobileappbuilder.ryz89a",
+      "permissions": ["READ_MEDIA_IMAGES"]
     },
     "web": {
       "bundler": "metro",

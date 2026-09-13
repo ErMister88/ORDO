@@ -1,12 +1,14 @@
 import { useState } from "react";
-import { View, Text, ScrollView, Pressable, KeyboardAvoidingView, Platform } from "react-native";
+import { View, Text, ScrollView, Pressable, KeyboardAvoidingView, Platform, ActivityIndicator, Linking } from "react-native";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArrowLeft, Plus, PencilSimple } from "phosphor-react-native";
+import { Image } from "expo-image";
+import * as ImagePicker from "expo-image-picker";
+import { ArrowLeft, Plus, PencilSimple, Camera, ImageSquare, X } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
-import { apiGet, apiPost, apiPut } from "@/src/api/client";
+import { apiGet, apiPost, apiPut, apiUpload, fileUrl } from "@/src/api/client";
 import { euro } from "@/src/lib/format";
 import { Card, Input, Button, SectionTitle, Muted } from "@/src/components/ui";
 
@@ -18,6 +20,8 @@ type Form = {
   salesFloor: string;
   absoluteFloor: string;
   cost: string;
+  description: string;
+  imageUrl: string;
 };
 
 const EMPTY: Form = {
@@ -28,6 +32,8 @@ const EMPTY: Form = {
   salesFloor: "",
   absoluteFloor: "",
   cost: "",
+  description: "",
+  imageUrl: "",
 };
 
 export default function Produkte() {
@@ -43,6 +49,8 @@ export default function Produkte() {
   const [showForm, setShowForm] = useState(false);
   const [msg, setMsg] = useState("");
   const [ok, setOk] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [permBlocked, setPermBlocked] = useState(false);
 
   const set = (k: keyof Form) => (v: string) => {
     setForm((f) => ({ ...f, [k]: v }));
@@ -54,6 +62,7 @@ export default function Produkte() {
     setForm(EMPTY);
     setMsg("");
     setOk("");
+    setPermBlocked(false);
     setShowForm(true);
   };
 
@@ -66,11 +75,47 @@ export default function Produkte() {
       standardPrice: String(p.standardPrice),
       salesFloor: String(p.salesFloor),
       absoluteFloor: String(p.absoluteFloor),
-      cost: String(p.cost),
+      cost: String(p.cost ?? ""),
+      description: p.description ?? "",
+      imageUrl: p.imageUrl ?? "",
     });
     setMsg("");
     setOk("");
+    setPermBlocked(false);
     setShowForm(true);
+  };
+
+  const pickImage = async () => {
+    setPermBlocked(false);
+    let perm = await ImagePicker.getMediaLibraryPermissionsAsync();
+    if (perm.status === "undetermined" || (perm.status === "denied" && perm.canAskAgain)) {
+      perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    }
+    if (perm.status !== "granted") {
+      setPermBlocked(true);
+      return;
+    }
+    const res = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      quality: 0.7,
+      allowsEditing: true,
+      aspect: [4, 3],
+    });
+    if (res.canceled || !res.assets?.length) return;
+    const asset = res.assets[0];
+    setUploading(true);
+    setMsg("");
+    try {
+      const name = asset.fileName || `produkt.${(asset.uri.split(".").pop() || "jpg").split("?")[0]}`;
+      const type = asset.mimeType || "image/jpeg";
+      const up = await apiUpload(asset.uri, name, type);
+      setForm((f) => ({ ...f, imageUrl: up.url }));
+      if (ok) setOk("");
+    } catch (e: any) {
+      setMsg(e.message || "Upload fehlgeschlagen");
+    } finally {
+      setUploading(false);
+    }
   };
 
   const num = (v: string) => Number((v || "").replace(",", "."));
@@ -85,6 +130,8 @@ export default function Produkte() {
         salesFloor: num(form.salesFloor),
         absoluteFloor: num(form.absoluteFloor),
         cost: num(form.cost),
+        description: form.description,
+        imageUrl: form.imageUrl,
         active: true,
       };
       return editingId ? apiPut(`/products/${editingId}`, body) : apiPost("/products", body);
@@ -93,10 +140,8 @@ export default function Produkte() {
       qc.invalidateQueries({ queryKey: ["products"] });
       setMsg("");
       if (editingId) {
-        // finished editing → close the form
         setShowForm(false);
       } else {
-        // added a new product → keep form open so admin can add the next one
         setOk(`„${form.brand} ${form.name}" hinzugefügt. Nächstes Produkt eingeben.`);
         setForm(EMPTY);
       }
@@ -127,6 +172,45 @@ export default function Produkte() {
           {showForm && (
             <Card testID="product-form">
               <SectionTitle>{editingId ? "Produkt bearbeiten" : "Neues Produkt"}</SectionTitle>
+
+              <Text style={styles.label}>Produktbild</Text>
+              {form.imageUrl ? (
+                <View style={styles.imgWrap}>
+                  <Image source={{ uri: fileUrl(form.imageUrl) }} style={styles.img} contentFit="cover" transition={200} />
+                  <Pressable
+                    testID="remove-image"
+                    style={styles.imgRemove}
+                    onPress={() => setForm((f) => ({ ...f, imageUrl: "" }))}
+                    hitSlop={8}
+                  >
+                    <X size={16} color={colors.onError} weight="bold" />
+                  </Pressable>
+                </View>
+              ) : (
+                <Pressable testID="pick-image" style={styles.imgPicker} onPress={pickImage} disabled={uploading}>
+                  {uploading ? (
+                    <ActivityIndicator color={colors.brandPrimary} />
+                  ) : (
+                    <>
+                      <ImageSquare size={26} color={colors.brandPrimary} weight="duotone" />
+                      <Text style={styles.imgPickerText}>Bild auswählen</Text>
+                    </>
+                  )}
+                </Pressable>
+              )}
+              {form.imageUrl && !uploading ? (
+                <Pressable testID="change-image" style={styles.changeImg} onPress={pickImage}>
+                  <Camera size={16} color={colors.brandPrimary} weight="bold" />
+                  <Text style={styles.changeImgText}>Bild ändern</Text>
+                </Pressable>
+              ) : null}
+              {permBlocked ? (
+                <View style={{ marginTop: 6, gap: 6 }}>
+                  <Text style={styles.err}>Zugriff auf Fotos wurde abgelehnt.</Text>
+                  <Button title="Einstellungen öffnen" kind="secondary" testID="open-settings" onPress={() => Linking.openSettings()} />
+                </View>
+              ) : null}
+
               <View style={styles.row}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.label}>Marke</Text>
@@ -139,6 +223,18 @@ export default function Produkte() {
               </View>
               <Text style={styles.label}>Bezeichnung</Text>
               <Input testID="p-name" value={form.name} onChangeText={set("name")} placeholder="z.B. Espresso Bar" />
+
+              <Text style={styles.label}>Beschreibung</Text>
+              <Input
+                testID="p-description"
+                value={form.description}
+                onChangeText={set("description")}
+                placeholder="Herkunft, Röstung, Geschmack …"
+                multiline
+                numberOfLines={4}
+                style={styles.textArea}
+              />
+
               <View style={styles.row}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.label}>Standardpreis €</Text>
@@ -167,7 +263,7 @@ export default function Produkte() {
                   testID="save-product"
                   title={editingId ? "Speichern" : "Hinzufügen"}
                   style={{ flex: 1 }}
-                  disabled={!valid}
+                  disabled={!valid || uploading}
                   loading={save.isPending}
                   onPress={() => save.mutate()}
                 />
@@ -179,16 +275,30 @@ export default function Produkte() {
           {(products.data ?? []).map((p: any) => (
             <Pressable key={p.id} testID={`product-${p.id}`} onPress={() => openEdit(p)}>
               <Card>
-                <View style={styles.prodTop}>
-                  <Text style={styles.prodTitle}>
-                    {p.brand} {p.name}
-                  </Text>
-                  <PencilSimple size={16} color={colors.muted} />
+                <View style={styles.prodRow}>
+                  {p.imageUrl ? (
+                    <Image source={{ uri: fileUrl(p.imageUrl) }} style={styles.thumb} contentFit="cover" transition={150} />
+                  ) : (
+                    <View style={[styles.thumb, styles.thumbEmpty]}>
+                      <ImageSquare size={22} color={colors.muted} weight="duotone" />
+                    </View>
+                  )}
+                  <View style={{ flex: 1 }}>
+                    <View style={styles.prodTop}>
+                      <Text style={styles.prodTitle} numberOfLines={1}>
+                        {p.brand} {p.name}
+                      </Text>
+                      <PencilSimple size={16} color={colors.muted} />
+                    </View>
+                    {p.description ? (
+                      <Muted numberOfLines={2}>{p.description}</Muted>
+                    ) : null}
+                    <Muted>
+                      Standard {euro(p.standardPrice)} · Limit {euro(p.salesFloor)} · Grenze {euro(p.absoluteFloor)} · EK{" "}
+                      {euro(p.cost)}
+                    </Muted>
+                  </View>
                 </View>
-                <Muted>
-                  Standard {euro(p.standardPrice)} · Limit {euro(p.salesFloor)} · Grenze {euro(p.absoluteFloor)} · EK{" "}
-                  {euro(p.cost)}
-                </Muted>
               </Card>
             </Pressable>
           ))}
@@ -217,8 +327,39 @@ const useStyles = makeStyles((c) => ({
   content: { padding: 20, gap: 12, paddingBottom: 32 },
   row: { flexDirection: "row", gap: 12 },
   label: { fontSize: 13, fontWeight: "700", color: c.onSurfaceSecondary, marginTop: 8, marginBottom: 4 },
+  textArea: { height: 92, textAlignVertical: "top", paddingTop: 12 },
   err: { color: c.error, fontSize: 14, fontWeight: "600", marginTop: 6 },
   ok: { color: c.success, fontSize: 14, fontWeight: "700", marginTop: 6 },
-  prodTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  prodTitle: { fontSize: 15, fontWeight: "800", color: c.onSurface },
+  prodRow: { flexDirection: "row", gap: 12, alignItems: "flex-start" },
+  prodTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 8 },
+  prodTitle: { fontSize: 15, fontWeight: "800", color: c.onSurface, flex: 1 },
+  thumb: { width: 56, height: 56, borderRadius: 12, backgroundColor: c.surfaceTertiary },
+  thumbEmpty: { alignItems: "center", justifyContent: "center" },
+  imgWrap: { position: "relative", borderRadius: 14, overflow: "hidden" },
+  img: { width: "100%", height: 170, borderRadius: 14, backgroundColor: c.surfaceTertiary },
+  imgRemove: {
+    position: "absolute",
+    top: 8,
+    right: 8,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: c.error,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  imgPicker: {
+    height: 120,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderStyle: "dashed",
+    borderColor: c.brandPrimary,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: c.brandTertiary,
+  },
+  imgPickerText: { color: c.brandPrimary, fontWeight: "700", fontSize: 14 },
+  changeImg: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 8 },
+  changeImgText: { color: c.brandPrimary, fontWeight: "700", fontSize: 14 },
 }));

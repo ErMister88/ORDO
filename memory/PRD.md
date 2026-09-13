@@ -42,6 +42,10 @@
 - **P2**: Order status progression (Bestätigt → Kommissioniert → Versendet).
 - **P2**: Multi-item offers/orders (currently single line item in UI).
 
+## Design
+- Dark premium theme (near-black canvas #0B0C11, elevated cards, gold accent #E7B24C), rounder cards/buttons, more spacing, bold KPI hero. All tokens in src/theme.ts.
+- Branding: in-app "ORDO Connect by S&S" (login), app store / build name "Ordo Connect" (app.json name).
+
 ## Next Tasks
-- Notify customer when a shipped order is out for delivery (needs native build).
-- Optional cancellation reason capture + admin view of cancelled orders.
+- Optional light-mode toggle if ever requested.
+- Show product images across offer/order line items.

@@ -68,15 +68,15 @@ export default function Login() {
       <View style={[styles.hero, { height: height * 0.4 }]}>
         <Image source={{ uri: HERO }} style={styles.heroImg} contentFit="cover" />
         <LinearGradient
-          colors={["rgba(11,27,61,0.55)", "rgba(11,27,61,0.95)"]}
+          colors={["rgba(11,27,61,0.55)", "rgba(11,27,61,0.96)"]}
           style={styles.heroOverlay}
         />
         <View style={[styles.heroContent, { paddingTop: insets.top + 24 }]}>
           <View style={styles.logoBadge}>
             <Coffee size={26} color={colors.onBrand} weight="fill" />
           </View>
-          <Text style={styles.brandTitle}>S&S Großhandel</Text>
-          <Text style={styles.brandSub}>B2B Vertriebsportal</Text>
+          <Text style={styles.brandTitle}>ORDO Connect</Text>
+          <Text style={styles.brandSub}>by S&S · B2B Vertriebsportal</Text>
         </View>
       </View>
 
@@ -155,18 +155,18 @@ const useStyles = makeStyles((c) => ({
   heroOverlay: { ...StyleSheetAbsolute() },
   heroContent: { flex: 1, paddingHorizontal: 24, justifyContent: "center" },
   logoBadge: {
-    width: 52,
-    height: 52,
-    borderRadius: 16,
-    backgroundColor: "rgba(255,255,255,0.15)",
+    width: 54,
+    height: 54,
+    borderRadius: 18,
+    backgroundColor: "rgba(255,255,255,0.16)",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 16,
   },
-  brandTitle: { fontSize: 28, fontWeight: "800", color: c.onBrand, letterSpacing: -0.5 },
-  brandSub: { fontSize: 15, color: "rgba(255,255,255,0.75)", marginTop: 4, fontWeight: "500" },
-  sheetWrap: { flex: 1, marginTop: -24 },
-  sheet: { flex: 1, backgroundColor: c.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
+  brandTitle: { fontSize: 30, fontWeight: "800", color: c.onBrand, letterSpacing: -0.5 },
+  brandSub: { fontSize: 15, color: "rgba(255,255,255,0.78)", marginTop: 4, fontWeight: "500" },
+  sheetWrap: { flex: 1, marginTop: -28 },
+  sheet: { flex: 1, backgroundColor: c.surface, borderTopLeftRadius: 28, borderTopRightRadius: 28 },
   sheetContent: { padding: 24, gap: 4 },
   title: { fontSize: 24, fontWeight: "800", color: c.onSurface, letterSpacing: -0.4 },
   subtitle: { fontSize: 15, color: c.muted, marginBottom: 12 },
@@ -178,8 +178,8 @@ const useStyles = makeStyles((c) => ({
   demoChip: {
     flex: 1,
     backgroundColor: c.brandTertiary,
-    borderRadius: 12,
-    paddingVertical: 12,
+    borderRadius: 14,
+    paddingVertical: 13,
     alignItems: "center",
   },
   demoChipText: { color: c.onBrandTertiary, fontWeight: "700", fontSize: 14 },

@@ -76,7 +76,7 @@ function StaffDash({ data, onCustomer }: { data: any; onCustomer: (id: string) =
       {/* Hero metric */}
       <View style={styles.hero} testID="hero-revenue">
         <View style={styles.heroIcon}>
-          <Coffee size={22} color={colors.onBrand} weight="fill" />
+          <Coffee size={24} color={colors.onBrand} weight="fill" />
         </View>
         <Text style={styles.heroLabel}>Umsatz diesen Monat</Text>
         <Text style={styles.heroValue}>{euro(data.revenueMonth)}</Text>
@@ -143,7 +143,7 @@ function CustomerDash({ data }: { data: any }) {
     <>
       <View style={styles.hero} testID="hero-customer">
         <View style={styles.heroIcon}>
-          <Coffee size={22} color={colors.onBrand} weight="fill" />
+          <Coffee size={24} color={colors.onBrand} weight="fill" />
         </View>
         <Text style={styles.heroLabel}>{data.companyName}</Text>
         <Text style={styles.heroValue}>{num(data.monthlyKg)} kg</Text>
@@ -179,37 +179,39 @@ function CustomerDash({ data }: { data: any }) {
 
 const useStyles = makeStyles((c) => ({
   root: { flex: 1, backgroundColor: c.surfaceSecondary },
-  content: { padding: 20, paddingBottom: 32, gap: 12 },
+  content: { padding: 20, paddingBottom: 36, gap: 16 },
   headerBtns: { flexDirection: "row", gap: 8 },
   hero: {
     backgroundColor: c.brand,
-    borderRadius: 20,
-    padding: 20,
+    borderRadius: 24,
+    padding: 22,
     gap: 2,
+    borderWidth: 1,
+    borderColor: c.border,
   },
   heroIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+    width: 46,
+    height: 46,
+    borderRadius: 14,
     backgroundColor: "rgba(255,255,255,0.15)",
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 10,
+    marginBottom: 12,
   },
-  heroLabel: { fontSize: 14, color: "rgba(255,255,255,0.75)", fontWeight: "600" },
-  heroValue: { fontSize: 36, fontWeight: "800", color: c.onBrand, letterSpacing: -1, marginTop: 2 },
-  heroSub: { fontSize: 13, color: "rgba(255,255,255,0.65)", marginTop: 4 },
-  kpiGrid: { flexDirection: "row", gap: 12 },
+  heroLabel: { fontSize: 14, color: "rgba(255,255,255,0.78)", fontWeight: "600" },
+  heroValue: { fontSize: 38, fontWeight: "800", color: c.onBrand, letterSpacing: -1, marginTop: 2 },
+  heroSub: { fontSize: 13, color: "rgba(255,255,255,0.68)", marginTop: 6 },
+  kpiGrid: { flexDirection: "row", gap: 14 },
   alert: {
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
     backgroundColor: c.surface,
-    borderRadius: 16,
-    padding: 14,
+    borderRadius: 18,
+    padding: 16,
     borderWidth: 1,
   },
-  alertIcon: { width: 34, height: 34, borderRadius: 10, alignItems: "center", justifyContent: "center" },
+  alertIcon: { width: 36, height: 36, borderRadius: 12, alignItems: "center", justifyContent: "center" },
   alertTitle: { fontSize: 15, fontWeight: "700", color: c.onSurface },
   alertSub: { fontSize: 13, color: c.muted, marginTop: 2 },
   cardTitle: { fontSize: 16, fontWeight: "800", color: c.onSurface, marginBottom: 4 },

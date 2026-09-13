@@ -35,12 +35,13 @@ import { Appearance, StyleSheet, useColorScheme } from "react-native";
 
 export type ColorScheme = "light" | "dark";
 
+// Light theme — crisp white surfaces with a deep navy-blue accent (ORDO Connect).
 const light = {
   surface: "#FFFFFF",
   onSurface: "#0F172A",
-  surfaceSecondary: "#F8FAFC",
+  surfaceSecondary: "#F4F7FB",
   onSurfaceSecondary: "#1E293B",
-  surfaceTertiary: "#F1F5F9",
+  surfaceTertiary: "#EEF2F8",
   onSurfaceTertiary: "#334155",
   surfaceInverse: "#0B1B3D",
   onSurfaceInverse: "#FFFFFF",
@@ -52,7 +53,7 @@ const light = {
   onBrandPrimary: "#FFFFFF",
   brandSecondary: "#3B82F6",
   onBrandSecondary: "#FFFFFF",
-  brandTertiary: "#E0E7FF",
+  brandTertiary: "#E6ECFB",
   onBrandTertiary: "#1D3B8E",
 
   success: "#059669",
@@ -64,9 +65,9 @@ const light = {
   info: "#2563EB",
   onInfo: "#FFFFFF",
 
-  border: "#E2E8F0",
+  border: "#E3E9F1",
   borderStrong: "#CBD5E1",
-  divider: "#F1F5F9",
+  divider: "#EEF2F7",
 };
 
 export type ThemeColors = typeof light;
