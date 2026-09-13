@@ -52,6 +52,14 @@
 - **E-Mail-Benachrichtigungen (Resend, Emergent-managed)**: Mail an Firmen-E-Mail bei Angebot-Freigabe (`/approve`) und Bestell-Versand (`status=Versendet`). Nicht-blockierend (try/except), Absender `EMAIL_FROM_NAME` = "ORDO Connect by S&S". Guardrail-Gate `_assert_safe_email` auf jedem Send.
 
 ## Design (theme)
+- Dark premium theme tokens in src/theme.ts.
+
+## Implemented (2026-06-13, Iteration 7)
+- **Produktbilder** in Angebots-/Bestellpositionen & Kunden-Nachbestellung (Platzhalter-Icon wenn kein Bild).
+- **Produkt aktiv/inaktiv**: `PUT /api/products/{id}/active` (admin); GET /products liefert alle inkl. `active` (cost weiter rollenabhängig versteckt); inaktive Produkte erscheinen nicht in Angebots-/Bestell-Auswahl, Historie bleibt lesbar; Toggle in /produkte.
+- **Produktsuche** in /produkte (Marke/Name/Beschreibung, client-seitig).
+- **Benutzerverwaltung** (`/benutzer`, admin): `GET/POST /api/users`, `POST /api/users/{id}/reset`; Vertrieb+Kunden anlegen, Firma bestehend wählen oder neu erstellen, Zufalls-Passwort einmalig angezeigt.
+- **Passwort-Reset**: self-service `/auth/password/forgot` + `/auth/password/reset` (6-stelliger Code per E-Mail, sha256-gehasht, single-use, 30 Min TTL) via Login „Passwort vergessen?"; `/auth/password/change` (angemeldet) via Mehr → „Passwort ändern".
 
 ## Next Tasks
 - Optional light-mode toggle if ever requested.

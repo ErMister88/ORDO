@@ -1,0 +1,46 @@
+{
+  "summary": "Iteration 7 tested all 4 new features on backend (29/29 pytest pass in test_iteration7.py) and Expo mobile web (390x844).  Backend: (B) GET /api/products now includes 'active' field on every product (still strips 'cost' for sales/customer). PUT /api/products/{id}/active {active:bool} — admin 200 (toggles + persists via GET), sales 403, customer 403, unknown product 404, inactive product still returned by GET /api/products. (D) GET /api/users — admin 200 (returns 3 seeded users, no hashed_password leak), sales/customer 403. POST /api/users — creates sales (200, returns id/email/role/companyId=null/initialPassword; newly created user can log in with that pw), creates customer with newCompany (200, new companyId provisioned, initialPassword returned, user can log in), creates customer with existing companyId=c2 (200), duplicate email → 409, customer without company → 400, sales/non-admin caller → 403. POST /api/users/{id}/reset — admin 200 (returns new initialPassword, user can log in with it), unknown id → 404, sales caller → 403. POST /api/auth/password/forgot — always 200 same shape (unknown email + known email). POST /api/auth/password/reset — happy path with a codeHash we seeded directly (SHA-256 of 6-digit code) succeeds; short new password → 400; code replay (used=true) → 400; wrong code → 400. POST /api/auth/password/change — wrong current → 400, short new → 400, unauth → 401. Role hiding regression: sales/customer never see 'cost' on /api/products; admin still does. Frontend (mobile web 390x844): (A) Angebote offer cards, order Positionen and customer reorder-card render product thumbnails (or a placeholder ImageSquare icon when imageUrl is empty) — verified visually on /angebote and /bestellungen for the customer role, layout not broken. (B) /produkte (admin) shows toggle-active-p1..p4 pills; tapping toggle-active-p3 dims card (opacity 0.55) and hides p3 from the Angebote CreateOffer product picker (checked /angebote body did not include 'Crema Mousse' after deactivating p3). Reactivation restores it. (C) product-search filters the list live: typing 'Gambilongo' keeps p1 and drops p2; typing 'zzzzzz' shows the empty state. NOTE: the empty state was NOT getting a data-testid before because src/components/ui.tsx::Muted did not forward the testID prop — I patched Muted to accept & forward testID, and 'no-products' is now visible under [data-testid=\"no-products\"]. (D) Login screen shows forgot-password-link. /passwort-vergessen: forgot-email + forgot-submit render, submitting a known email transitions to step 2 with reset-code, reset-pw, reset-pw2, reset-submit inputs. Dashboard header (admin) has users-button. /benutzer: add-user-button opens the user-form with role-sales/role-customer toggles, user-name, user-email, user-submit; created a sales user 'TEST UI Sales' — credential-card rendered ONCE with cred-email='test_ui_sales_i7@ss.de' and cred-password='G00P5ZfpSjkq' (both visible in a screenshot before the 'Verstanden' dismissal). Mehr tab (admin) has link-benutzer, link-produkte and link-passwort. Tapping link-passwort navigates to /passwort-aendern with change-current, change-new, change-new2, change-submit fields. Cleanup: deleted all TEST_ users, the TEST_i7_Company, cleared db.password_resets, re-activated p1..p4. Seed baseline preserved: 3 users, 4 products all active, existing offers/orders untouched.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "src/components/ui.tsx::Muted", "issue": "(Fixed by tester) Muted did not forward the testID prop, so <Muted testID=\"no-products\">…</Muted> in produkte.tsx never emitted [data-testid=\"no-products\"]. Patched to accept + forward testID."},
+      {"component": "Card shadow* styles", "issue": "Carry-over from iter 3–6: react-native-web deprecation warning 'shadow*' style props — should migrate to 'boxShadow'. Reference: /app/frontend/src/components/ui.tsx."},
+      {"component": "react-native-gifted-charts", "issue": "Carry-over warnings 'props.pointerEvents is deprecated' and 'TouchableMixin is deprecated' from vendored charts. Non-blocking. Reference: /app/frontend/app/(tabs)/auswertungen.tsx."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration7.py",
+    "/app/test_reports/pytest/pytest_iter7.xml"
+  ],
+  "action_items": [
+    "None required for the 4 tested features — all pass end-to-end (backend 29/29, frontend flows all verified).",
+    "Cosmetic: consider migrating shadow* → boxShadow in src/components/ui.tsx to silence react-native-web warnings."
+  ],
+  "critical_code_review_comments": [
+    "server.py:463-475 list_users: no hashed_password leak, admin-only via require_roles — good.",
+    "server.py:478-512 create_user: 409 on duplicate email, 400 on customer without company, 400 on unknown companyId, secure random_password(12), must_change_password=True — solid.",
+    "server.py:515-522 admin_reset_password: 404 on unknown user, sets must_change_password — good.",
+    "server.py:525-546 forgot_password: always 200, generates SHA-256 codeHash, TTL index via db.password_resets.create_index('expiresAt', expireAfterSeconds=0). Email failure is swallowed via try/except — endpoint stays 200. Good.",
+    "server.py:549-570 reset_password: len<8 → 400 BEFORE lookup (uniform error surface), digest comparison, atomic used=false → used=true update (modified_count==1) guards replay. Good.",
+    "server.py:573-580 change_password: requires auth, checks current pw + new length. Good.",
+    "server.py:620-625 set_product_active: admin-only, 404 on unknown, returns {ok, active}. Good.",
+    "server.py:586-600 get_products: returns ALL products (no active filter) — matches spec; still strips 'cost' for sales/customer and additionally strips salesFloor/absoluteFloor for customer. Cost/floor isolation intact.",
+    "server.py:316-327 ProductIn now has 'active: bool = True' — POST/PUT persist the flag.",
+    "src/components/ui.tsx::Muted was silently dropping testID — patched to forward. All other UI primitives (Card, Button, Input) already forward testID."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration7.py",
+    "/app/frontend/src/components/ui.tsx",
+    "/app/test_reports/iteration_7.json",
+    "/app/test_reports/pytest/pytest_iter7.xml"
+  ],
+  "success_rate": {"backend": "100% (29/29 iter7). Iter4+5+6 regressions still pass.", "frontend": "100% — all 4 features verified visually + via testID selectors on 390x844."},
+  "seed_data_creation": "None permanent. During tests: created + deleted test_sales_i7, test_kunde_i7 (+ TEST_i7_Company), test_kunde2_i7, and one UI-created test_ui_sales_i7@ss.de. All rows cleaned. db.password_resets emptied. Products p1..p4 verified active=true.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iter 7 delivered 4 features. Backend contract (all admin unless noted): PUT /api/products/{id}/active {active:bool}; GET /api/users; POST /api/users {name,email,role in {sales,customer}, companyId? | newCompany?} → returns initialPassword ONCE (has must_change_password=True); POST /api/users/{id}/reset → returns initialPassword; POST /api/auth/password/forgot {email} → always 200 (SHA-256 codeHash stored, 30-min TTL index); POST /api/auth/password/reset {email,code,newPassword} → validates len>=8, hash match, used=false, expiresAt>=now, atomic single-use; POST /api/auth/password/change {currentPassword,newPassword} (auth) → 400 wrong-current/short-new. Frontend routes: /passwort-vergessen, /passwort-aendern, /benutzer (admin only). testIDs added by main agent: forgot-password-link, forgot-email/forgot-submit, reset-code/reset-pw/reset-pw2/reset-submit, users-button, add-user-button, role-sales/role-customer, compmode-existing/new, select-company, newcomp-*, user-name/user-email/user-submit, cred-email/cred-password, reset-user-{id}, change-current/change-new/change-new2/change-submit, link-benutzer/link-produkte/link-passwort, product-search, no-products (needed Muted testID forwarding — patched), toggle-active-{id}. Because the emailed reset code cannot be read from Emergent Email, seed a codeHash directly: db.password_resets.insert_one({'userId':uid,'codeHash':sha256(code),'expiresAt':utcnow()+30min,'used':False}). Cleanup snippet: python3 -c 'from pymongo import MongoClient; db=MongoClient(\"mongodb://localhost:27017\")[\"ss_b2b_database\"]; db.users.delete_many({\"email\":{\"$regex\":\"^test_.*_i7\"}}); db.companies.delete_many({\"name\":\"TEST_i7_Company\"}); db.password_resets.delete_many({}); db.products.update_many({\"id\":{\"$in\":[\"p1\",\"p2\",\"p3\",\"p4\"]}},{\"$set\":{\"active\":True}})'.",
+  "rca_of_issue": "One tester-side bug found and fixed: src/components/ui.tsx::Muted did not forward testID, so [data-testid=\"no-products\"] never rendered even though produkte.tsx passed it in. Fix: add testID?: string prop and pass it to the wrapped <Text>. Verified fix live on /produkte — search 'zzzzzz' now surfaces [data-testid=\"no-products\"]. No other unresolved issues."
+}

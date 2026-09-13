@@ -172,9 +172,9 @@ export function InfoRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function Muted({ children, style }: { children: React.ReactNode; style?: any }) {
+export function Muted({ children, style, testID }: { children: React.ReactNode; style?: any; testID?: string }) {
   const styles = useStyles();
-  return <Text style={[styles.muted, style]}>{children}</Text>;
+  return <Text testID={testID} style={[styles.muted, style]}>{children}</Text>;
 }
 
 export function EmptyState({ title, subtitle }: { title: string; subtitle?: string }) {

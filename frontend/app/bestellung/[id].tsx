@@ -3,11 +3,12 @@ import { View, Text, ScrollView, Pressable } from "react-native";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArrowLeft, Check, Truck, XCircle } from "phosphor-react-native";
+import { Image } from "expo-image";
+import { ArrowLeft, Check, Truck, XCircle, ImageSquare } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
-import { apiGet, apiPut } from "@/src/api/client";
+import { apiGet, apiPut, fileUrl } from "@/src/api/client";
 import { euro, num, dateDE } from "@/src/lib/format";
 import { Card, InfoRow, Button, StatusBadge, Muted } from "@/src/components/ui";
 
@@ -196,6 +197,13 @@ export default function BestellungDetail() {
                 const p = prodMap[it.productId];
                 return (
                   <View key={idx} style={[styles.itemRow, idx > 0 && styles.itemBorder]}>
+                    {p?.imageUrl ? (
+                      <Image source={{ uri: fileUrl(p.imageUrl) }} style={styles.itemThumb} contentFit="cover" transition={150} />
+                    ) : (
+                      <View style={[styles.itemThumb, styles.itemThumbEmpty]}>
+                        <ImageSquare size={20} color={colors.muted} weight="duotone" />
+                      </View>
+                    )}
                     <View style={{ flex: 1 }}>
                       <Text style={styles.itemName}>{p ? `${p.brand} ${p.name}` : it.productId}</Text>
                       <Muted>
@@ -254,7 +262,9 @@ const useStyles = makeStyles((c) => ({
   tlLine: { width: 2, height: 22, backgroundColor: c.border, marginVertical: 2 },
   tlLabel: { fontSize: 14, color: c.muted, fontWeight: "600", paddingTop: 2 },
   tlLabelActive: { color: c.onSurface, fontWeight: "800" },
-  itemRow: { flexDirection: "row", alignItems: "center", paddingVertical: 10 },
+  itemRow: { flexDirection: "row", alignItems: "center", paddingVertical: 10, gap: 12 },
+  itemThumb: { width: 44, height: 44, borderRadius: 10, backgroundColor: c.surfaceTertiary },
+  itemThumbEmpty: { alignItems: "center", justifyContent: "center" },
   itemBorder: { borderTopWidth: 1, borderTopColor: c.divider },
   itemName: { fontSize: 15, fontWeight: "700", color: c.onSurface },
   itemTotal: { fontSize: 15, fontWeight: "800", color: c.onSurface },

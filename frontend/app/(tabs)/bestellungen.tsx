@@ -2,11 +2,12 @@ import { useState } from "react";
 import { View, Text, ScrollView, KeyboardAvoidingView, Platform, Pressable } from "react-native";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
-import { Minus, Plus } from "phosphor-react-native";
+import { Image } from "expo-image";
+import { Minus, Plus, ImageSquare } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
-import { apiGet, apiPost } from "@/src/api/client";
+import { apiGet, apiPost, fileUrl } from "@/src/api/client";
 import { euro, num, dateDE } from "@/src/lib/format";
 import { applicableTier } from "@/src/lib/pricing";
 import { ScreenHeader } from "@/src/components/screen-header";
@@ -33,7 +34,7 @@ export default function Bestellungen() {
   const priceOf = (pid: string) =>
     (prices.data ?? []).find((cp: any) => cp.productId === pid)?.price ?? prodMap[pid]?.standardPrice ?? 0;
 
-  const mainProduct = (products.data ?? [])[0];
+  const mainProduct = (products.data ?? []).find((p: any) => p.active !== false) ?? (products.data ?? [])[0];
   const [qty, setQty] = useState(18);
 
   const basePrice = mainProduct ? priceOf(mainProduct.id) : 0;
@@ -57,17 +58,28 @@ export default function Bestellungen() {
           {mainProduct && (
             <Card testID="reorder-card">
               <SectionTitle>Nachbestellen</SectionTitle>
-              <Text style={styles.prodTitle}>
-                {mainProduct.brand} {mainProduct.name}
-              </Text>
-              <Muted>Ihr Preis: {euro(unitPrice)}/kg</Muted>
-              {tier && tier.price < basePrice ? (
-                <Text testID="tier-active" style={styles.tierActive}>
-                  Mengenrabatt aktiv · ab {num(tier.minQty)} kg statt {euro(basePrice)}
-                </Text>
-              ) : mainProduct.discountTiers?.length ? (
-                <Muted>Mengenrabatt ab {num(mainProduct.discountTiers[0].minQty)} kg</Muted>
-              ) : null}
+              <View style={styles.reorderHead}>
+                {mainProduct.imageUrl ? (
+                  <Image source={{ uri: fileUrl(mainProduct.imageUrl) }} style={styles.reorderThumb} contentFit="cover" transition={150} />
+                ) : (
+                  <View style={[styles.reorderThumb, styles.reorderThumbEmpty]}>
+                    <ImageSquare size={24} color={colors.muted} weight="duotone" />
+                  </View>
+                )}
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.prodTitle}>
+                    {mainProduct.brand} {mainProduct.name}
+                  </Text>
+                  <Muted>Ihr Preis: {euro(unitPrice)}/kg</Muted>
+                  {tier && tier.price < basePrice ? (
+                    <Text testID="tier-active" style={styles.tierActive}>
+                      Mengenrabatt aktiv · ab {num(tier.minQty)} kg statt {euro(basePrice)}
+                    </Text>
+                  ) : mainProduct.discountTiers?.length ? (
+                    <Muted>Mengenrabatt ab {num(mainProduct.discountTiers[0].minQty)} kg</Muted>
+                  ) : null}
+                </View>
+              </View>
 
               <View style={styles.stepper}>
                 <Pressable
@@ -162,4 +174,7 @@ const useStyles = makeStyles((c) => ({
   totalValue: { fontSize: 20, fontWeight: "800", color: c.onSurface },
   orderTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   tierActive: { fontSize: 13, fontWeight: "800", color: c.success, marginTop: 2 },
+  reorderHead: { flexDirection: "row", gap: 12, alignItems: "center", marginTop: 4 },
+  reorderThumb: { width: 56, height: 56, borderRadius: 12, backgroundColor: c.surfaceTertiary },
+  reorderThumbEmpty: { alignItems: "center", justifyContent: "center" },
 }));

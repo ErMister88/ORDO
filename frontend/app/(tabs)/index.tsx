@@ -2,7 +2,7 @@ import { useCallback } from "react";
 import { View, Text, ScrollView, RefreshControl, Pressable } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
-import { SignOut, Warning, ArrowRight, Coffee, Package } from "phosphor-react-native";
+import { SignOut, Warning, ArrowRight, Coffee, Package, UsersThree } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
@@ -40,6 +40,11 @@ export default function Dashboard() {
             {user?.role === "admin" && (
               <HeaderButton onPress={() => router.push("/produkte")} testID="products-button">
                 <Package size={20} color={colors.onSurfaceSecondary} weight="bold" />
+              </HeaderButton>
+            )}
+            {user?.role === "admin" && (
+              <HeaderButton onPress={() => router.push("/benutzer")} testID="users-button">
+                <UsersThree size={20} color={colors.onSurfaceSecondary} weight="bold" />
               </HeaderButton>
             )}
             <HeaderButton onPress={onSignOut} testID="logout-button">

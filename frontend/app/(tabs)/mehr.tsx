@@ -1,7 +1,7 @@
 import { View, Text, ScrollView, Pressable } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
-import { SignOut, FileText, Receipt, Export } from "phosphor-react-native";
+import { SignOut, FileText, Receipt, Export, Package, UsersThree, Lock, CaretRight } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
@@ -90,6 +90,47 @@ export default function Mehr() {
           ))
         )}
 
+        {user?.role === "admin" && (
+          <>
+            <View style={[styles.sectionHead, { marginTop: 8 }]}>
+              <UsersThree size={18} color={colors.brandPrimary} weight="fill" />
+              <SectionTitle>Verwaltung</SectionTitle>
+            </View>
+            <Pressable testID="link-produkte" onPress={() => router.push("/produkte")}>
+              <Card>
+                <View style={styles.linkRow}>
+                  <Package size={20} color={colors.brandPrimary} weight="bold" />
+                  <Text style={styles.linkText}>Produkte & Preise</Text>
+                  <CaretRight size={18} color={colors.muted} />
+                </View>
+              </Card>
+            </Pressable>
+            <Pressable testID="link-benutzer" onPress={() => router.push("/benutzer")}>
+              <Card>
+                <View style={styles.linkRow}>
+                  <UsersThree size={20} color={colors.brandPrimary} weight="bold" />
+                  <Text style={styles.linkText}>Benutzer verwalten</Text>
+                  <CaretRight size={18} color={colors.muted} />
+                </View>
+              </Card>
+            </Pressable>
+          </>
+        )}
+
+        <View style={[styles.sectionHead, { marginTop: 8 }]}>
+          <Lock size={18} color={colors.brandPrimary} weight="fill" />
+          <SectionTitle>Konto</SectionTitle>
+        </View>
+        <Pressable testID="link-passwort" onPress={() => router.push("/passwort-aendern")}>
+          <Card>
+            <View style={styles.linkRow}>
+              <Lock size={20} color={colors.brandPrimary} weight="bold" />
+              <Text style={styles.linkText}>Passwort ändern</Text>
+              <CaretRight size={18} color={colors.muted} />
+            </View>
+          </Card>
+        </Pressable>
+
         <Pressable style={styles.logout} onPress={onSignOut} testID="logout-button">
           <SignOut size={18} color={colors.error} weight="bold" />
           <Text style={styles.logoutText}>Abmelden</Text>
@@ -116,6 +157,8 @@ const useStyles = makeStyles((c) => ({
     backgroundColor: c.brandTertiary,
   },
   pdfText: { color: c.brandPrimary, fontWeight: "700", fontSize: 14 },
+  linkRow: { flexDirection: "row", alignItems: "center", gap: 12 },
+  linkText: { flex: 1, fontSize: 15, fontWeight: "700", color: c.onSurface },
   logout: {
     flexDirection: "row",
     alignItems: "center",

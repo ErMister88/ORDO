@@ -13,6 +13,9 @@ import bcrypt
 import uuid
 import re
 import ipaddress
+import secrets
+import string
+import hashlib
 import requests
 import httpx
 from html import escape
@@ -243,6 +246,17 @@ def verify_pw(pw: str, hashed: str) -> bool:
 DUMMY_HASH = hash_pw("dummy-not-a-real-account")
 
 
+def random_password(n: int = 12) -> str:
+    alphabet = string.ascii_letters + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(n))
+
+
+def gen_reset_code() -> tuple:
+    code = f"{secrets.randbelow(1000000):06d}"
+    digest = hashlib.sha256(code.encode()).hexdigest()
+    return code, digest
+
+
 def create_token(user: dict) -> str:
     now = datetime.now(timezone.utc)
     payload = {
@@ -321,6 +335,40 @@ class CustomerPriceIn(BaseModel):
 
 class OrderStatusIn(BaseModel):
     status: str
+
+
+class ActiveIn(BaseModel):
+    active: bool
+
+
+class NewCompanyIn(BaseModel):
+    name: str
+    city: str = ""
+    email: str = ""
+    phone: str = ""
+
+
+class CreateUserIn(BaseModel):
+    name: str
+    email: str
+    role: Literal["sales", "customer"]
+    companyId: Optional[str] = None
+    newCompany: Optional[NewCompanyIn] = None
+
+
+class ForgotPwIn(BaseModel):
+    email: str
+
+
+class ResetPwIn(BaseModel):
+    email: str
+    code: str
+    newPassword: str
+
+
+class ChangePwIn(BaseModel):
+    currentPassword: str
+    newPassword: str
 
 
 ORDER_STATUS_FLOW = ["Neu", "Bestätigt", "Kommissioniert", "Versendet", "Abgeschlossen"]
@@ -410,11 +458,134 @@ async def me(user: Annotated[dict, Depends(current_user)]):
 
 
 # --------------------------------------------------------------------------
+# Routes: User management (admin) + password reset / change
+# --------------------------------------------------------------------------
+@api_router.get("/users")
+async def list_users(user: Annotated[dict, Depends(require_roles("admin"))]):
+    users = await db.users.find({}).to_list(1000)
+    comps = {c["id"]: c["name"] for c in await db.companies.find({}).to_list(1000)}
+    users.sort(key=lambda u: u.get("createdAt", ""))
+    return [
+        {
+            "id": u["id"], "name": u.get("name"), "email": u["email"], "role": u["role"],
+            "companyId": u.get("companyId"), "companyName": comps.get(u.get("companyId")),
+            "createdAt": u.get("createdAt"),
+        }
+        for u in users
+    ]
+
+
+@api_router.post("/users")
+async def create_user(body: CreateUserIn, admin: Annotated[dict, Depends(require_roles("admin"))]):
+    email = body.email.strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Ungültige E-Mail-Adresse")
+    if await db.users.find_one({"email": email}):
+        raise HTTPException(status_code=409, detail="E-Mail-Adresse ist bereits vergeben")
+    company_id = None
+    if body.role == "customer":
+        if body.newCompany and body.newCompany.name.strip():
+            company_id = "c" + secrets.token_hex(4)
+            await db.companies.insert_one({
+                "id": company_id, "name": body.newCompany.name.strip(), "city": body.newCompany.city.strip(),
+                "email": body.newCompany.email.strip(), "phone": body.newCompany.phone.strip(), "vatId": "",
+                "assignedSalesRepId": admin["id"], "active": True, "monthlyKg": 0, "orderCycleDays": 30,
+            })
+        elif body.companyId:
+            c = await db.companies.find_one({"id": body.companyId})
+            if not c:
+                raise HTTPException(status_code=400, detail="Firma nicht gefunden")
+            company_id = body.companyId
+        else:
+            raise HTTPException(status_code=400, detail="Für ein Kundenkonto ist eine Firma erforderlich")
+    uid = "u-" + secrets.token_hex(5)
+    pw = random_password()
+    doc = {
+        "id": uid, "name": body.name.strip() or email, "email": email, "role": body.role,
+        "hashed_password": hash_pw(pw), "companyId": company_id,
+        "salesRepId": uid if body.role == "sales" else None,
+        "must_change_password": True,
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.users.insert_one(doc)
+    return {"id": uid, "name": doc["name"], "email": email, "role": body.role,
+            "companyId": company_id, "initialPassword": pw}
+
+
+@api_router.post("/users/{user_id}/reset")
+async def admin_reset_password(user_id: str, admin: Annotated[dict, Depends(require_roles("admin"))]):
+    u = await db.users.find_one({"id": user_id})
+    if not u:
+        raise HTTPException(status_code=404, detail="Benutzer nicht gefunden")
+    pw = random_password()
+    await db.users.update_one({"id": user_id}, {"$set": {"hashed_password": hash_pw(pw), "must_change_password": True}})
+    return {"id": user_id, "email": u["email"], "initialPassword": pw}
+
+
+@api_router.post("/auth/password/forgot")
+async def forgot_password(body: ForgotPwIn):
+    email = body.email.strip().lower()
+    u = await db.users.find_one({"email": email})
+    if u:
+        code, digest = gen_reset_code()
+        expires = datetime.now(timezone.utc) + timedelta(minutes=30)
+        await db.password_resets.delete_many({"userId": u["id"]})
+        await db.password_resets.insert_one({"userId": u["id"], "codeHash": digest, "expiresAt": expires, "used": False})
+        try:
+            inner = (
+                f"<p style='margin:0 0 12px;color:#3A4256;font-size:15px'>Hallo {escape(u.get('name', ''))},<br>"
+                "Ihr Sicherheitscode zum Zur&uuml;cksetzen des Passworts lautet:</p>"
+                f"<p style='font-size:30px;font-weight:bold;letter-spacing:6px;color:#0B1B3D;margin:0 0 12px'>{code}</p>"
+                "<p style='margin:0;color:#8A90A2;font-size:13px'>G&uuml;ltig f&uuml;r 30 Minuten. "
+                "Falls Sie das nicht angefordert haben, ignorieren Sie diese E-Mail.</p>"
+            )
+            html = _email_shell("Passwort zur&uuml;cksetzen", "Sie haben einen Sicherheitscode angefordert.", inner)
+            await send_email(to=email, subject="Ihr Code zum Zurücksetzen des Passworts", html=html)
+        except Exception as e:
+            logger.warning(f"E-Mail (Reset-Code) fehlgeschlagen: {e}")
+    return {"ok": True, "message": "Falls die E-Mail existiert, wurde ein Code gesendet."}
+
+
+@api_router.post("/auth/password/reset")
+async def reset_password(body: ResetPwIn):
+    if len(body.newPassword) < 8:
+        raise HTTPException(status_code=400, detail="Passwort muss mindestens 8 Zeichen haben")
+    email = body.email.strip().lower()
+    u = await db.users.find_one({"email": email})
+    if not u:
+        raise HTTPException(status_code=400, detail="Code ungültig oder abgelaufen")
+    digest = hashlib.sha256(body.code.strip().encode()).hexdigest()
+    rec = await db.password_resets.find_one({"userId": u["id"], "codeHash": digest, "used": False})
+    if not rec:
+        raise HTTPException(status_code=400, detail="Code ungültig oder abgelaufen")
+    exp = rec["expiresAt"]
+    if exp.tzinfo is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    if exp < datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="Code ungültig oder abgelaufen")
+    res = await db.password_resets.update_one({"_id": rec["_id"], "used": False}, {"$set": {"used": True}})
+    if res.modified_count != 1:
+        raise HTTPException(status_code=400, detail="Code wurde bereits verwendet")
+    await db.users.update_one({"id": u["id"]}, {"$set": {"hashed_password": hash_pw(body.newPassword), "must_change_password": False}})
+    return {"ok": True, "message": "Passwort geändert. Bitte neu anmelden."}
+
+
+@api_router.post("/auth/password/change")
+async def change_password(body: ChangePwIn, user: Annotated[dict, Depends(current_user)]):
+    if len(body.newPassword) < 8:
+        raise HTTPException(status_code=400, detail="Passwort muss mindestens 8 Zeichen haben")
+    if not verify_pw(body.currentPassword, user["hashed_password"]):
+        raise HTTPException(status_code=400, detail="Aktuelles Passwort ist falsch")
+    await db.users.update_one({"id": user["id"]}, {"$set": {"hashed_password": hash_pw(body.newPassword), "must_change_password": False}})
+    return {"ok": True, "message": "Passwort geändert."}
+
+
+# --------------------------------------------------------------------------
 # Routes: Products
 # --------------------------------------------------------------------------
 @api_router.get("/products")
 async def get_products(user: Annotated[dict, Depends(current_user)]):
-    prods = await db.products.find({"active": True}).to_list(1000)
+    prods = await db.products.find({}).to_list(1000)
     result = []
     for p in prods:
         p = strip_id(p)
@@ -444,6 +615,14 @@ async def update_product(product_id: str, body: ProductIn, user: Annotated[dict,
         raise HTTPException(status_code=404, detail="Produkt nicht gefunden")
     p = await db.products.find_one({"id": product_id})
     return strip_id(p)
+
+
+@api_router.put("/products/{product_id}/active")
+async def set_product_active(product_id: str, body: ActiveIn, user: Annotated[dict, Depends(require_roles("admin"))]):
+    res = await db.products.update_one({"id": product_id}, {"$set": {"active": body.active}})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Produkt nicht gefunden")
+    return {"ok": True, "active": body.active}
 
 
 # --------------------------------------------------------------------------
@@ -958,6 +1137,7 @@ app.add_middleware(
 # --------------------------------------------------------------------------
 async def seed():
     await db.users.create_index("email", unique=True, name="uniq_email")
+    await db.password_resets.create_index("expiresAt", expireAfterSeconds=0, name="ttl_reset")
 
     seed_users = [
         {"id": "u-admin", "name": "Sergio (Admin)", "email": "admin@ss-coffee.de", "role": "admin",

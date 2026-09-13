@@ -26,6 +26,9 @@ export default function RootLayout() {
                 <Stack.Screen name="kunde/[id]" options={{ presentation: "card" }} />
                 <Stack.Screen name="bestellung/[id]" options={{ presentation: "card" }} />
                 <Stack.Screen name="produkte" options={{ presentation: "card" }} />
+                <Stack.Screen name="benutzer" options={{ presentation: "card" }} />
+                <Stack.Screen name="passwort-vergessen" options={{ presentation: "card" }} />
+                <Stack.Screen name="passwort-aendern" options={{ presentation: "card" }} />
               </Stack>
             </AuthProvider>
           </QueryClientProvider>

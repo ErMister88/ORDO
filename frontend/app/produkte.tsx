@@ -55,6 +55,13 @@ export default function Produkte() {
   const [ok, setOk] = useState("");
   const [uploading, setUploading] = useState(false);
   const [permBlocked, setPermBlocked] = useState(false);
+  const [search, setSearch] = useState("");
+
+  const toggleActive = useMutation({
+    mutationFn: ({ id, active }: { id: string; active: boolean }) =>
+      apiPut(`/products/${id}/active`, { active }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["products"] }),
+  });
 
   const set = (k: keyof Form) => (v: string) => {
     setForm((f) => ({ ...f, [k]: v }));
@@ -329,41 +336,71 @@ export default function Produkte() {
           )}
 
           <SectionTitle style={{ marginTop: 4 }}>Sortiment ({products.data?.length ?? 0})</SectionTitle>
-          {(products.data ?? []).map((p: any) => (
-            <Pressable key={p.id} testID={`product-${p.id}`} onPress={() => openEdit(p)}>
-              <Card>
-                <View style={styles.prodRow}>
-                  {p.imageUrl ? (
-                    <Image source={{ uri: fileUrl(p.imageUrl) }} style={styles.thumb} contentFit="cover" transition={150} />
-                  ) : (
-                    <View style={[styles.thumb, styles.thumbEmpty]}>
-                      <ImageSquare size={22} color={colors.muted} weight="duotone" />
+          <Input
+            testID="product-search"
+            value={search}
+            onChangeText={setSearch}
+            placeholder="Produkt suchen (Marke, Name, Beschreibung)…"
+            style={{ marginBottom: 4 }}
+          />
+          {(() => {
+            const q = search.trim().toLowerCase();
+            const list = (products.data ?? []).filter(
+              (p: any) =>
+                !q ||
+                `${p.brand} ${p.name}`.toLowerCase().includes(q) ||
+                (p.description ?? "").toLowerCase().includes(q),
+            );
+            if (list.length === 0) {
+              return <Muted testID="no-products">Keine Produkte gefunden.</Muted>;
+            }
+            return list.map((p: any) => {
+              const inactive = p.active === false;
+              return (
+                <Pressable key={p.id} testID={`product-${p.id}`} onPress={() => openEdit(p)}>
+                  <Card style={inactive ? { opacity: 0.55 } : undefined}>
+                    <View style={styles.prodRow}>
+                      {p.imageUrl ? (
+                        <Image source={{ uri: fileUrl(p.imageUrl) }} style={styles.thumb} contentFit="cover" transition={150} />
+                      ) : (
+                        <View style={[styles.thumb, styles.thumbEmpty]}>
+                          <ImageSquare size={22} color={colors.muted} weight="duotone" />
+                        </View>
+                      )}
+                      <View style={{ flex: 1 }}>
+                        <View style={styles.prodTop}>
+                          <Text style={styles.prodTitle} numberOfLines={1}>
+                            {p.brand} {p.name}
+                          </Text>
+                          <PencilSimple size={16} color={colors.muted} />
+                        </View>
+                        {p.description ? <Muted numberOfLines={2}>{p.description}</Muted> : null}
+                        <Muted>
+                          Standard {euro(p.standardPrice)} · Limit {euro(p.salesFloor)} · Grenze {euro(p.absoluteFloor)} · EK{" "}
+                          {euro(p.cost)}
+                        </Muted>
+                        {p.discountTiers?.length ? (
+                          <Muted>
+                            Staffel: {p.discountTiers.map((t: any) => `ab ${t.minQty} → ${euro(t.price)}`).join(" · ")}
+                          </Muted>
+                        ) : null}
+                      </View>
                     </View>
-                  )}
-                  <View style={{ flex: 1 }}>
-                    <View style={styles.prodTop}>
-                      <Text style={styles.prodTitle} numberOfLines={1}>
-                        {p.brand} {p.name}
+                    <Pressable
+                      testID={`toggle-active-${p.id}`}
+                      style={[styles.activePill, inactive ? styles.pillOff : styles.pillOn]}
+                      onPress={() => toggleActive.mutate({ id: p.id, active: inactive })}
+                      hitSlop={6}
+                    >
+                      <Text style={[styles.pillText, { color: inactive ? colors.muted : colors.success }]}>
+                        {inactive ? "Inaktiv · antippen zum Aktivieren" : "Aktiv · antippen zum Ausblenden"}
                       </Text>
-                      <PencilSimple size={16} color={colors.muted} />
-                    </View>
-                    {p.description ? (
-                      <Muted numberOfLines={2}>{p.description}</Muted>
-                    ) : null}
-                    <Muted>
-                      Standard {euro(p.standardPrice)} · Limit {euro(p.salesFloor)} · Grenze {euro(p.absoluteFloor)} · EK{" "}
-                      {euro(p.cost)}
-                    </Muted>
-                    {p.discountTiers?.length ? (
-                      <Muted>
-                        Staffel: {p.discountTiers.map((t: any) => `ab ${t.minQty} → ${euro(t.price)}`).join(" · ")}
-                      </Muted>
-                    ) : null}
-                  </View>
-                </View>
-              </Card>
-            </Pressable>
-          ))}
+                    </Pressable>
+                  </Card>
+                </Pressable>
+              );
+            });
+          })()}
         </ScrollView>
       </KeyboardAvoidingView>
     </View>
@@ -446,4 +483,14 @@ const useStyles = makeStyles((c) => ({
     borderStyle: "dashed",
   },
   addTierText: { color: c.brandPrimary, fontWeight: "700", fontSize: 14 },
+  activePill: {
+    marginTop: 10,
+    paddingVertical: 8,
+    borderRadius: 10,
+    alignItems: "center",
+    backgroundColor: c.surfaceTertiary,
+  },
+  pillOn: { backgroundColor: c.brandTertiary },
+  pillOff: { backgroundColor: c.surfaceTertiary },
+  pillText: { fontSize: 13, fontWeight: "700" },
 }));

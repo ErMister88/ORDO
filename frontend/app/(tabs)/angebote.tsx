@@ -2,11 +2,12 @@ import { useMemo, useState } from "react";
 import { View, Text, ScrollView, Pressable, KeyboardAvoidingView, Platform } from "react-native";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { CaretDown, Export, Plus } from "phosphor-react-native";
+import { Image } from "expo-image";
+import { CaretDown, Export, Plus, ImageSquare } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
-import { apiGet, apiPost } from "@/src/api/client";
+import { apiGet, apiPost, fileUrl } from "@/src/api/client";
 import { euro, num } from "@/src/lib/format";
 import { applicableTier } from "@/src/lib/pricing";
 import { shareOfferPdf } from "@/src/lib/pdf";
@@ -92,9 +93,18 @@ export default function Angebote() {
                   {o.items.map((it: any, idx: number) => {
                     const p = prodMap[it.productId];
                     return (
-                      <Muted key={idx}>
-                        {p ? `${p.brand} ${p.name}` : it.productId} · {num(it.qty)} kg · {euro(it.price)}/kg
-                      </Muted>
+                      <View key={idx} style={styles.lineItemRow}>
+                        {p?.imageUrl ? (
+                          <Image source={{ uri: fileUrl(p.imageUrl) }} style={styles.lineThumb} contentFit="cover" transition={150} />
+                        ) : (
+                          <View style={[styles.lineThumb, styles.lineThumbEmpty]}>
+                            <ImageSquare size={16} color={colors.muted} weight="duotone" />
+                          </View>
+                        )}
+                        <Muted style={{ flex: 1 }}>
+                          {p ? `${p.brand} ${p.name}` : it.productId} · {num(it.qty)} kg · {euro(it.price)}/kg
+                        </Muted>
+                      </View>
                     );
                   })}
                   {o.reason ? <Muted style={{ fontStyle: "italic" }}>{`„${o.reason}"`}</Muted> : null}
@@ -178,8 +188,9 @@ function CreateOffer({
   const { colors } = useTheme();
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
+  const activeProducts = products.filter((p) => p.active !== false);
   const [companyId, setCompanyId] = useState(defaultCompanyId || companies[0]?.id || "");
-  const [productId, setProductId] = useState(products[0]?.id || "");
+  const [productId, setProductId] = useState(activeProducts[0]?.id || "");
   const [qty, setQty] = useState("60");
   const [price, setPrice] = useState("");
   const [items, setItems] = useState<{ productId: string; qty: number; price: number }[]>([]);
@@ -196,7 +207,7 @@ function CreateOffer({
     if (msg) setMsg("");
   };
 
-  const product = products.find((p) => p.id === productId) || products[0];
+  const product = products.find((p) => p.id === productId) || activeProducts[0];
   const parsed = Number((price || "").replace(",", "."));
   const q = Number(qty) || 0;
 
@@ -304,7 +315,7 @@ function CreateOffer({
         <CaretDown size={16} color={colors.muted} />
       </Pressable>
       {showProd &&
-        products.map((p) => (
+        activeProducts.map((p) => (
           <Pressable
             key={p.id}
             testID={`product-opt-${p.id}`}
@@ -438,6 +449,9 @@ const useStyles = makeStyles((c) => ({
   offerTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   offerId: { fontSize: 15, fontWeight: "800", color: c.onSurface },
   offerCompany: { fontSize: 14, fontWeight: "700", color: c.brandPrimary },
+  lineItemRow: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 4 },
+  lineThumb: { width: 36, height: 36, borderRadius: 8, backgroundColor: c.surfaceTertiary },
+  lineThumbEmpty: { alignItems: "center", justifyContent: "center" },
   actions: { gap: 10, marginTop: 6, borderTopWidth: 1, borderTopColor: c.divider, paddingTop: 10 },
   actionRow: { flexDirection: "row", gap: 10 },
   shareBtn: {

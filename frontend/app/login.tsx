@@ -127,6 +127,14 @@ export default function Login() {
               loading={loading}
               style={{ marginTop: 4 }}
             />
+            <Pressable
+              testID="forgot-password-link"
+              onPress={() => router.push("/passwort-vergessen")}
+              hitSlop={8}
+              style={{ alignSelf: "center", marginTop: 10 }}
+            >
+              <Text style={styles.forgotLink}>Passwort vergessen?</Text>
+            </Pressable>
           </View>
 
           <Text style={styles.demoTitle}>Demo-Konten</Text>
@@ -172,6 +180,7 @@ const useStyles = makeStyles((c) => ({
   subtitle: { fontSize: 15, color: c.muted, marginBottom: 12 },
   form: { gap: 8 },
   fieldLabel: { fontSize: 13, fontWeight: "700", color: c.onSurfaceSecondary, marginTop: 6 },
+  forgotLink: { color: c.brandPrimary, fontWeight: "700", fontSize: 14 },
   error: { color: c.error, fontSize: 14, fontWeight: "600", marginTop: 4 },
   demoTitle: { fontSize: 13, fontWeight: "700", color: c.muted, marginTop: 24, marginBottom: 10 },
   demoRow: { flexDirection: "row", gap: 10 },
