@@ -25,6 +25,8 @@ type Form = {
   description: string;
   imageUrl: string;
   discountTiers: Tier[];
+  taxRate: string;
+  stock: string;
 };
 
 const EMPTY: Form = {
@@ -38,6 +40,8 @@ const EMPTY: Form = {
   description: "",
   imageUrl: "",
   discountTiers: [],
+  taxRate: "7",
+  stock: "",
 };
 
 export default function Produkte() {
@@ -93,6 +97,8 @@ export default function Produkte() {
         minQty: String(t.minQty),
         price: String(t.price),
       })),
+      taxRate: String(p.taxRate ?? 7),
+      stock: p.stock != null ? String(p.stock) : "",
     });
     setMsg("");
     setOk("");
@@ -163,6 +169,8 @@ export default function Produkte() {
           .map((t) => ({ minQty: num(t.minQty), price: num(t.price) }))
           .filter((t) => t.minQty > 0 && t.price > 0)
           .sort((a, b) => a.minQty - b.minQty),
+        taxRate: Number(form.taxRate) === 19 ? 19 : 7,
+        stock: form.stock.trim() === "" ? null : num(form.stock),
         active: true,
       };
       return editingId ? apiPut(`/products/${editingId}`, body) : apiPost("/products", body);
@@ -287,6 +295,25 @@ export default function Produkte() {
                 </View>
               </View>
 
+              <Text style={styles.label}>MwSt-Satz</Text>
+              <View style={styles.row}>
+                {[7, 19].map((r) => (
+                  <Pressable
+                    key={r}
+                    testID={`tax-${r}`}
+                    style={[styles.taxBtn, Number(form.taxRate) === r && styles.taxBtnActive]}
+                    onPress={() => setForm((f) => ({ ...f, taxRate: String(r) }))}
+                  >
+                    <Text style={[styles.taxText, Number(form.taxRate) === r && styles.taxTextActive]}>
+                      {r}% {r === 7 ? "(Kaffee)" : "(Maschine)"}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+
+              <Text style={styles.label}>Lagerbestand (optional, leer = unbegrenzt)</Text>
+              <Input testID="p-stock" value={form.stock} onChangeText={set("stock")} keyboardType="numeric" placeholder="z. B. 120" />
+
               <Text style={styles.label}>Mengenrabatt-Staffeln (optional)</Text>
               <Muted>Ab welcher Menge gilt welcher Stückpreis? Greift automatisch in Angeboten & Nachbestellungen.</Muted>
               {form.discountTiers.map((t, idx) => (
@@ -384,6 +411,10 @@ export default function Produkte() {
                             Staffel: {p.discountTiers.map((t: any) => `ab ${t.minQty} → ${euro(t.price)}`).join(" · ")}
                           </Muted>
                         ) : null}
+                        <Muted>
+                          MwSt {p.taxRate ?? 7}%
+                          {p.stock != null ? ` · Lager: ${p.stock}${p.stock <= 0 ? " (leer)" : ""}` : ""}
+                        </Muted>
                       </View>
                     </View>
                     <Pressable
@@ -493,4 +524,8 @@ const useStyles = makeStyles((c) => ({
   pillOn: { backgroundColor: c.brandTertiary },
   pillOff: { backgroundColor: c.surfaceTertiary },
   pillText: { fontSize: 13, fontWeight: "700" },
+  taxBtn: { flex: 1, paddingVertical: 12, borderRadius: 12, alignItems: "center", backgroundColor: c.surfaceTertiary },
+  taxBtnActive: { backgroundColor: c.brandPrimary },
+  taxText: { fontSize: 14, fontWeight: "700", color: c.onSurfaceSecondary },
+  taxTextActive: { color: c.onBrandPrimary },
 }));

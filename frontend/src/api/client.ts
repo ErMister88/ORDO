@@ -11,6 +11,7 @@ export type User = {
   role: Role;
   companyId?: string | null;
   salesRepId?: string | null;
+  must_change_password?: boolean;
 };
 
 async function authHeader(): Promise<Record<string, string>> {
@@ -48,6 +49,13 @@ export async function apiPut<T = any>(path: string, body?: any): Promise<T> {
 }
 
 export const API_BASE = API;
+
+export async function apiDelete<T = any>(path: string): Promise<T> {
+  const headers = await authHeader();
+  const res = await fetch(`${API}/api${path}`, { method: "DELETE", headers });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `Fehler ${res.status}`);
+  return res.json();
+}
 
 export function fileUrl(url?: string | null): string | undefined {
   if (!url) return undefined;

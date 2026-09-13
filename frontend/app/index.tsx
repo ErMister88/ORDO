@@ -11,7 +11,8 @@ export default function Index() {
 
   useEffect(() => {
     if (loading) return;
-    if (user) router.replace("/(tabs)");
+    if (user && user.must_change_password) router.replace("/passwort-aendern?forced=1");
+    else if (user) router.replace("/(tabs)");
     else router.replace("/login");
   }, [user, loading]);
 

@@ -80,7 +80,45 @@ export async function shareOfferPdf(offer: any, company: any, products: Record<s
   await shareHtml(wrap(`Angebot ${offer.id}`, inner), `Angebot-${offer.id}.pdf`);
 }
 
+function vatRows(lineItems: any[]): string {
+  return lineItems
+    .map(
+      (i: any) =>
+        `<tr><td>${i.name ?? i.productId}</td>
+        <td class="right">${num(i.qty)} ${i.unit ?? "kg"}</td>
+        <td class="right">${euro(i.price)}</td>
+        <td class="right">${i.taxRate ?? 7}%</td>
+        <td class="right">${euro(i.net ?? i.price * i.qty)}</td></tr>`,
+    )
+    .join("");
+}
+
+function taxSummary(breakdown: Record<string, number>): string {
+  return Object.entries(breakdown || {})
+    .map(([rate, amt]) => `<div class="right muted">zzgl. ${rate}% MwSt: ${euro(amt as number)}</div>`)
+    .join("");
+}
+
 export async function shareInvoicePdf(invoice: any, company: any) {
+  if (invoice.lineItems && invoice.lineItems.length) {
+    const inner = `
+      <h1>Rechnung ${invoice.id}</h1>
+      <span class="badge">${invoice.status}</span>
+      <div class="box" style="margin-top:16px;">
+        <strong>${company?.name ?? "Kunde"}</strong><br/>
+        <span class="muted">${company?.city ?? ""} · USt-ID: ${company?.vatId ?? "-"}</span>
+      </div>
+      <table>
+        <tr><th>Position</th><th class="right">Menge</th><th class="right">Preis</th><th class="right">MwSt</th><th class="right">Netto</th></tr>
+        ${vatRows(invoice.lineItems)}
+      </table>
+      <div class="right muted">Nettobetrag: ${euro(invoice.net ?? invoice.amount)}</div>
+      ${taxSummary(invoice.taxBreakdown)}
+      <div class="right total" style="margin-top:6px;">Gesamt (brutto): ${euro(invoice.amount)}</div>
+      <p class="muted">Rechnungsdatum: ${dateDE(invoice.date)} · Status: ${invoice.status}</p>`;
+    await shareHtml(wrap(`Rechnung ${invoice.id}`, inner), `Rechnung-${invoice.id}.pdf`);
+    return;
+  }
   const inner = `
     <h1>Rechnung ${invoice.id}</h1>
     <span class="badge">${invoice.status}</span>
@@ -95,4 +133,50 @@ export async function shareInvoicePdf(invoice: any, company: any) {
     <div class="right total">Gesamt: ${euro(invoice.amount)}</div>
     <p class="muted">Status: ${invoice.status}</p>`;
   await shareHtml(wrap(`Rechnung ${invoice.id}`, inner), `Rechnung-${invoice.id}.pdf`);
+}
+
+export async function shareDeliveryNotePdf(order: any, company: any, products: Record<string, any>) {
+  const rows = order.items
+    .map((i: any) => {
+      const p = products[i.productId];
+      return `<tr><td>${p ? `${p.brand} ${p.name}` : i.productId}</td>
+        <td class="right">${num(i.qty)} ${p?.unit ?? "kg"}</td></tr>`;
+    })
+    .join("");
+  const inner = `
+    <h1>Lieferschein zu ${order.id}</h1>
+    <span class="badge">${order.status}</span>
+    <div class="box" style="margin-top:16px;">
+      <strong>${company?.name ?? "Kunde"}</strong><br/>
+      <span class="muted">${company?.city ?? ""}${company?.phone ? ` · ${company.phone}` : ""}</span>
+    </div>
+    <table>
+      <tr><th>Artikel</th><th class="right">Menge</th></tr>
+      ${rows}
+    </table>
+    ${order.trackingNumber ? `<p class="muted">Sendungsnummer: ${order.trackingNumber}</p>` : ""}
+    ${order.estimatedDelivery ? `<p class="muted">Voraussichtliche Lieferung: ${dateDE(order.estimatedDelivery)}</p>` : ""}
+    <p class="muted">Bitte prüfen Sie die Ware bei Erhalt auf Vollständigkeit.</p>`;
+  await shareHtml(wrap(`Lieferschein ${order.id}`, inner), `Lieferschein-${order.id}.pdf`);
+}
+
+const MONTHS = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
+
+export async function shareCollectivePdf(data: any) {
+  const c = data.company;
+  const inner = `
+    <h1>Sammelrechnung ${MONTHS[data.month - 1]} ${data.year}</h1>
+    <div class="box" style="margin-top:16px;">
+      <strong>${c?.name ?? "Kunde"}</strong><br/>
+      <span class="muted">${c?.city ?? ""} · USt-ID: ${c?.vatId ?? "-"}</span>
+    </div>
+    <p class="muted">Enthaltene Bestellungen: ${(data.orders || []).map((o: any) => o.id).join(", ") || "keine"}</p>
+    <table>
+      <tr><th>Position</th><th class="right">Menge</th><th class="right">Preis</th><th class="right">MwSt</th><th class="right">Netto</th></tr>
+      ${vatRows(data.lineItems || [])}
+    </table>
+    <div class="right muted">Nettobetrag: ${euro(data.net)}</div>
+    ${taxSummary(data.taxBreakdown)}
+    <div class="right total" style="margin-top:6px;">Gesamt (brutto): ${euro(data.amount)}</div>`;
+  await shareHtml(wrap(`Sammelrechnung-${data.year}-${data.month}`, inner), `Sammelrechnung-${c?.name ?? ""}-${data.year}-${data.month}.pdf`);
 }

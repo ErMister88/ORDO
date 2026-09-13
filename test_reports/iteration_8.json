@@ -1,0 +1,50 @@
+{
+  "summary": "Iteration 8 covered the backend refactor regression + Phase1..Phase4 features and mobile-web UI. Backend: 31/31 pytest pass (test_iteration8.py, xdist-off with -n0). REFACTOR REGRESSION: /api/auth/login, /api/auth/me (returns must_change_password), /api/products (admin has 'cost' & 'active' & 'taxRate'; sales strips 'cost'; customer strips cost+salesFloor+absoluteFloor), /api/offers /api/orders /api/companies /api/dashboard /api/analytics all 200. Cost hidden regression: ADMIN sees cost, SALES/CUSTOMER never see cost — CRITICAL invariant intact. PHASE1 Firmenverwaltung: PUT /api/companies/c1 admin 200 with name/city/email/phone/vatId/orderCycleDays/active, sales 403, customer 403. PHASE1 Forced password: user created via POST /api/users returns initialPassword; must_change_password=true on /auth/me; POST /api/auth/password/change flips flag to false. Rate-limit: 5 wrong pw for same email → 429 on 6th. PHASE2 Invoices with VAT: POST /api/orders/{id}/invoice returns sequential RE-YYYY-#### with lineItems / net / taxBreakdown['7'] / taxTotal / amount(gross), math verified (10 * standardPrice * 1.07); duplicate → 400; customer → 403; collective-invoice returns taxBreakdown/amount and includes generated order. PHASE3 Subscriptions: POST /api/subscriptions admin 200 (creates {id,companyId,items,intervalDays,active,nextRun,lastRun}); GET list; PUT toggle flips active; POST /run (admin) creates a due order (nextRun in past → picked up), sales 403; DELETE removes. PHASE4 Stripe: /api/invoices/{id}/checkout requires auth (401 without token), 403 for other-company customer, happy-path 200/502 accepted (502 EXPECTED with placeholder key — logs confirm 'Invalid API Key sk_test_****gent'), 409 when invoice status Bezahlt; /payment-status returns 'Bezahlt' after marking paid.\n\nFrontend (mobile web 390x844): Admin login OK. Mehr tab exposes link-produkte / link-benutzer / link-abos / link-passwort. /abos loads with sub-form + sub-run + sub-company + sub-product + sub-qty + sub-interval + sub-submit — all rendered. Angebote tab has offer-search input and all 5 filter chips (offer-filter-Alle / Freigabe nötig / Freigegeben / Angenommen / Abgelehnt). Kunde c1 detail exposes 'Firma bearbeiten' (edit-company) opening company-editor with edit-name/city/email/phone/vat/cycle/edit-save. Forced password flow: newly created sales user logging in is auto-routed to /passwort-aendern?forced=1 with change-current/change-new/change-new2/change-submit; submitting new pw returns user to /(tabs). Cleanup: deleted test users (test_i8_forced, test_i8_ratelimit, test_ui_forced_i8), test subscriptions, test order + invoice; reset counters (order->24 = seed max, invoice->1000); reactivated p1..p4; restored c1 baseline; emptied password_resets. Seed baseline preserved: 3 users, 4 products all active.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "kunde/[id].tsx", "issues": ["'sammelrechnung' button only renders inside the 'Rechnungen' tab body (line 208) — expected, not a bug. Default tab is 'uebersicht', so testers must switch to Rechnungen tab to see the Sammelrechnung PDF button."]}
+    ],
+    "react_native_issues": [
+      {"component": "src/components/ui.tsx (Card shadow*)", "issue": "Carry-over from earlier iterations — react-native-web deprecation warning 'shadow*' style props; migrate to 'boxShadow'. Non-blocking. Reference: /app/frontend/src/components/ui.tsx."},
+      {"component": "react-native-gifted-charts", "issue": "Carry-over vendor warnings 'props.pointerEvents is deprecated' and 'TouchableMixin is deprecated'. Non-blocking. Reference: /app/frontend/app/(tabs)/auswertungen.tsx."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration8.py",
+    "/app/test_reports/pytest/pytest_iter8.xml"
+  ],
+  "action_items": [
+    "No functional issues found — all Phase1..Phase4 features and refactor regression pass end-to-end (backend 31/31; frontend flows verified for admin login → Mehr → /abos, Angebote search+filter, Kunde c1 edit-company, forced-password change).",
+    "Cosmetic (optional): migrate shadow* → boxShadow in src/components/ui.tsx to silence react-native-web warnings.",
+    "Test infra note: test_iteration8.py must be executed with '-n0' (i.e., no pytest-xdist) so that state-carrying tests (rate-limit user, invoice→subscription→cleanup) run in declared order. Existing pytest.ini uses xdist by default."
+  ],
+  "critical_code_review_comments": [
+    "app/routers/companies.py:44 update_company — admin-only via require_roles('admin'), CompanyUpdateIn covers all required fields. 404 returned on unknown id. Good.",
+    "app/routers/billing.py:36 create_invoice_for_order — sequential RE-YYYY-#### via next_seq('invoice'); guards duplicate via order.invoiceId; VAT breakdown built from product.taxRate at line-item time (correct per spec 7% Kaffee / 19% Maschine). Good.",
+    "app/routers/billing.py:68 collective_invoice — filters by year+month on order.createdAt and excludes Storniert. Correct.",
+    "app/routers/subscriptions.py:64 run_due_subscriptions — admin-only; picks subs with nextRun<=today; uses next_seq('order') so no collisions IF counter is aligned with existing orders (see counter-reset note below). Good.",
+    "app/routers/payments.py:17 create_checkout — 404 unknown, 403 other-company via visible_company_ids, 409 Bezahlt, 400 invalid amount; wraps Stripe in run_in_threadpool + generic 502 on failure. Good.",
+    "app/routers/auth.py:22 rate-limit — in-memory _LOGIN_FAILS keyed by email, 5 attempts / 15 min lockout, returns 429 with i18n message. In-memory only; will reset on backend restart — acceptable for MVP but note this in prod hardening.",
+    "app/routers/auth.py:110 change_password — flips must_change_password=false after successful change; validates newPassword length. Good.",
+    "app/routers/products.py:19 get_products — admin sees full doc, sales strips 'cost', customer strips 'cost'+'salesFloor'+'absoluteFloor'. Cost isolation invariant intact.",
+    "COUNTER RESET IN TESTS: initial iter8 run hit E11000 duplicate key ('B-2026-01002') because previous iterations left orphan orders above the counter. This is a *test/data-hygiene* issue, not a product bug. My cleanup now resets order counter to max(existing seq) rather than blindly to 1000; iter8 cleanup already applies this pattern.",
+    "app/main.py:26 startup — awaits seed() then init_storage in threadpool; robust startup, storage failures are logged and don't crash. Good."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration8.py",
+    "/app/test_reports/pytest/pytest_iter8.xml",
+    "/app/test_reports/iteration_8.json"
+  ],
+  "success_rate": {"backend": "100% (31/31 iter8, run with -n0)", "frontend": "100% — all new mobile flows verified with data-testid selectors on 390x844."},
+  "seed_data_creation": "None permanent. Ephemeral during tests: test_i8_forced@, test_i8_ratelimit@, test_ui_forced_i8@ (sales users), 1 subscription for c1, 1 order + 1 invoice for c1. All deleted in cleanup; c1 company restored; counters aligned (order=24 matching seed baseline, invoice=1000).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iter 8 delivered: REFACTOR REGRESSION + Phase1 (PUT /api/companies/{id} admin-only + must_change_password + login rate-limit 429) + Phase2 (POST /api/orders/{id}/invoice with VAT taxBreakdown, GET /api/companies/{id}/collective-invoice?year=&month=) + Phase3 (subscriptions CRUD + POST /api/subscriptions/run admin-only) + Phase4 (Stripe checkout — 502 is EXPECTED with sk_test_emergent placeholder, verify only auth/visibility/409). Frontend testIDs added: link-abos (Mehr tab), edit-company + company-editor + edit-name/city/email/phone/vat/cycle/edit-save (kunde detail), sub-form/sub-run/sub-company/sub-product/sub-qty/sub-interval/sub-submit + sub-toggle-{id}/sub-del-{id} (/abos), offer-search + offer-filter-{Alle|Freigabe nötig|Freigegeben|Angenommen|Abgelehnt} (Angebote tab), sammelrechnung (kunde 'Rechnungen' tab only), pay-online-{id}/pay-invoice-{id} (kunde 'Rechnungen' tab). Forced-pw route /passwort-aendern?forced=1 correctly triggered from login when must_change_password=true. Run backend tests with `pytest backend/tests/test_iteration8.py -n0` — xdist parallel scrambles state-carrying tests (rate-limit + counter-dependent invoice/sub flows). If duplicate-key errors on order create appear, align counter to max order id: `db.counters.update_one({'_id':'order'},{'\\$set':{'seq': max_existing}}, upsert=True)`.",
+  "rca_of_issue": "Initial backend test run had two failures: (1) two forced-password tests failed under pytest-xdist because TestCleanup was scheduled on a worker that ran BEFORE the forced-pw tests on another worker (test class order isn't preserved cross-worker). Fixed by running with -n0 (documented in action_items). (2) TestSubscriptions.test_run_subscriptions_creates_order hit E11000 duplicate key 'B-2026-01002' because prior iterations had left orphan order docs above the counter (max existing id was 1002 while counter was reset to 1000). Fixed by deleting orphans and aligning counter to max(existing seq). No product bug — pure data hygiene."
+}

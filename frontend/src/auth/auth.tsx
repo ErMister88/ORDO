@@ -5,8 +5,9 @@ import { loginRequest, fetchMe, TOKEN_KEY, User } from "@/src/api/client";
 type AuthContextValue = {
   user: User | null;
   loading: boolean;
-  signIn: (email: string, password: string) => Promise<void>;
+  signIn: (email: string, password: string) => Promise<User>;
   signOut: () => Promise<void>;
+  refresh: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -34,6 +35,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const data = await loginRequest(email.trim(), password);
     await storage.secureSet(TOKEN_KEY, data.access_token);
     setUser(data.user);
+    return data.user;
+  }, []);
+
+  const refresh = useCallback(async () => {
+    try {
+      const me = await fetchMe();
+      setUser(me);
+    } catch {
+      /* ignore */
+    }
   }, []);
 
   const signOut = useCallback(async () => {
@@ -42,7 +53,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, loading, signIn, signOut }}>
+    <AuthContext.Provider value={{ user, loading, signIn, signOut, refresh }}>
       {children}
     </AuthContext.Provider>
   );

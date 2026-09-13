@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { View, Text, ScrollView, Pressable, KeyboardAvoidingView, Platform } from "react-native";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArrowLeft, CheckCircle } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
 import { apiPost } from "@/src/api/client";
+import { useAuth } from "@/src/auth/auth";
 import { Card, Input, Button, SectionTitle, Muted } from "@/src/components/ui";
 
 export default function PasswortAendern() {
@@ -13,6 +14,9 @@ export default function PasswortAendern() {
   const { colors } = useTheme();
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { refresh, signOut } = useAuth();
+  const { forced } = useLocalSearchParams<{ forced?: string }>();
+  const isForced = forced === "1";
 
   const [current, setCurrent] = useState("");
   const [pw, setPw] = useState("");
@@ -38,6 +42,11 @@ export default function PasswortAendern() {
     setLoading(true);
     try {
       await apiPost("/auth/password/change", { currentPassword: current, newPassword: pw });
+      if (isForced) {
+        await refresh();
+        router.replace("/(tabs)");
+        return;
+      }
       setDone(true);
     } catch (e: any) {
       setMsg(e.message || "Fehler");
@@ -49,12 +58,24 @@ export default function PasswortAendern() {
   return (
     <View style={styles.root}>
       <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
-        <Pressable onPress={() => router.back()} style={styles.backBtn} testID="back-button" hitSlop={8}>
+        <Pressable
+          onPress={async () => {
+            if (isForced) {
+              await signOut();
+              router.replace("/login");
+            } else {
+              router.back();
+            }
+          }}
+          style={styles.backBtn}
+          testID="back-button"
+          hitSlop={8}
+        >
           <ArrowLeft size={20} color={colors.onSurfaceSecondary} weight="bold" />
         </Pressable>
         <View style={{ flex: 1 }}>
           <Text style={styles.title}>Passwort ändern</Text>
-          <Text style={styles.subtitle}>Für Ihr Konto</Text>
+          <Text style={styles.subtitle}>{isForced ? "Bitte neues Passwort vergeben" : "Für Ihr Konto"}</Text>
         </View>
       </View>
 

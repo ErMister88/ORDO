@@ -25,6 +25,8 @@ export default function Angebote() {
   const isAdmin = user?.role === "admin";
 
   const offers = useQuery({ queryKey: ["offers"], queryFn: () => apiGet("/offers") });
+  const [oSearch, setOSearch] = useState("");
+  const [oStatus, setOStatus] = useState<string>("Alle");
   const products = useQuery({ queryKey: ["products"], queryFn: () => apiGet("/products") });
   const companies = useQuery({
     queryKey: ["companies"],
@@ -74,10 +76,38 @@ export default function Angebote() {
             {isAdmin ? "Alle Angebote" : "Angebote"}
           </SectionTitle>
 
-          {(offers.data ?? []).length === 0 ? (
-            <EmptyState title="Keine offenen Angebote" subtitle="Erstellte Angebote erscheinen hier" />
-          ) : (
-            (offers.data ?? []).map((o: any) => {
+          <Input
+            testID="offer-search"
+            value={oSearch}
+            onChangeText={setOSearch}
+            placeholder="Suche (Kunde, Angebotsnr.)…"
+            style={{ marginBottom: 8 }}
+          />
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
+            {["Alle", "Freigabe nötig", "Freigegeben", "Angenommen", "Abgelehnt"].map((s) => (
+              <Pressable
+                key={s}
+                testID={`offer-filter-${s}`}
+                style={[styles.filterChip, oStatus === s && styles.filterChipActive]}
+                onPress={() => setOStatus(s)}
+              >
+                <Text style={[styles.filterChipText, oStatus === s && styles.filterChipTextActive]}>{s}</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+
+          {(() => {
+            const q = oSearch.trim().toLowerCase();
+            const visibleOffers = (offers.data ?? []).filter((o: any) => {
+              if (oStatus !== "Alle" && o.status !== oStatus) return false;
+              if (!q) return true;
+              const cname = (compMap[o.companyId]?.name ?? "").toLowerCase();
+              return o.id.toLowerCase().includes(q) || cname.includes(q);
+            });
+            return visibleOffers.length === 0 ? (
+              <EmptyState title="Keine Angebote" subtitle="Keine Treffer für diese Filter" />
+            ) : (
+              visibleOffers.map((o: any) => {
               const comp = compMap[o.companyId];
               const monthlyDb = o.items.reduce((s: number, it: any) => {
                 const p = prodMap[it.productId];
@@ -166,7 +196,8 @@ export default function Angebote() {
                 </Card>
               );
             })
-          )}
+            );
+          })()}
         </ScrollView>
       </KeyboardAvoidingView>
     </View>
@@ -452,6 +483,11 @@ const useStyles = makeStyles((c) => ({
   lineItemRow: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 4 },
   lineThumb: { width: 36, height: 36, borderRadius: 8, backgroundColor: c.surfaceTertiary },
   lineThumbEmpty: { alignItems: "center", justifyContent: "center" },
+  filterRow: { gap: 8, paddingBottom: 10 },
+  filterChip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, backgroundColor: c.surfaceTertiary },
+  filterChipActive: { backgroundColor: c.brandPrimary },
+  filterChipText: { fontSize: 13, fontWeight: "700", color: c.onSurfaceSecondary },
+  filterChipTextActive: { color: c.onBrandPrimary },
   actions: { gap: 10, marginTop: 6, borderTopWidth: 1, borderTopColor: c.divider, paddingTop: 10 },
   actionRow: { flexDirection: "row", gap: 10 },
   shareBtn: {

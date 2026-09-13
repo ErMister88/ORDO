@@ -1,7 +1,7 @@
 import { View, Text, ScrollView, Pressable } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
-import { SignOut, FileText, Receipt, Export, Package, UsersThree, Lock, CaretRight } from "phosphor-react-native";
+import { SignOut, FileText, Receipt, Export, Package, UsersThree, Lock, CaretRight, ArrowsClockwise } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
@@ -110,6 +110,15 @@ export default function Mehr() {
                 <View style={styles.linkRow}>
                   <UsersThree size={20} color={colors.brandPrimary} weight="bold" />
                   <Text style={styles.linkText}>Benutzer verwalten</Text>
+                  <CaretRight size={18} color={colors.muted} />
+                </View>
+              </Card>
+            </Pressable>
+            <Pressable testID="link-abos" onPress={() => router.push("/abos")}>
+              <Card>
+                <View style={styles.linkRow}>
+                  <ArrowsClockwise size={20} color={colors.brandPrimary} weight="bold" />
+                  <Text style={styles.linkText}>Abo-Bestellungen</Text>
                   <CaretRight size={18} color={colors.muted} />
                 </View>
               </Card>

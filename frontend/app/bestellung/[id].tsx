@@ -1,15 +1,16 @@
 import { useState } from "react";
-import { View, Text, ScrollView, Pressable } from "react-native";
+import { View, Text, ScrollView, Pressable, Alert } from "react-native";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Image } from "expo-image";
-import { ArrowLeft, Check, Truck, XCircle, ImageSquare } from "phosphor-react-native";
+import { ArrowLeft, Check, Truck, XCircle, ImageSquare, Receipt, Export } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
-import { apiGet, apiPut, fileUrl } from "@/src/api/client";
+import { apiGet, apiPut, apiPost, fileUrl } from "@/src/api/client";
 import { euro, num, dateDE } from "@/src/lib/format";
+import { shareInvoicePdf, shareDeliveryNotePdf } from "@/src/lib/pdf";
 import { Card, InfoRow, Button, StatusBadge, Muted } from "@/src/components/ui";
 
 const FLOW = ["Neu", "Bestätigt", "Kommissioniert", "Versendet", "Abgeschlossen"];
@@ -33,6 +34,11 @@ export default function BestellungDetail() {
   (products.data ?? []).forEach((p: any) => (prodMap[p.id] = p));
 
   const o = order.data;
+  const company = useQuery({
+    queryKey: ["company", o?.companyId],
+    queryFn: () => apiGet(`/companies/${o.companyId}`),
+    enabled: !!o?.companyId,
+  });
   const cancelled = o?.status === "Storniert";
   const currentIdx = o ? FLOW.indexOf(o.status) : -1;
   const total = o ? o.items.reduce((a: number, i: any) => a + i.price * i.qty, 0) : 0;
@@ -43,6 +49,16 @@ export default function BestellungDetail() {
       qc.invalidateQueries({ queryKey: ["order", id] });
       qc.invalidateQueries({ queryKey: ["orders"] });
     },
+  });
+
+  const createInvoice = useMutation({
+    mutationFn: () => apiPost(`/orders/${id}/invoice`, {}),
+    onSuccess: (inv: any) => {
+      qc.invalidateQueries({ queryKey: ["order", id] });
+      qc.invalidateQueries({ queryKey: ["invoices"] });
+      Alert.alert("Rechnung erstellt", `Rechnung ${inv.id} wurde erstellt (brutto ${inv.amount.toFixed(2)} €).`);
+    },
+    onError: (e: any) => Alert.alert("Rechnung", e.message || "Fehler"),
   });
 
   const cancel = useMutation({
@@ -221,6 +237,33 @@ export default function BestellungDetail() {
                 <Text style={styles.totalValue}>{euro(total)}</Text>
               </View>
             </Card>
+
+            <Card testID="order-docs-card">
+              <Text style={styles.cardTitle}>Dokumente</Text>
+              {(o.status === "Versendet" || o.status === "Abgeschlossen") && (
+                <Pressable testID="delivery-note" style={styles.docBtn} onPress={() => shareDeliveryNotePdf(o, company.data, prodMap)}>
+                  <Export size={16} color={colors.brandPrimary} weight="bold" />
+                  <Text style={styles.docText}>Lieferschein als PDF</Text>
+                </Pressable>
+              )}
+              {isStaff && (
+                o.invoiceId ? (
+                  <Muted testID="invoice-exists">Rechnung {o.invoiceId} erstellt.</Muted>
+                ) : (
+                  <Button
+                    testID="create-invoice"
+                    title="Rechnung erstellen (mit MwSt)"
+                    kind="secondary"
+                    loading={createInvoice.isPending}
+                    onPress={() => createInvoice.mutate()}
+                    style={{ marginTop: 4 }}
+                  />
+                )
+              )}
+              {!isStaff && !o.invoiceId && (o.status === "Versendet" || o.status === "Abgeschlossen") && (
+                <Muted>Ihre Rechnung wird nach Bearbeitung bereitgestellt.</Muted>
+              )}
+            </Card>
           </>
         )}
       </ScrollView>
@@ -245,6 +288,8 @@ const useStyles = makeStyles((c) => ({
   subtitle: { fontSize: 14, color: c.muted, marginTop: 2 },
   content: { padding: 20, gap: 12, paddingBottom: 32 },
   statusHead: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 },
+  docBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 10, borderRadius: 12, backgroundColor: c.brandTertiary, marginBottom: 8 },
+  docText: { color: c.brandPrimary, fontWeight: "700", fontSize: 14 },
   cardTitle: { fontSize: 16, fontWeight: "800", color: c.onSurface },
   timeline: { marginTop: 4 },
   tlRow: { flexDirection: "row", alignItems: "flex-start", gap: 12 },

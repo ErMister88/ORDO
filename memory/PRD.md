@@ -51,6 +51,25 @@
 - **Mengenrabatt-Staffeln**: Produkt-Feld `discountTiers:[{minQty,price}]`; Admin-Editor in /produkte; automatische Staffelpreise in Angebotserstellung (apply-tier) und Kunden-Nachbestellung (tier-active). Seed p1/p2 mit Staffeln.
 - **E-Mail-Benachrichtigungen (Resend, Emergent-managed)**: Mail an Firmen-E-Mail bei Angebot-Freigabe (`/approve`) und Bestell-Versand (`status=Versendet`). Nicht-blockierend (try/except), Absender `EMAIL_FROM_NAME` = "ORDO Connect by S&S". Guardrail-Gate `_assert_safe_email` auf jedem Send.
 
+## Architecture (Iteration 8 — modularized)
+Backend split into a package: `backend/app/` with `core.py` (config/db/security), `emailer.py`, `storage.py`, `deps.py`, `models.py`, `seed.py`, `main.py`, and `routers/*` (auth, users, products, pricing, companies, offers, orders, invoices, dashboard, analytics, subscriptions, billing, payments). Entry stays `server:app` → `app.main:app`.
+
+## Implemented (2026-06-13, Iteration 8)
+- **Firmenverwaltung**: `PUT /api/companies/{id}` (admin) + Editor in kunde/[id].tsx.
+- **Erst-Login Passwortzwang**: `must_change_password` in PublicUser; Login/Index leiten zu `/passwort-aendern?forced=1`. **Login-Ratenbegrenzung**: 429 nach 5 Fehlversuchen.
+- **Rechnungen mit MwSt**: `POST /api/orders/{id}/invoice` erzeugt fortlaufende RE-Nummer + MwSt-Aufschlüsselung (Produkt-`taxRate` 7/19), Netto/MwSt/Brutto; PDF mit MwSt.
+- **Sammelrechnung**: `GET /api/companies/{id}/collective-invoice?year&month` → PDF. **Lieferschein-PDF** je versendeter Bestellung.
+- **Abo-Bestellungen**: `/api/subscriptions` CRUD + `/run`; Screen `/abos`.
+- **Produkt**: `taxRate` (7/19) + `stock` (Warnhinweis) im Formular & Kartenanzeige.
+- **Suche/Filter** in Angebote (Text + Status-Chips).
+- **Online-Zahlung (Stripe Testmodus)**: `/api/invoices/{id}/checkout` + `/payment-status`; nur nach Deploy testbar (Key ist Platzhalter im Preview).
+
+## Noch offen (Backlog aus diesem Auftrag)
+- Mehrere Positionen in der Kunden-Nachbestellung (aktuell 1 Produkt)
+- Suche/Filter auch in Bestellungen
+- Angebots-Annahme mit Notiz
+- Audit-Log
+
 ## Design (theme)
 - Dark premium theme tokens in src/theme.ts.
 

@@ -48,8 +48,8 @@ export default function Login() {
     }
     setLoading(true);
     try {
-      await signIn(email, password);
-      router.replace("/(tabs)");
+      const u = await signIn(email, password);
+      router.replace(u.must_change_password ? "/passwort-aendern?forced=1" : "/(tabs)");
     } catch (e: any) {
       setError(e.message || "Anmeldung fehlgeschlagen");
     } finally {
