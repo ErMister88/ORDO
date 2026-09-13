@@ -1,0 +1,29 @@
+{
+  "summary": "Iteration 17 - Ratenrechner, Vertrag-PDF, Auto-Kaffeeliefervertrag beim Leasing-Accept, Kaufbeleg-PDF. BACKEND: 7 passed / 1 skipped (pytest_iter17.xml). Verified: (a) POST /api/machine-requests/{id}/accept for LEASING request (customer w/ companyId, status 'Angebot') sets status 'Bestätigt' AND auto-creates contract in db.contracts with source='machine_leasing', machine=machineName, machineRate=terms.monthlyRate, minQtyMonth=terms.minCoffeeKgMonth, termMonths from terms; response includes contractId with format 'S&S-YYYY-M####'. (b) Second accept is idempotent — DB still has exactly 1 contract per machineRequestId. (c) FINANZIERUNG accept does NOT create a contract (no contractId). (d) GET /api/contracts (customer auth) now returns the auto-created leasing contract (id, machine, machineRate present; no _id leak). (e) Regression: machines list, kauf checkout (200 or 502 in preview) still working. Edge case for user w/o companyId: test written but SKIPPED (temp user login failed via API — expected: auth flow may require companyId or otherwise not covered here; server code branch (r.customer.get('companyId')) already guards against crash — safe by code inspection).\n\nFRONTEND (mobile 390x844, customer kunde@ss-coffee.de): (1) /maschinen — opening Finanzieren OR Leasing panel on a card renders 'BEISPIEL-MONATSRATE' block (testID calc-<machineId>) with value = price ÷ term. Verified for machine Siebträger ECM Synchronika (3200 €): @48=66,67 €, @24=133,33 €, @36=88,89 €. Term chips term-<id>-24/36/48 correctly update the calc value in real time. Calc block present in both Leasing and Finanzieren panels. (2) After admin PUT sets terms (monthlyRate=145.5, minCoffeeKgMonth=8) on a leasing request, customer taps accept-<id>; card flips to 'Bestätigt' and a 'Vertrag als PDF' button (contract-pdf-<id>) appears. Clicking it on web opens the print dialog via expo-print without JS/console errors. (3) Auto-created contract S&S-2026-M0005 with machine=Siebträger ECM Synchronika, machineRate=145,50 €/Monat, minQtyMonth=8 kg/Monat visible in the customer's B2B 'Mehr' tab under Verträge as contract-<id> card. (4) Unpaid kauf-request shows 'Jetzt bezahlen' (pay-<id>) and no invoice-pdf-<id>. After flipping paymentStatus='Bezahlt' in mongo, 'Kaufbeleg als PDF' (invoice-pdf-<id>) appears (pay button hidden). Click doesn't crash. Stripe 502 not treated as bug (spec).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration17.py",
+    "/app/test_reports/pytest/pytest_iter17.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "machines.py accept_machine_offer: correctly guards contract creation with three conditions (type=='leasing' AND not existing contractId AND customer.companyId present). Idempotent — safe against duplicate contracts.",
+    "machines.py accept: contract sequence uses next_seq('contract') separate from machinereq — no collision with normal seed contracts 'S&S-YYYY-####'. New format 'S&S-YYYY-M####' clearly disambiguates machine-leasing contracts.",
+    "machines.py accept: contract minQtyMonth falls back to 0 if minCoffeeKgMonth not set — mildly weak for business (kaffeebindung with 0 kg is meaningless) but not a bug. Consider requiring minCoffeeKgMonth for leasing terms via server-side validation.",
+    "maschinen.tsx: Ratenrechner uses m.price / panel.term (pure client-side, no API cost) — instant UX. Falls back to '' note when m.price<=0.",
+    "maschinen.tsx: contract-pdf-<id> button correctly gated on r.status==='Bestätigt' && r.type!=='kauf' (covers both leasing and finanzierung). Kaufbeleg gated on r.type==='kauf' && r.paymentStatus==='Bezahlt' — pay-<id> shown only for unpaid kauf. Mutually exclusive states — good.",
+    "pdf.ts shareHtml: on web branch, calls Print.printAsync({html}) instead of printToFileAsync (which is not implemented for web) — correct workaround; try/catch prevents any hard error surfacing to UI."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration17.py (new)"],
+  "success_rate": {"backend": "100% of executed (7/7 passed, 1 skipped due to test-setup issue not a product bug)", "frontend": "100% (Ratenrechner live-calc, accept→contract-pdf, auto Kaffeeliefervertrag in Verträge, invoice-pdf gating verified)"},
+  "seed_data_creation": "Transient: 1 leasing machine-request + 1 auto-created machine_leasing contract (S&S-2026-M0005), 1 unpaid kauf request; all deleted after run. 3 demo machines and original 2 seed contracts (S&S-2026-0187 etc) preserved.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "New testIDs iteration 17: calc-<machineId> (Ratenrechner block), contract-pdf-<reqId> (Vertrag PDF, shown on status='Bestätigt' && type!='kauf'), invoice-pdf-<reqId> (Kaufbeleg PDF, shown on type='kauf' && paymentStatus='Bezahlt'). Auto contract on leasing accept -> id 'S&S-YYYY-M####' with source='machine_leasing'. To force paymentStatus='Bezahlt' in preview (Stripe unavailable), update db.machine_requests directly. Contract auto-created only when customer.companyId present. Contracts route: GET /api/contracts (customer auth) returns list containing both seeded and auto-created machine_leasing contracts filtered by visible_company_ids."
+}

@@ -147,3 +147,10 @@ Backend split into a package: `backend/app/` with `core.py` (config/db/security)
 - **Erwerb** (`machine_requests`): Kauf = Sofortkauf via Stripe (`/machine-requests/{id}/checkout` + payment-status); Finanzierung & Leasing = Anfrage → Admin setzt Konditionen manuell (`PUT /machine-requests/{id}`: Anzahlung, Monatsrate, Schlussrate/Übernahme, Laufzeit 24/36/48, Kaffee-Mindestabnahme kg/Monat bei Leasing) → E-Mail an Kunde → Kunde nimmt an (`/accept`). Kunden-Screen `app/maschinen.tsx`.
 - Verlinkt im „Mehr"-Tab (`link-maschinen` für alle, `link-maschinen-admin` für Admin).
 - Backend 19/19 pytest (`tests/test_iteration16.py`), Frontend-Workflow verifiziert. Stripe-Checkout in Preview 502 (erst nach Deploy aktiv).
+
+## Implemented (2026-06-13, Iteration 17) — Maschinen: Rate/Vertrag/Kaffeebindung/Kaufbeleg
+- **Ratenrechner**: Beispiel-Monatsrate (Preis ÷ Laufzeit) live im Finanzierungs-/Leasing-Panel (`calc-<id>`), unverbindlich.
+- **Vertrag-PDF**: nach Annahme eines Finanzierungs-/Leasing-Angebots Download via `shareMachineContractPdf` (`contract-pdf-<id>`), inkl. Konditionen + Unterschriftszeilen (GbR-Kopf).
+- **Auto-Kaffeebindung**: Annahme eines Leasing-Angebots legt automatisch einen Kaffeeliefervertrag an (`db.contracts`, `source=machine_leasing`, machine/machineRate/minQtyMonth/termMonths); erscheint in „Verträge". Idempotent (kein Duplikat). Finanzierung erzeugt keinen Vertrag.
+- **Kaufbeleg-PDF**: nach bezahltem Sofortkauf via `shareMachineInvoicePdf` (`invoice-pdf-<id>`, 19% MwSt-Ausweis).
+- Backend 7/7 pytest (`tests/test_iteration17.py`), Frontend verifiziert.

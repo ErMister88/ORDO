@@ -100,6 +100,66 @@ export async function shareShopInvoicePdf(order: any) {
   await shareHtml(html, `Rechnung-${order.id}.pdf`);
 }
 
+const MTYPE: Record<string, string> = { kauf: "Kauf", finanzierung: "Finanzierung", leasing: "Leasing (Kaffeebindung)" };
+
+export async function shareMachineInvoicePdf(req: any) {
+  const c = req.customer || {};
+  const gross = Number(req.machinePrice || 0);
+  const net = gross / 1.19;
+  const vat = gross - net;
+  const paid = req.paymentStatus === "Bezahlt";
+  const inner = `
+    <h1>Kaufbeleg ${req.id}</h1>
+    <span class="badge">${paid ? "Bezahlt" : "Offen"}</span>
+    <div class="box" style="margin-top:16px;">
+      <strong>Rechnungsempfänger</strong><br/>
+      <span class="muted">${c.companyName || c.userName || ""}${c.userName && c.companyName ? `<br/>${c.userName}` : ""}${c.email ? `<br/>${c.email}` : ""}</span>
+    </div>
+    <table>
+      <tr><th>Position</th><th class="right">MwSt</th><th class="right">Netto</th><th class="right">Brutto</th></tr>
+      <tr><td>${req.machineName}</td><td class="right">19%</td><td class="right">${euro(net)}</td><td class="right">${euro(gross)}</td></tr>
+    </table>
+    <div class="right muted">Netto: ${euro(net)}</div>
+    <div class="right muted">MwSt 19%: ${euro(vat)}</div>
+    <div class="right total" style="margin-top:6px;">Gesamt (brutto): ${euro(gross)}</div>
+    <p class="muted">Belegdatum: ${dateDE(req.paidAt || req.createdAt)} · Zahlungsstatus: ${req.paymentStatus || "Offen"}</p>`;
+  await shareHtml(shopWrap(`Kaufbeleg ${req.id}`, inner), `Kaufbeleg-${req.id}.pdf`);
+}
+
+export async function shareMachineContractPdf(req: any) {
+  const c = req.customer || {};
+  const t = req.terms || {};
+  const rows: string[] = [];
+  const add = (label: string, value: string) => rows.push(`<tr><td>${label}</td><td class="right">${value}</td></tr>`);
+  add("Maschine", req.machineName);
+  add("Vertragsart", MTYPE[req.type] || req.type);
+  add("Kaufpreis (Brutto, inkl. 19% MwSt)", euro(req.machinePrice));
+  if (t.downPayment != null) add("Anzahlung", euro(t.downPayment));
+  if (t.monthlyRate != null) add("Monatliche Rate", euro(t.monthlyRate));
+  if (t.termMonths != null) add("Laufzeit", `${t.termMonths} Monate`);
+  if (t.finalPayment != null) add("Schlussrate (Übernahme)", euro(t.finalPayment));
+  if (t.minCoffeeKgMonth != null) add("Kaffee-Mindestabnahme", `${t.minCoffeeKgMonth} kg / Monat`);
+  const inner = `
+    <h1>${MTYPE[req.type] || "Vertrag"} ${req.id}</h1>
+    <span class="badge">${req.status}</span>
+    <div class="box" style="margin-top:16px;">
+      <strong>Vertragspartner</strong><br/>
+      <span class="muted">${c.companyName || c.userName || ""}${c.userName && c.companyName ? `<br/>${c.userName}` : ""}${c.email ? `<br/>${c.email}` : ""}</span>
+    </div>
+    <table>
+      <tr><th>Konditionen</th><th class="right">Wert</th></tr>
+      ${rows.join("")}
+    </table>
+    ${t.note ? `<p class="muted">Hinweis: ${t.note}</p>` : ""}
+    ${req.type === "leasing" ? `<p class="muted">Die Kaffeebindung wird als separater Kaffeeliefervertrag geführt. Die Maschine kann am Laufzeitende gegen Zahlung der Schlussrate übernommen werden.</p>` : ""}
+    <p class="muted">Vertragsdatum: ${dateDE(req.createdAt)}</p>
+    <div style="margin-top:40px;display:flex;justify-content:space-between;">
+      <div style="border-top:1px solid #94A3B8;width:45%;text-align:center;padding-top:6px;font-size:11px;color:#64748B;">Ort, Datum, Unterschrift Kunde</div>
+      <div style="border-top:1px solid #94A3B8;width:45%;text-align:center;padding-top:6px;font-size:11px;color:#64748B;">${COMPANY.name}</div>
+    </div>`;
+  await shareHtml(shopWrap(`${MTYPE[req.type] || "Vertrag"} ${req.id}`, inner), `Vertrag-${req.id}.pdf`);
+}
+
 function shopWrap(title: string, inner: string): string {
   return wrap(title, inner)
     .replace(

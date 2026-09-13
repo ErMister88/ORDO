@@ -183,7 +183,32 @@ async def accept_machine_offer(req_id: str, user: Annotated[dict, Depends(curren
             raise HTTPException(status_code=403, detail="Keine Berechtigung")
     if r.get("status") != "Angebot":
         raise HTTPException(status_code=409, detail="Es liegt kein offenes Angebot vor")
-    await db.machine_requests.update_one({"id": req_id}, {"$set": {"status": "Bestätigt"}})
+    updates = {"status": "Bestätigt"}
+
+    # Leasing acceptance automatically creates a coffee-binding contract.
+    contract_id = r.get("contractId")
+    if r.get("type") == "leasing" and not contract_id and r["customer"].get("companyId"):
+        t = r.get("terms") or {}
+        now = datetime.now(timezone.utc)
+        seq = await next_seq("contract")
+        contract_id = f"S&S-{now.year}-M{seq:04d}"
+        await db.contracts.insert_one({
+            "id": contract_id,
+            "companyId": r["customer"]["companyId"],
+            "productId": None,
+            "start": now.date().isoformat(),
+            "termMonths": t.get("termMonths") or r.get("termMonths") or 48,
+            "minQtyMonth": t.get("minCoffeeKgMonth") or 0,
+            "price": 0,
+            "machine": r["machineName"],
+            "machineRate": t.get("monthlyRate") or 0,
+            "source": "machine_leasing",
+            "machineRequestId": r["id"],
+        })
+        updates["contractId"] = contract_id
+        await audit(user, "machine_contract_created", contract_id, {"requestId": r["id"]})
+
+    await db.machine_requests.update_one({"id": req_id}, {"$set": updates})
     await audit(user, "machine_accept", req_id)
     return strip_id(await db.machine_requests.find_one({"id": req_id}))
 

@@ -5,11 +5,12 @@ import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 import * as WebBrowser from "expo-web-browser";
-import { ArrowLeft, Coffee, CurrencyEur, Handshake, ImageSquare } from "phosphor-react-native";
+import { ArrowLeft, Coffee, CurrencyEur, ImageSquare, Receipt, FileText } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
 import { apiGet, apiPost, fileUrl } from "@/src/api/client";
 import { euro } from "@/src/lib/format";
+import { shareMachineContractPdf, shareMachineInvoicePdf } from "@/src/lib/pdf";
 import { Card, Button, SectionTitle, Muted, EmptyState, InfoRow, StatusBadge } from "@/src/components/ui";
 
 const TERMS = [24, 36, 48];
@@ -178,6 +179,11 @@ export default function Maschinen() {
                       );
                     })}
                   </View>
+                  <View style={styles.calc} testID={`calc-${m.id}`}>
+                    <Text style={styles.calcLabel}>Beispiel-Monatsrate</Text>
+                    <Text style={styles.calcValue}>ca. {euro(m.price / panel.term)}</Text>
+                    <Text style={styles.calcNote}>{m.price > 0 ? `${euro(m.price)} ÷ ${panel.term} Monate` : ""} · unverbindlich, ohne Anzahlung/Zins. Ihr individuelles Angebot erhalten Sie vom Team.</Text>
+                  </View>
                   <View style={styles.actions}>
                     <Button
                       testID={`submit-request-${m.id}`}
@@ -220,6 +226,18 @@ export default function Maschinen() {
               {r.status === "Angebot" ? (
                 <Button testID={`accept-${r.id}`} title="Angebot annehmen" loading={accept.isPending} onPress={() => accept.mutate(r.id)} style={{ marginTop: 10 }} />
               ) : null}
+              {r.status === "Bestätigt" && r.type !== "kauf" ? (
+                <Pressable testID={`contract-pdf-${r.id}`} style={styles.pdfBtn} onPress={() => shareMachineContractPdf(r)}>
+                  <FileText size={16} color={colors.brandPrimary} weight="bold" />
+                  <Text style={styles.pdfText}>Vertrag als PDF</Text>
+                </Pressable>
+              ) : null}
+              {r.type === "kauf" && r.paymentStatus === "Bezahlt" ? (
+                <Pressable testID={`invoice-pdf-${r.id}`} style={styles.pdfBtn} onPress={() => shareMachineInvoicePdf(r)}>
+                  <Receipt size={16} color={colors.brandPrimary} weight="bold" />
+                  <Text style={styles.pdfText}>Kaufbeleg als PDF</Text>
+                </Pressable>
+              ) : null}
               {r.type === "kauf" && r.paymentStatus !== "Bezahlt" ? (
                 <Button testID={`pay-${r.id}`} title="Jetzt bezahlen" loading={payingId === r.id} onPress={() => payExisting(r.id)} style={{ marginTop: 10 }} />
               ) : null}
@@ -255,4 +273,10 @@ const useStyles = makeStyles((c) => ({
   reqId: { fontSize: 15, fontWeight: "800", color: c.onSurface },
   reqMachine: { fontSize: 15, fontWeight: "700", color: c.onSurface, marginTop: 6 },
   termsBox: { marginTop: 10, padding: 10, borderRadius: 10, backgroundColor: c.surfaceTertiary },
+  calc: { marginTop: 12, padding: 12, borderRadius: 10, backgroundColor: c.surface, borderWidth: 1, borderColor: c.border, alignItems: "center" },
+  calcLabel: { fontSize: 12, fontWeight: "800", color: c.onSurfaceSecondary, textTransform: "uppercase", letterSpacing: 0.5 },
+  calcValue: { fontSize: 24, fontWeight: "800", color: c.brandPrimary, marginTop: 2 },
+  calcNote: { fontSize: 11, color: c.muted, textAlign: "center", marginTop: 4 },
+  pdfBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 10, paddingVertical: 10, borderRadius: 10, backgroundColor: c.surfaceTertiary },
+  pdfText: { color: c.brandPrimary, fontWeight: "700", fontSize: 14 },
 }));
