@@ -85,6 +85,7 @@ export function StatusBadge({ status, testID }: { status: string; testID?: strin
     Bezahlt: colors.success,
     Offen: colors.warning,
     "Überfällig": colors.error,
+    Storniert: colors.error,
   };
   const dot = map[status] || colors.muted;
   return (

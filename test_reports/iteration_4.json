@@ -1,0 +1,48 @@
+{
+  "summary": "Iteration 4 tested end-to-end (backend + mobile UI 390x844). All new behaviours PASS. Backend: 9/9 iteration-4 pytest cases pass; full suite 66/66. New endpoint PUT /api/orders/{id}/cancel verified: customer cancels own Neu order -> 200 status=Storniert + cancelledAt + cancelledBy=u-customer persisted; second cancel -> 400 with 'wird bereits bearbeitet'; foreign-company customer -> 403; missing order -> 404; cancel blocked (400) when status is already Bestätigt or Versendet. Order-status advance (Neu->Bestätigt) regression still passes. Login 3 roles ok. Frontend (mobile viewport): Admin -> Produkte -> add-product-button opens form; after saving product #1 the form STAYS OPEN, brand field is cleared, product-saved-msg is visible, Sortiment count increases by 1; adding product #2 the same way works and Sortiment increases by another 1 (delta=+2 total confirmed 4->? new+2). Editing existing p1 (tap product-p1) opens the form pre-filled and tapping save-product CLOSES the form. Customer -> /bestellung/B-2026-00987 (Neu) shows order-status-card AND cancel-order button; tapping it reveals confirm-cancel + abort-cancel; tapping confirm-cancel flips the screen: order-cancelled-card renders, order-status-card + advance-status are gone. Non-Neu order (B-2026-00001, Abgeschlossen) correctly hides cancel-order button. Cleanup script /app/cleanup_iter4.py restored DB: deleted all TEST_ products (product counter=4), deleted all B-2026-010xx test orders (order counter=1000), restored B-2026-00987 to status='Neu' with cancelledAt/cancelledBy/tracking* unset. Deprecated packages detected: none new in this iteration (existing shadow*->boxShadow RN-web warning already reported in iteration 3, still present, non-blocking).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "components using shadow* styles", "issue": "Pre-existing (iteration 3) RN-web console warning: 'shadow*' style props are deprecated, use 'boxShadow'. Non-blocking. Reference: /app/frontend/src/components/ui.tsx (Card)"}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration4.py",
+    "/app/backend/tests/test_iteration3.py",
+    "/app/backend/tests/test_iteration2.py",
+    "/app/backend/tests/test_ss_backend.py",
+    "/app/test_reports/pytest/pytest_iter4.xml",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Optional: migrate shadow* StyleSheet props to boxShadow to silence RN web deprecation warning (carry-over from iter 3).",
+    "Optional: server.py cancel_order endpoint does not restrict role — this is intentional per spec (customer, sales, admin can all cancel their visible company's Neu order). Confirm this is desired for sales; docs/UI hint OK."
+  ],
+  "critical_code_review_comments": [
+    "server.py:449-466 cancel_order: correct guard: 404 first, then 403 (via visible_company_ids), then 400 if status != 'Neu', then update. Idempotency via status check prevents double-cancel. Good.",
+    "server.py:449 cancel_order accepts any authenticated user (customer/sales/admin) for the visible company. Matches PRD ('customer can cancel their own order'). Sales/admin also inheriting the ability is a mild scope-expansion — flag for product owner.",
+    "produkte.tsx:92-105 save.onSuccess: correctly branches on editingId — new-create resets form + shows ok msg + keeps showForm=true; edit closes form. Clean.",
+    "produkte.tsx:47-50 set(): clears ok banner on any keystroke so the 'hinzugefügt' toast disappears when user starts entering the next product. Nice UX.",
+    "bestellung/[id].tsx:136 renders cancel zone only when o.status === 'Neu' — matches spec (no cancel once processing started). Confirm-inline pattern (setConfirmCancel state) avoids native Alert (which is unreliable on web). Good.",
+    "bestellung/[id].tsx:47-57 cancel mutation invalidates order + orders + dashboard queries — dashboard counter stays in sync. Good.",
+    "bestellung/[id].tsx:78-88 order-cancelled-card only shows Storniert title/date; consider adding 'By whom' (cancelledBy) if user names are helpful.",
+    "produkte.tsx:170 save-product disabled when !valid — validation covers brand/name/std/cost/absFloor but NOT salesFloor > absoluteFloor. Backend also doesn't validate this — pricing consistency check could be added.",
+    "server.py still uses @app.on_event('startup') — carry-over from previous iterations; migrate to lifespan when convenient."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration4.py",
+    "/app/cleanup_iter4.py",
+    "/app/test_reports/iteration_4.json",
+    "/app/test_reports/pytest/pytest_iter4.xml",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "success_rate": {"backend": "100% (9/9 iteration-4, 66/66 full suite)", "frontend": "100% on the 3 iteration-4 flows (multi-product add form persistence, customer cancel Neu order, cancel button hidden for non-Neu)"},
+  "seed_data_creation": "Cleanup performed via /app/cleanup_iter4.py: (a) deleted 7 TEST_ products created by pytest + UI tests, counters.product reset to 4; (b) deleted 23 B-2026-010xx test orders created during pytest + UI tests, counters.order reset to 1000; (c) restored order B-2026-00987 to status='Neu' with $unset of cancelledAt, cancelledBy, trackingNumber, shippedAt, estimatedDelivery. Verified: 4 seeded products (p1..p4) remain, B-2026-00987 status=Neu with no cancel/tracking fields.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iter 4 additions verified: PUT /api/orders/{id}/cancel (any authenticated user for own visible company, only status Neu -> Storniert). Frontend testIDs added this iteration: product-form, add-product-button, save-product, p-brand, p-name, p-standard, p-cost, p-salesfloor, p-absfloor, product-saved-msg, product-{pid} (in Produkte); cancel-order, confirm-cancel, abort-cancel, order-cancelled-card, order-status-card (in bestellung/[id].tsx). Login testIDs: login-email-input, login-password-input, login-submit-button. Reusable cleanup script at /app/cleanup_iter4.py can be re-run any time to restore demo state. Known non-blocking: shadow* RN-web warning (from iter 3). If iter5 needs to test order counter, note it now starts at 1000 -> next order created will be B-2026-01001.",
+  "rca_of_issue": "No unresolved issues found. Product form keep-open behaviour + customer cancel path both implemented cleanly on backend and frontend; edge cases (double-cancel, foreign-company, missing, status-advanced) all handled with correct HTTP codes and German error messages."
+}

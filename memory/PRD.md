@@ -43,5 +43,5 @@
 - **P2**: Multi-item offers/orders (currently single line item in UI).
 
 ## Next Tasks
-- Delivery push updates when an order ships (needs native build).
-- Downloadable monthly statement (all invoices of a month as one PDF).
+- Notify customer when a shipped order is out for delivery (needs native build).
+- Optional cancellation reason capture + admin view of cancelled orders.

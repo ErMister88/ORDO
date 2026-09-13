@@ -42,13 +42,18 @@ export default function Produkte() {
   const [form, setForm] = useState<Form>(EMPTY);
   const [showForm, setShowForm] = useState(false);
   const [msg, setMsg] = useState("");
+  const [ok, setOk] = useState("");
 
-  const set = (k: keyof Form) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
+  const set = (k: keyof Form) => (v: string) => {
+    setForm((f) => ({ ...f, [k]: v }));
+    if (ok) setOk("");
+  };
 
   const openNew = () => {
     setEditingId(null);
     setForm(EMPTY);
     setMsg("");
+    setOk("");
     setShowForm(true);
   };
 
@@ -64,6 +69,7 @@ export default function Produkte() {
       cost: String(p.cost),
     });
     setMsg("");
+    setOk("");
     setShowForm(true);
   };
 
@@ -85,8 +91,15 @@ export default function Produkte() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["products"] });
-      setShowForm(false);
       setMsg("");
+      if (editingId) {
+        // finished editing → close the form
+        setShowForm(false);
+      } else {
+        // added a new product → keep form open so admin can add the next one
+        setOk(`„${form.brand} ${form.name}" hinzugefügt. Nächstes Produkt eingeben.`);
+        setForm(EMPTY);
+      }
     },
     onError: (e: any) => setMsg(e.message),
   });
@@ -147,11 +160,12 @@ export default function Produkte() {
                 </View>
               </View>
               {msg ? <Text style={styles.err}>{msg}</Text> : null}
+              {ok ? <Text testID="product-saved-msg" style={styles.ok}>{ok}</Text> : null}
               <View style={styles.row}>
-                <Button title="Abbrechen" kind="secondary" style={{ flex: 1 }} onPress={() => setShowForm(false)} />
+                <Button title={editingId ? "Abbrechen" : "Fertig"} kind="secondary" style={{ flex: 1 }} onPress={() => setShowForm(false)} />
                 <Button
                   testID="save-product"
-                  title="Speichern"
+                  title={editingId ? "Speichern" : "Hinzufügen"}
                   style={{ flex: 1 }}
                   disabled={!valid}
                   loading={save.isPending}
@@ -204,6 +218,7 @@ const useStyles = makeStyles((c) => ({
   row: { flexDirection: "row", gap: 12 },
   label: { fontSize: 13, fontWeight: "700", color: c.onSurfaceSecondary, marginTop: 8, marginBottom: 4 },
   err: { color: c.error, fontSize: 14, fontWeight: "600", marginTop: 6 },
+  ok: { color: c.success, fontSize: 14, fontWeight: "700", marginTop: 6 },
   prodTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   prodTitle: { fontSize: 15, fontWeight: "800", color: c.onSurface },
 }));

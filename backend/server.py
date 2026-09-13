@@ -446,6 +446,26 @@ async def set_order_status(order_id: str, body: OrderStatusIn, user: Annotated[d
     return {"ok": True, "status": body.status}
 
 
+@api_router.put("/orders/{order_id}/cancel")
+async def cancel_order(order_id: str, user: Annotated[dict, Depends(current_user)]):
+    o = await db.orders.find_one({"id": order_id})
+    if not o:
+        raise HTTPException(status_code=404, detail="Bestellung nicht gefunden")
+    ids = await visible_company_ids(user)
+    if o["companyId"] not in ids:
+        raise HTTPException(status_code=403, detail="Keine Berechtigung")
+    if o["status"] != "Neu":
+        raise HTTPException(
+            status_code=400,
+            detail="Bestellung wird bereits bearbeitet und kann nicht mehr storniert werden.",
+        )
+    await db.orders.update_one(
+        {"id": order_id},
+        {"$set": {"status": "Storniert", "cancelledAt": datetime.now(timezone.utc).isoformat(), "cancelledBy": user["id"]}},
+    )
+    return {"ok": True, "status": "Storniert"}
+
+
 # --------------------------------------------------------------------------
 # Routes: Contracts & Invoices
 # --------------------------------------------------------------------------

@@ -1,8 +1,9 @@
+import { useState } from "react";
 import { View, Text, ScrollView, Pressable } from "react-native";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArrowLeft, Check, Truck } from "phosphor-react-native";
+import { ArrowLeft, Check, Truck, XCircle } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
@@ -21,6 +22,8 @@ export default function BestellungDetail() {
   const { user } = useAuth();
   const { id } = useLocalSearchParams<{ id: string }>();
   const isStaff = user?.role === "admin" || user?.role === "sales";
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [cancelErr, setCancelErr] = useState("");
 
   const order = useQuery({ queryKey: ["order", id], queryFn: () => apiGet(`/orders/${id}`) });
   const products = useQuery({ queryKey: ["products"], queryFn: () => apiGet("/products") });
@@ -29,6 +32,7 @@ export default function BestellungDetail() {
   (products.data ?? []).forEach((p: any) => (prodMap[p.id] = p));
 
   const o = order.data;
+  const cancelled = o?.status === "Storniert";
   const currentIdx = o ? FLOW.indexOf(o.status) : -1;
   const total = o ? o.items.reduce((a: number, i: any) => a + i.price * i.qty, 0) : 0;
 
@@ -38,6 +42,18 @@ export default function BestellungDetail() {
       qc.invalidateQueries({ queryKey: ["order", id] });
       qc.invalidateQueries({ queryKey: ["orders"] });
     },
+  });
+
+  const cancel = useMutation({
+    mutationFn: () => apiPut(`/orders/${id}/cancel`, {}),
+    onSuccess: () => {
+      setConfirmCancel(false);
+      setCancelErr("");
+      qc.invalidateQueries({ queryKey: ["order", id] });
+      qc.invalidateQueries({ queryKey: ["orders"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+    onError: (e: any) => setCancelErr(e.message),
   });
 
   const nextStatus = currentIdx >= 0 && currentIdx < FLOW.length - 1 ? FLOW[currentIdx + 1] : null;
@@ -59,52 +75,102 @@ export default function BestellungDetail() {
           <Muted>Lädt…</Muted>
         ) : (
           <>
-            <Card testID="order-status-card">
-              <View style={styles.statusHead}>
-                <Text style={styles.cardTitle}>Lieferstatus</Text>
-                <StatusBadge status={o.status} />
-              </View>
-              <View style={styles.timeline}>
-                {FLOW.map((step, i) => {
-                  const done = i < currentIdx;
-                  const active = i === currentIdx;
-                  const reached = i <= currentIdx;
-                  return (
-                    <View key={step} style={styles.tlRow}>
-                      <View style={styles.tlLeft}>
-                        <View
-                          style={[
-                            styles.tlDot,
-                            reached && { backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary },
-                            active && { backgroundColor: colors.success, borderColor: colors.success },
-                          ]}
-                        >
-                          {done ? (
-                            <Check size={12} color={colors.onBrandPrimary} weight="bold" />
-                          ) : active ? (
-                            <Truck size={12} color={colors.onSuccess} weight="bold" />
-                          ) : null}
+            {cancelled ? (
+              <Card testID="order-cancelled-card">
+                <View style={styles.statusHead}>
+                  <Text style={styles.cardTitle}>Storniert</Text>
+                  <XCircle size={22} color={colors.error} weight="fill" />
+                </View>
+                <Muted>
+                  Diese Bestellung wurde storniert
+                  {o.cancelledAt ? ` am ${dateDE(o.cancelledAt)}` : ""}.
+                </Muted>
+              </Card>
+            ) : (
+              <Card testID="order-status-card">
+                <View style={styles.statusHead}>
+                  <Text style={styles.cardTitle}>Lieferstatus</Text>
+                  <StatusBadge status={o.status} />
+                </View>
+                <View style={styles.timeline}>
+                  {FLOW.map((step, i) => {
+                    const done = i < currentIdx;
+                    const active = i === currentIdx;
+                    const reached = i <= currentIdx;
+                    return (
+                      <View key={step} style={styles.tlRow}>
+                        <View style={styles.tlLeft}>
+                          <View
+                            style={[
+                              styles.tlDot,
+                              reached && { backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary },
+                              active && { backgroundColor: colors.success, borderColor: colors.success },
+                            ]}
+                          >
+                            {done ? (
+                              <Check size={12} color={colors.onBrandPrimary} weight="bold" />
+                            ) : active ? (
+                              <Truck size={12} color={colors.onSuccess} weight="bold" />
+                            ) : null}
+                          </View>
+                          {i < FLOW.length - 1 && (
+                            <View style={[styles.tlLine, i < currentIdx && { backgroundColor: colors.brandPrimary }]} />
+                          )}
                         </View>
-                        {i < FLOW.length - 1 && (
-                          <View style={[styles.tlLine, i < currentIdx && { backgroundColor: colors.brandPrimary }]} />
-                        )}
+                        <Text style={[styles.tlLabel, reached && styles.tlLabelActive]}>{step}</Text>
                       </View>
-                      <Text style={[styles.tlLabel, reached && styles.tlLabelActive]}>{step}</Text>
-                    </View>
-                  );
-                })}
-              </View>
+                    );
+                  })}
+                </View>
 
-              {isStaff && nextStatus && (
-                <Button
-                  testID="advance-status"
-                  title={`Status → ${nextStatus}`}
-                  loading={advance.isPending}
-                  onPress={() => advance.mutate(nextStatus)}
-                  style={{ marginTop: 8 }}
-                />
-              )}
-            </Card>
+                {isStaff && nextStatus && (
+                  <Button
+                    testID="advance-status"
+                    title={`Status → ${nextStatus}`}
+                    loading={advance.isPending}
+                    onPress={() => advance.mutate(nextStatus)}
+                    style={{ marginTop: 8 }}
+                  />
+                )}
+
+                {o.status === "Neu" && (
+                  <View style={styles.cancelZone}>
+                    <Muted>Solange die Bestellung noch nicht bearbeitet wird, könnt ihr sie stornieren.</Muted>
+                    {cancelErr ? <Text style={[styles.deliveredTxt, { color: colors.error }]}>{cancelErr}</Text> : null}
+                    {confirmCancel ? (
+                      <View style={styles.cancelRow}>
+                        <Button
+                          testID="confirm-cancel"
+                          title="Ja, stornieren"
+                          kind="danger"
+                          style={{ flex: 1 }}
+                          loading={cancel.isPending}
+                          onPress={() => cancel.mutate()}
+                        />
+                        <Button
+                          testID="abort-cancel"
+                          title="Zurück"
+                          kind="secondary"
+                          style={{ flex: 1 }}
+                          onPress={() => setConfirmCancel(false)}
+                        />
+                      </View>
+                    ) : (
+                      <Button
+                        testID="cancel-order"
+                        title="Bestellung stornieren"
+                        kind="danger"
+                        onPress={() => {
+                          setCancelErr("");
+                          setConfirmCancel(true);
+                        }}
+                        style={{ marginTop: 4 }}
+                      />
+                    )}
+                  </View>
+                )}
+              </Card>
+            )}
 
             {o.trackingNumber ? (
               <Card testID="order-shipping-card">
@@ -197,4 +263,6 @@ const useStyles = makeStyles((c) => ({
   totalLabel: { fontSize: 15, color: c.muted, fontWeight: "600" },
   totalValue: { fontSize: 20, fontWeight: "800", color: c.onSurface },
   deliveredTxt: { fontSize: 14, fontWeight: "800", marginTop: 4 },
+  cancelZone: { marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: c.divider, gap: 8 },
+  cancelRow: { flexDirection: "row", gap: 10 },
 }));
