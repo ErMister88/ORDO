@@ -7,7 +7,7 @@ import { Image } from "expo-image";
 import { ArrowLeft, ShoppingCart, ImageSquare, Plus, UserCircle, EnvelopeSimple, CheckCircle } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
-import { apiGet, fileUrl } from "@/src/api/client";
+import { apiGet, fileUrl, API_BASE } from "@/src/api/client";
 import { euro } from "@/src/lib/format";
 import { useCart } from "@/src/shop/cart";
 import { shopApi } from "@/src/shop/auth";
@@ -18,7 +18,7 @@ function NewsletterCard({ percent }: { percent: number }) {
   const { colors } = useTheme();
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState<null | { code: string; percent: number }>(null);
+  const [done, setDone] = useState<null | { code?: string; percent?: number; pending?: boolean }>(null);
   const [err, setErr] = useState("");
 
   const submit = async () => {
@@ -29,8 +29,8 @@ function NewsletterCard({ percent }: { percent: number }) {
     }
     setBusy(true);
     try {
-      const res = await shopApi.newsletter({ email: email.trim() });
-      setDone({ code: res.code, percent: res.percent });
+      const res = await shopApi.newsletter({ email: email.trim(), baseUrl: API_BASE });
+      setDone(res.pending ? { pending: true } : { code: res.code, percent: res.percent });
     } catch (e: any) {
       setErr(e.message || "Anmeldung fehlgeschlagen");
     } finally {
@@ -40,7 +40,15 @@ function NewsletterCard({ percent }: { percent: number }) {
 
   return (
     <Card testID="newsletter-card">
-      {done ? (
+      {done?.pending ? (
+        <View style={{ alignItems: "center" }}>
+          <EnvelopeSimple size={34} color={colors.brandPrimary} weight="fill" />
+          <Text style={styles.nlTitle}>Fast geschafft!</Text>
+          <Muted style={{ textAlign: "center" }}>
+            Wir haben dir eine E-Mail geschickt. Bitte bestätige deine Anmeldung – danach erhältst du deinen Rabattcode.
+          </Muted>
+        </View>
+      ) : done?.code ? (
         <View style={{ alignItems: "center" }}>
           <CheckCircle size={34} color={colors.success} weight="fill" />
           <Text style={styles.nlTitle}>Willkommen! {done.percent}% Rabatt gesichert</Text>
@@ -152,6 +160,25 @@ export default function Shop() {
             </Card>
           ))
         )}
+        <View style={styles.footer}>
+          <View style={styles.footerLinks}>
+            <Pressable testID="footer-impressum" onPress={() => router.push("/legal/impressum")}>
+              <Text style={styles.footerLink}>Impressum</Text>
+            </Pressable>
+            <Text style={styles.footerDot}>·</Text>
+            <Pressable testID="footer-datenschutz" onPress={() => router.push("/legal/datenschutz")}>
+              <Text style={styles.footerLink}>Datenschutz</Text>
+            </Pressable>
+            <Text style={styles.footerDot}>·</Text>
+            <Pressable testID="footer-agb" onPress={() => router.push("/legal/agb")}>
+              <Text style={styles.footerLink}>AGB</Text>
+            </Pressable>
+            <Text style={styles.footerDot}>·</Text>
+            <Pressable testID="footer-widerruf" onPress={() => router.push("/legal/widerruf")}>
+              <Text style={styles.footerLink}>Widerruf</Text>
+            </Pressable>
+          </View>
+        </View>
       </ScrollView>
     </View>
   );
@@ -185,4 +212,8 @@ const useStyles = makeStyles((c) => ({
   soldOut: { fontSize: 12, fontWeight: "700", color: c.error, marginTop: 2 },
   addBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 12, paddingVertical: 12, borderRadius: 12, backgroundColor: c.brandPrimary },
   addText: { color: c.onBrandPrimary, fontWeight: "700", fontSize: 14 },
+  footer: { marginTop: 8, paddingTop: 16, borderTopWidth: 1, borderTopColor: c.divider },
+  footerLinks: { flexDirection: "row", flexWrap: "wrap", justifyContent: "center", alignItems: "center", gap: 6 },
+  footerLink: { fontSize: 13, color: c.muted, fontWeight: "600" },
+  footerDot: { fontSize: 13, color: c.muted },
 }));

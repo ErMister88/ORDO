@@ -1,0 +1,47 @@
+{
+  "summary": "Iteration 12 verifies (a) Newsletter Double-Opt-In, (b) 4 legal screens reachable from /shop footer, and (c) AGB acceptance checkbox gating checkout. Backend pytest: 7/7 pass on /app/backend/tests/test_iteration12.py (-n0). POST /api/newsletter/subscribe with a NEW email returns {ok:true, pending:true} and does NOT include a code. Same unconfirmed email resubscribed → still pending, same confirmToken preserved in Mongo (idempotent). GET /api/newsletter/confirm?token=<garbage> → 404 HTML page containing 'Link ungültig'. GET /api/newsletter/confirm?token=<real> → 200 HTML with 'E-Mail bestätigt ✓' and a fresh SS-XXXXXX code; the subscriber doc now has confirmed=true. Subsequent POST /api/shop/validate-code with the freshly issued code → {valid:true, percent:10}; with 'SS-ZZZZZZ' → {valid:false}. POST /api/shop/orders {promoCode:<confirmedCode>} → discountPercent=10 and discount>0; {promoCode:'SS-INVALID'} → discount=0, discountPercent=0 (regression preserved). Frontend on 390x844: /shop NewsletterCard submits and now renders the 'Fast geschafft! / Wir haben dir eine E-Mail geschickt. Bitte bestätige deine Anmeldung – danach erhältst du deinen Rabattcode.' pending state, and the newsletter-code element is NOT present. The footer at the bottom of /shop shows Impressum · Datenschutz · AGB · Widerruf, all tappable; each testID (footer-impressum/-datenschutz/-agb/-widerruf) navigates to /legal/<slug>, which renders its title and content with a working back-button (testID back-button). On /shop/warenkorb the promo-input + Einlösen still work; the new accept-terms Pressable is present, aria-disabled='true' on shop-checkout until the checkbox is tapped, and drops to aria-disabled=null (=enabled) after tapping. The AGB and Widerrufsbelehrung words inside the terms row are tappable links that navigate to /legal/agb and /legal/widerruf respectively.\n\nDeprecated packages detected: none.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration12.py",
+    "/app/test_reports/pytest/pytest_iter12.xml"
+  ],
+  "action_items": [
+    "No functional bugs found. Newsletter Double-Opt-In, four legal screens, and AGB acceptance gate all meet acceptance criteria.",
+    "Nice-to-have (not a bug): the confirm token in the DB never expires. Consider adding an expiresAt (e.g. +7 days) to db.newsletter and rejecting stale tokens in /newsletter/confirm.",
+    "Nice-to-have: /api/shop/validate-code returns 200 for empty code — matches current spec, but a 400 could be clearer if this ever becomes an authenticated code endpoint.",
+    "Optional legal polish: /app/frontend/src/legal.ts still contains placeholders '[Vertretungsberechtigte Gesellschafter eintragen]', '[E-Mail eintragen]', '[Telefon eintragen]'. These must be filled before production."
+  ],
+  "critical_code_review_comments": [
+    "backend/app/routers/newsletter.py:49 newsletter_subscribe — new subscribers get {confirmed:false, confirmToken} and a pending response; already-pending resubscribers reuse the existing token (idempotent); confirmed subscribers get the welcome mail resent with their existing code. Correct.",
+    "backend/app/routers/newsletter.py:87 _safe_base — only trusts a body.baseUrl that is https and contains a dot, otherwise falls back to APP_URL env. Good SSRF-style guard.",
+    "backend/app/routers/newsletter.py:122 newsletter_confirm — returns 404 HTML for unknown token, generates a fresh SS-XXXXXX only on first confirm, is idempotent on second visit (returns the same code). Correct.",
+    "backend/app/routers/newsletter.py:152 validate_code — only returns valid=true when the subscriber has confirmed=true, so pending subscribers can never redeem. Correct.",
+    "frontend/app/shop/index.tsx:24 submit — reads {pending, code, percent} from response and branches; when pending is true it never renders a code. Correct.",
+    "frontend/app/shop/index.tsx:163 footer — Pressables with testIDs footer-{impressum,datenschutz,agb,widerruf} pushing to /legal/<slug>. Correct.",
+    "frontend/app/shop/warenkorb.tsx:249 accept-terms Pressable toggles setAccepted; testID accept-terms.",
+    "frontend/app/shop/warenkorb.tsx:264 shop-checkout — disabled={!accepted}, so the checkout API is unreachable until the user opts in. Correct.",
+    "frontend/app/shop/warenkorb.tsx:257,259 inner Text spans use onPress to router.push('/legal/agb' | '/legal/widerruf'). Works on web/native.",
+    "frontend/src/components/legal-screen.tsx:19 back-button testID present and calls router.back(); screens all share the same layout.",
+    "frontend/src/legal.ts still has three [placeholder] strings for representatives/email/phone — flagged in action_items."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration12.py",
+    "/app/test_reports/pytest/pytest_iter12.xml",
+    "/app/test_reports/iteration_12.json"
+  ],
+  "success_rate": {
+    "backend": "100% (7/7 pytest, -n0)",
+    "frontend": "100% — DOI pending message, 4 legal screens reachable+back, cart accept-terms gate + inline AGB/Widerruf links, promo input all verified on 390x844."
+  },
+  "seed_data_creation": "Ephemeral only. Created ~5 TEST_ newsletter subscriptions (unique per-second emails) plus 2 TEST_ shop orders during pytest; cleaned up post-run via _cleanup() teardown. Newsletter collection contains only real subscribers, shop_orders untouched for existing data.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iter 12 shipped Newsletter Double-Opt-In + 4 legal screens + AGB acceptance in cart. Endpoints: POST /api/newsletter/subscribe {email, name?, baseUrl?} → {ok:true, pending:true} for new/unconfirmed emails; NO code returned. GET /api/newsletter/confirm?token=... → 200 HTML with 'E-Mail bestätigt' + SS-XXXXXX for a valid token (idempotent), 404 HTML 'Link ungültig' for bad tokens. To retrieve the confirmToken during tests, query Mongo directly: db.newsletter.find_one({email: <lowercased>}) — the email is not delivered in preview. Existing endpoints unchanged: POST /api/shop/validate-code {code} (only valid for confirmed subscribers), POST /api/shop/orders honours promoCode with proportional tax adjustment. Frontend testIDs new in iter 12: footer-impressum, footer-datenschutz, footer-agb, footer-widerruf (on /shop); accept-terms (checkbox Pressable on /shop/warenkorb); the checkout button testID shop-checkout has aria-disabled='true' until accept-terms is tapped. Legal screens live at /legal/{impressum,datenschutz,agb,widerruf} and all use testID='back-button'. The three placeholders in /app/frontend/src/legal.ts should be filled before production. Run: `pytest backend/tests/test_iteration12.py -n0 --junitxml=/app/test_reports/pytest/pytest_iter12.xml`.",
+  "rca_of_issue": "No bugs to root-cause; every requested acceptance criterion (pending response without code, idempotent resubscribe, invalid token → 404 HTML, valid token → confirmed+code, code validation gated by confirmed flag, order promoCode regression, footer navigation, legal screen back button, checkout gating by AGB checkbox, inline AGB/Widerruf links) passed on first run."
+}

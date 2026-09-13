@@ -87,6 +87,10 @@ export default function RootLayout() {
                   <Stack.Screen name="shop/konto" options={{ presentation: "card" }} />
                   <Stack.Screen name="passwort-vergessen" options={{ presentation: "card" }} />
                   <Stack.Screen name="passwort-aendern" options={{ presentation: "card" }} />
+                  <Stack.Screen name="legal/impressum" options={{ presentation: "card" }} />
+                  <Stack.Screen name="legal/datenschutz" options={{ presentation: "card" }} />
+                  <Stack.Screen name="legal/agb" options={{ presentation: "card" }} />
+                  <Stack.Screen name="legal/widerruf" options={{ presentation: "card" }} />
                 </Stack>
               </CartProvider>
             </AuthProvider>

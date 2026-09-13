@@ -114,3 +114,9 @@ Backend split into a package: `backend/app/` with `core.py` (config/db/security)
 ## Noch offen (Backlog)
 - B2C Passwort-vergessen-Flow für Shop-Kunden (P1)
 - B2C Bestelldetails: Positionen + Lieferstatus in „Meine Bestellungen" (P1)
+
+## Implemented (2026-06-13, Iteration 12) — Recht & Compliance
+- **Rechtliche Screens**: Impressum, Datenschutz, AGB, Widerrufsbelehrung (`app/legal/*`, Inhalte in `src/legal.ts`, `src/components/legal-screen.tsx`), erreichbar über Footer auf der Shop-Startseite. Impressum mit echten Firmendaten (S&S coffee and more GbR, Barstenweg 3, 92348 Berg, USt DE449803615). **Platzhalter noch zu füllen**: Vertretungsberechtigte, E-Mail, Telefon.
+- **AGB/Widerruf-Checkbox** im Checkout (`app/shop/warenkorb.tsx`): „Kostenpflichtig bestellen" ist deaktiviert bis akzeptiert; AGB/Widerruf als Links.
+- **Newsletter Double-Opt-In** (DSGVO): `subscribe` → `{ok, pending}` + Bestätigungsmail mit Link; `GET /api/newsletter/confirm?token=` bestätigt, erzeugt Code + Willkommensmail. Rabattcode gilt nur nach Bestätigung (`validate-code`/`resolve_discount` filtern `confirmed:true`). Confirm-Link nutzt vom Client übergebene `baseUrl` (Fallback APP_URL), Rückgabe als gestylte HTML-Seite mit Code.
+- Backend 7/7 pytest (`tests/test_iteration12.py`), Frontend-Flows verifiziert.

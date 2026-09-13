@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as WebBrowser from "expo-web-browser";
-import { ArrowLeft, Minus, Plus, Trash, CheckCircle } from "phosphor-react-native";
+import { ArrowLeft, Minus, Plus, Trash, CheckCircle, CheckSquare, Square } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
 import { apiGet, apiPost } from "@/src/api/client";
@@ -31,6 +31,7 @@ export default function Warenkorb() {
   const [promo, setPromo] = useState<null | { code: string; percent: number }>(null);
   const [promoMsg, setPromoMsg] = useState("");
   const [promoBusy, setPromoBusy] = useState(false);
+  const [accepted, setAccepted] = useState(false);
 
   const applyPromo = async () => {
     setPromoMsg("");
@@ -79,6 +80,10 @@ export default function Warenkorb() {
   const checkout = async () => {
     if (!form.name.trim() || !form.email.includes("@")) {
       Alert.alert("Angaben fehlen", "Bitte Name und gültige E-Mail angeben.");
+      return;
+    }
+    if (!accepted) {
+      Alert.alert("Bestätigung nötig", "Bitte akzeptiere AGB und Widerrufsbelehrung.");
       return;
     }
     setBusy(true);
@@ -241,7 +246,22 @@ export default function Warenkorb() {
                 </View>
               </Card>
 
-              <Button testID="shop-checkout" title={`Kostenpflichtig bestellen · ${euro(total)}`} loading={busy} onPress={checkout} />
+              <Pressable testID="accept-terms" style={styles.termsRow} onPress={() => setAccepted((a) => !a)}>
+                {accepted ? (
+                  <CheckSquare size={24} color={colors.brandPrimary} weight="fill" />
+                ) : (
+                  <Square size={24} color={colors.muted} weight="regular" />
+                )}
+                <Text style={styles.termsText}>
+                  Ich akzeptiere die{" "}
+                  <Text style={styles.termsLink} onPress={() => router.push("/legal/agb")}>AGB</Text>
+                  {" "}und habe die{" "}
+                  <Text style={styles.termsLink} onPress={() => router.push("/legal/widerruf")}>Widerrufsbelehrung</Text>
+                  {" "}zur Kenntnis genommen.
+                </Text>
+              </Pressable>
+
+              <Button testID="shop-checkout" title={`Kostenpflichtig bestellen · ${euro(total)}`} loading={busy} disabled={!accepted} onPress={checkout} />
               <Muted>Kartenzahlung über Stripe. Im Vorschaumodus ist die Zahlung noch nicht aktiv.</Muted>
             </>
           )}
@@ -272,4 +292,7 @@ const useStyles = makeStyles((c) => ({
   doneTitle: { fontSize: 18, fontWeight: "800", color: c.onSurface, marginTop: 8 },
   promoRow: { flexDirection: "row", gap: 8, alignItems: "center" },
   promoMsg: { fontSize: 13, fontWeight: "700", marginTop: 8 },
+  termsRow: { flexDirection: "row", gap: 10, alignItems: "flex-start", marginTop: 4, marginBottom: 4 },
+  termsText: { flex: 1, fontSize: 13, color: c.onSurfaceSecondary, lineHeight: 19 },
+  termsLink: { color: c.brandPrimary, fontWeight: "700", textDecorationLine: "underline" },
 }));

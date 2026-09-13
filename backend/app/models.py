@@ -113,6 +113,7 @@ class ShopOrderIn(BaseModel):
 class NewsletterIn(BaseModel):
     email: str
     name: Optional[str] = ""
+    baseUrl: Optional[str] = None
 
 
 class ValidateCodeIn(BaseModel):
