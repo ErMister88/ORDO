@@ -57,6 +57,7 @@ async def create_shop_order(body: ShopOrderIn):
     s = await _settings()
     lines = []
     subtotal = 0.0
+    tax_map: dict = {}
     for it in body.items:
         p = await db.products.find_one({"id": it.productId, "active": True})
         if not p or not p.get("b2cPrice"):
@@ -65,23 +66,30 @@ async def create_shop_order(body: ShopOrderIn):
         qty = float(it.qty)
         if qty <= 0:
             continue
-        subtotal += price * qty
-        lines.append({"productId": p["id"], "name": f"{p['brand']} {p['name']}", "qty": qty, "price": price})
+        rate = int(p.get("taxRate", 7))
+        gross = price * qty
+        vat = gross - gross / (1 + rate / 100)
+        tax_map[str(rate)] = round(tax_map.get(str(rate), 0.0) + vat, 2)
+        subtotal += gross
+        lines.append({"productId": p["id"], "name": f"{p['brand']} {p['name']}", "qty": qty, "price": price, "taxRate": rate})
     if not lines:
         raise HTTPException(status_code=400, detail="Warenkorb ist leer")
     subtotal = round(subtotal, 2)
     shipping = 0.0 if subtotal >= s["freeShippingThreshold"] else float(s["shippingFee"])
     total = round(subtotal + shipping, 2)
+    tax_total = round(sum(tax_map.values()), 2)
     now = datetime.now(timezone.utc)
     seq = await next_seq("shop")
     oid = f"S-{now.year}-{seq:05d}"
     doc = {
         "id": oid, "items": lines, "customer": body.customer.model_dump(),
         "subtotal": subtotal, "shipping": shipping, "total": total,
+        "taxBreakdown": tax_map, "taxTotal": tax_total,
         "status": "Neu", "paymentStatus": "Offen", "createdAt": now.isoformat(),
     }
     await db.shop_orders.insert_one(doc)
-    return {"id": oid, "subtotal": subtotal, "shipping": shipping, "total": total}
+    return {"id": oid, "subtotal": subtotal, "shipping": shipping, "total": total,
+            "taxBreakdown": tax_map, "taxTotal": tax_total}
 
 
 @api_router.post("/shop/orders/{order_id}/checkout")

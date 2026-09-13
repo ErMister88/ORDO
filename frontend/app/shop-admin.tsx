@@ -75,6 +75,7 @@ export default function ShopAdmin() {
                   {dateDE(o.createdAt)} · {o.customer?.name} · {o.items.length} Artikel
                 </Muted>
                 <InfoRow label="Versand" value={o.shipping === 0 ? "Gratis" : euro(o.shipping)} />
+                {o.taxTotal != null ? <InfoRow label="enthaltene MwSt" value={euro(o.taxTotal)} /> : null}
                 <InfoRow label="Gesamt" value={euro(o.total)} />
                 {o.customer?.street ? (
                   <Muted>

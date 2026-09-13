@@ -39,6 +39,12 @@ export default function Warenkorb() {
   const fee = settings.data?.shippingFee ?? 4.9;
   const shipping = subtotal >= threshold ? 0 : fee;
   const total = subtotal + shipping;
+  const vatByRate = lines.reduce((acc: Record<number, number>, l) => {
+    const rate = l.p.taxRate ?? 7;
+    const gross = l.p.b2cPrice * l.qty;
+    acc[rate] = (acc[rate] ?? 0) + (gross - gross / (1 + rate / 100));
+    return acc;
+  }, {});
 
   const checkout = async () => {
     if (!form.name.trim() || !form.email.includes("@")) {
@@ -140,6 +146,12 @@ export default function Warenkorb() {
                 {shipping > 0 ? (
                   <Muted>Noch {euro(threshold - subtotal)} bis zum Gratis-Versand</Muted>
                 ) : null}
+                {Object.entries(vatByRate).map(([rate, amt]) => (
+                  <View key={rate} style={styles.sumRow}>
+                    <Text style={styles.vatLabel}>inkl. MwSt {rate}%</Text>
+                    <Text style={styles.vatLabel}>{euro(amt as number)}</Text>
+                  </View>
+                ))}
                 <View style={styles.totalRow}>
                   <Text style={styles.totalLabel}>Gesamt</Text>
                   <Text style={styles.totalVal}>{euro(total)}</Text>
@@ -186,6 +198,7 @@ const useStyles = makeStyles((c) => ({
   sumLabel: { fontSize: 14, color: c.muted, fontWeight: "600" },
   sumVal: { fontSize: 14, fontWeight: "700", color: c.onSurface },
   totalRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 10, borderTopWidth: 1, borderTopColor: c.divider, paddingTop: 10 },
+  vatLabel: { fontSize: 12, color: c.muted, fontWeight: "600" },
   totalLabel: { fontSize: 16, fontWeight: "800", color: c.onSurface },
   totalVal: { fontSize: 20, fontWeight: "800", color: c.brandPrimary },
   rowGap: { flexDirection: "row", gap: 8, marginTop: 8 },
