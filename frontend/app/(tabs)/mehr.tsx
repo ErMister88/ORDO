@@ -1,0 +1,107 @@
+import { View, Text, ScrollView, Pressable } from "react-native";
+import { useQuery } from "@tanstack/react-query";
+import { useRouter } from "expo-router";
+import { SignOut, FileText, Receipt } from "phosphor-react-native";
+
+import { makeStyles, useTheme } from "@/src/theme";
+import { useAuth } from "@/src/auth/auth";
+import { apiGet } from "@/src/api/client";
+import { euro, num, dateDE } from "@/src/lib/format";
+import { ScreenHeader } from "@/src/components/screen-header";
+import { Card, InfoRow, StatusBadge, SectionTitle, EmptyState, Muted } from "@/src/components/ui";
+
+export default function Mehr() {
+  const styles = useStyles();
+  const { colors } = useTheme();
+  const { user, signOut } = useAuth();
+  const router = useRouter();
+
+  const contracts = useQuery({ queryKey: ["contracts"], queryFn: () => apiGet("/contracts") });
+  const invoices = useQuery({ queryKey: ["invoices"], queryFn: () => apiGet("/invoices") });
+  const products = useQuery({ queryKey: ["products"], queryFn: () => apiGet("/products") });
+
+  const prodMap: Record<string, any> = {};
+  (products.data ?? []).forEach((p: any) => (prodMap[p.id] = p));
+
+  const onSignOut = async () => {
+    await signOut();
+    router.replace("/login");
+  };
+
+  return (
+    <View style={styles.root}>
+      <ScreenHeader title="Mehr" subtitle={user?.name} />
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <View style={styles.sectionHead}>
+          <FileText size={18} color={colors.brandPrimary} weight="fill" />
+          <SectionTitle>Verträge</SectionTitle>
+        </View>
+        {(contracts.data ?? []).length === 0 ? (
+          <EmptyState title="Keine Verträge" />
+        ) : (
+          (contracts.data ?? []).map((ct: any) => {
+            const p = prodMap[ct.productId];
+            return (
+              <Card key={ct.id} testID={`contract-${ct.id}`}>
+                <Text style={styles.title}>{ct.machine || "Kaffeeliefervertrag"}</Text>
+                <Muted>{ct.id}</Muted>
+                {p ? <InfoRow label="Produkt" value={`${p.brand} ${p.name}`} /> : null}
+                <InfoRow label="Preis" value={`${euro(ct.price)}/kg`} />
+                <InfoRow label="Mindestabnahme" value={`${num(ct.minQtyMonth)} kg/Monat`} />
+                <InfoRow label="Start" value={dateDE(ct.start)} />
+                <InfoRow label="Laufzeit" value={`${ct.termMonths} Monate`} />
+                {ct.machineRate ? <InfoRow label="Maschine" value={`${euro(ct.machineRate)}/Monat`} /> : null}
+              </Card>
+            );
+          })
+        )}
+
+        <View style={[styles.sectionHead, { marginTop: 8 }]}>
+          <Receipt size={18} color={colors.brandPrimary} weight="fill" />
+          <SectionTitle>Rechnungen</SectionTitle>
+        </View>
+        {(invoices.data ?? []).length === 0 ? (
+          <EmptyState title="Keine Rechnungen" />
+        ) : (
+          (invoices.data ?? []).map((inv: any) => (
+            <Card key={inv.id} testID={`invoice-${inv.id}`}>
+              <View style={styles.invTop}>
+                <Text style={styles.title}>{inv.id}</Text>
+                <StatusBadge status={inv.status} />
+              </View>
+              <Muted>
+                {dateDE(inv.date)} · {euro(inv.amount)}
+              </Muted>
+            </Card>
+          ))
+        )}
+
+        <Pressable style={styles.logout} onPress={onSignOut} testID="logout-button">
+          <SignOut size={18} color={colors.error} weight="bold" />
+          <Text style={styles.logoutText}>Abmelden</Text>
+        </Pressable>
+      </ScrollView>
+    </View>
+  );
+}
+
+const useStyles = makeStyles((c) => ({
+  root: { flex: 1, backgroundColor: c.surfaceSecondary },
+  content: { padding: 20, gap: 12, paddingBottom: 32 },
+  sectionHead: { flexDirection: "row", alignItems: "center", gap: 8 },
+  title: { fontSize: 15, fontWeight: "800", color: c.onSurface },
+  invTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  logout: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    marginTop: 16,
+    paddingVertical: 14,
+    borderRadius: 14,
+    backgroundColor: c.surface,
+    borderWidth: 1,
+    borderColor: c.border,
+  },
+  logoutText: { color: c.error, fontWeight: "700", fontSize: 15 },
+}));

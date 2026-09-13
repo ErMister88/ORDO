@@ -1,0 +1,180 @@
+{
+  "app_name": "S&S Großhandel",
+  "personality": "1 iOS-Native Clean",
+  "personality_one_liner": "A high-trust, data-forward B2B platform defined by crisp white cards, precise typography, and a commanding deep navy authority.",
+  "color": {
+    "surface": "#FFFFFF",
+    "onSurface": "#0F172A",
+    "surfaceSecondary": "#F8FAFC",
+    "onSurfaceSecondary": "#1E293B",
+    "surfaceTertiary": "#F1F5F9",
+    "onSurfaceTertiary": "#334155",
+    "surfaceInverse": "#0B1B3D",
+    "onSurfaceInverse": "#FFFFFF",
+    "brand": "#0B1B3D",
+    "onBrand": "#FFFFFF",
+    "brandPrimary": "#1D3B8E",
+    "onBrandPrimary": "#FFFFFF",
+    "brandSecondary": "#3B82F6",
+    "onBrandSecondary": "#FFFFFF",
+    "brandTertiary": "#E0E7FF",
+    "onBrandTertiary": "#1D3B8E",
+    "success": "#059669",
+    "onSuccess": "#FFFFFF",
+    "warning": "#D97706",
+    "onWarning": "#FFFFFF",
+    "error": "#DC2626",
+    "onError": "#FFFFFF",
+    "info": "#2563EB",
+    "onInfo": "#FFFFFF",
+    "border": "#E2E8F0",
+    "borderStrong": "#CBD5E1",
+    "divider": "#F1F5F9",
+    "muted": "#64748B"
+  },
+  "typography": {
+    "displayFontFamily": "Plus Jakarta Sans",
+    "textFontFamily": "Geist",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Generous iOS-native padding for a clean SaaS look. Ensure 16-24pt outer margins on screens. Elements within cards get 12-16pt. Touch targets strictly 44pt minimum.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 6,
+    "md": 12,
+    "lg": 20,
+    "pill": 999
+  },
+  "shadow_tier": 1,
+  "navigation": "bottom_tabs",
+  "icon_set": "Phosphor",
+  "glassmorphism": {
+    "enabled": true,
+    "do's": [
+      "Use blur on the bottom tab bar and sticky headers over scrolling lists.",
+      "Use glass overlay on the primary hero KPI card if over a textured background."
+    ],
+    "dont's": [
+      "Do not use glass on list rows, standard cards, or data tables. Keep data surfaces solid white for maximum legibility."
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Login",
+      "purpose": "Secure entry point emphasizing trust with a deep navy abstract hero background.",
+      "states": {
+        "loading": "Spinner on primary CTA.",
+        "empty": "N/A",
+        "error": "Inline red validation text or error toast above the form."
+      },
+      "layout": "Full-bleed abstract navy background at the top fading into a crisp white bottom sheet (radius `lg`) containing the JWT email/password form and seeded demo account chips. Form inputs use `surfaceTertiary` with no borders."
+    },
+    {
+      "name": "Dashboard",
+      "purpose": "Role-specific command center featuring the undisputed hero metric and secondary KPI strips.",
+      "states": {
+        "loading": "Skeleton pulse for KPI cards.",
+        "empty": "N/A (KPIs show zero states with greyed-out sparklines).",
+        "error": "Error boundary with a subtle retry button."
+      },
+      "layout": "Top hero metric (e.g., Total Revenue or Open Orders) highly prominent. Below, a horizontally scrollable or wrapping grid of secondary KPI cards showing current value, delta (green/red), and a sparkline. Actionable alerts (e.g., '3 Kunden überfällig') surfaced directly below the hero."
+    },
+    {
+      "name": "Kunden",
+      "purpose": "Admin/Sales view of all clients with fast search and high-density scannability.",
+      "states": {
+        "loading": "List skeleton.",
+        "empty": "Illustration of an empty Rolodex/contact box + 'Keine Kunden gefunden'.",
+        "error": "Error fetching customers + 'Erneut versuchen' CTA."
+      },
+      "layout": "Sticky search bar at the top with filter chips (e.g., 'Aktiv', 'Überfällig'). Dense list rows (min 56pt height) showing customer name, ID, and a right-aligned status indicator (dot + text) for their ordering cycle."
+    },
+    {
+      "name": "Kunden-Details",
+      "purpose": "Deep dive into a specific customer's conditions, pricing, and history.",
+      "states": {
+        "loading": "Skeleton blocks.",
+        "empty": "N/A",
+        "error": "Error state + Retry."
+      },
+      "layout": "Header with customer name and key info. Tabbed or segmented control layout switching between 'Konditionen' (Pricing logic/floor prices) and 'Historie' (Order history). Use a sticky bottom CTA for 'Neues Angebot erstellen' (Create Offer)."
+    },
+    {
+      "name": "Angebote",
+      "purpose": "Offer creation and admin approval workflows with strict floor-price logic.",
+      "states": {
+        "loading": "Spinner overlay.",
+        "empty": "Illustration of a blank document + 'Keine offenen Angebote'.",
+        "error": "Form submission error."
+      },
+      "layout": "List view of pending/approved offers using segmented controls. Create Offer view uses a clear form with inline validation if a price falls below the floor price. Admin view shows bottom sheet with 'Freigeben' (Approve) and 'Ablehnen' (Reject) actions."
+    },
+    {
+      "name": "Bestellungen",
+      "purpose": "Customer role view for order history and fast 1-click reordering.",
+      "states": {
+        "loading": "List skeleton.",
+        "empty": "Clean vector illustration of an empty cart + 'Noch keine Bestellungen'.",
+        "error": "Error fetching orders."
+      },
+      "layout": "Stacked list of cards. Each card shows Date, Order ID, Total EUR, and Status badge (e.g., 'Versandt', 'In Bearbeitung'). Each card has a prominent 'Erneut bestellen' (Reorder) action button on the right or bottom."
+    },
+    {
+      "name": "Auswertungen",
+      "purpose": "Analytics charts showing revenue, margin, and kg trends over time.",
+      "states": {
+        "loading": "Chart skeleton.",
+        "empty": "Flat baseline chart + 'Nicht genug Daten'.",
+        "error": "Chart failed to load."
+      },
+      "layout": "Segmented controls for timeframe (1M, 3M, YTD). Line charts or bar charts using the `brandSecondary` color for data visualization. A concise AI-like summary or highlight stat placed above the chart to provide context."
+    }
+  ],
+  "images": {
+    "login_hero_bg": {
+      "url": "https://images.unsplash.com/photo-1653668168018-0ee2c5756bca?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAxODF8MHwxfHNlYXJjaHwxfHxhYnN0cmFjdCUyMGRlZXAlMjBuYXZ5JTIwYmx1ZSUyMGdlb21ldHJpYyUyMGJhY2tncm91bmR8ZW58MHx8fHwxNzg5MjYwODU0fDA&ixlib=rb-4.1.0&q=85",
+      "dark": "https://images.unsplash.com/photo-1653668168018-0ee2c5756bca?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAxODF8MHwxfHNlYXJjaHwxfHxhYnN0cmFjdCUyMGRlZXAlMjBuYXZ5JTIwYmx1ZSUyMGdlb21ldHJpYyUyMGJhY2tncm91bmR8ZW58MHx8fHwxNzg5MjYwODU0fDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Abstract deep navy geometric background"
+    },
+    "logo_transparent": {
+      "url": "https://images.unsplash.com/photo-1613905383527-8994ba2f9896?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMzN8MHwxfHNlYXJjaHwxfHxTJTI2UyUyMGxvZ28lMjBjbGVhbiUyMHNpbXBsZXxlbnwwfHx8fDE3ODkyNjA4NTV8MA&ixlib=rb-4.1.0&q=85",
+      "alt": "S&S Clean Logo"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Ensure the app uses German localization (de-DE) for all UI text, dates, and EUR currency formatting.",
+    "Implement Role-Based Access Control (Admin, Sales rep, Customer) via the seeded JWT login.",
+    "Adhere strictly to the deep navy/blue palette. Use `surface` (white) for cards to maintain the 'crisp white cards' request.",
+    "For KPI tiles and financial data: use `displayFontFamily` for the hero metric, and mono-variant or highly legible text for numeric values to ensure precise alignment.",
+    "For badge and status indicators (e.g., Offer approved, Invoice paid/overdue), use a `surfaceSecondary` or `surfaceTertiary` pill with a solid `success`/`warning`/`error` dot and matching colored text to avoid accessibility issues with pure background colors.",
+    "Floor-price logic in 'Angebote': include real-time form validation warning the user if the entered price falls below the calculated floor threshold.",
+    "Ensure the 'Erneut bestellen' (Reorder) flow on the Bestellungen screen is no more than two taps (List -> Confirm Sheet).",
+    "On charts (Auswertungen), prioritize scannability with clear tooltips and a summary stat directly above the chart."
+  ]
+}

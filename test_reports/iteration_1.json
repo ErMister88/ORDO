@@ -1,0 +1,46 @@
+{
+  "summary": "S&S Großhandel end-to-end tested. Backend: 26/26 pytest cases pass covering auth (3 roles), role-based visibility (admin=4 companies, sales=3, customer=403), product field redaction, offer floor-price logic (approved / needs-approval / rejected 400), approve/reject as admin (non-admin 403), customer order-for-own-company, contracts/invoices scoping, and analytics (staff-only). Frontend (mobile viewport 390x844): login via demo chips works for all three roles; admin dashboard hero+KPIs+approval alert+follow-ups render; Kunden search & filter chips (Alle/Überfällig/Aktuell) work; customer detail with Konditionen/Historie segments works; Angebote create-offer + admin approve/reject work; sales sees c1/c3/c4 only and NO approve buttons; customer sees hero-customer + contract card and only Übersicht/Angebote/Bestellungen/Mehr tabs (Kunden & Auswertungen hidden); reorder stepper submits an order (orders 8→9); Mehr shows contracts + invoices + Abmelden. Auswertungen renders line+bar charts and metric/timeframe toggles work. FOUND BUG: duplicate offer IDs cause React 'two children with the same key' red-screen modal when 2 offers are created within the same second — backend uses int(now.timestamp()) % 100000 as ID which collides. Same risk exists for /api/orders. Also, floor-price form shows both 'Unter absoluter Preisgrenze – nicht zulässig' and stale 'Angebot erstellt' success text simultaneously (state not cleared on price change).",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/offers, POST /api/orders", "issue": "ID generator `f\"A-{year}-{int(now.timestamp()) % 100000:05d}\"` collides when two offers/orders are created in the same second, producing duplicate primary keys. Reproduced during testing (see A-2026-61716 duplicated on Angebote screen). Use uuid4 or Mongo counter for uniqueness.", "priority": "HIGH"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "app/(tabs)/angebote.tsx offer list", "issue": "React key collision → red-screen error modal: 'Encountered two children with the same key, A-2026-61716'. Root cause is duplicate backend IDs, but frontend should also guard with a stable composite key or de-dupe offers by id.", "testID": "offer-<id>", "priority": "HIGH"},
+      {"component": "app/(tabs)/angebote.tsx create-offer form", "issue": "Success message 'Angebot erstellt' remains visible while user edits price to a below-absolute-floor value (screenshot /tmp/offer_below_floor.png shows both success + 'Unter absoluter Preisgrenze – nicht zulässig' together). Clear result/status on input change.", "testID": "create-offer-card", "priority": "MEDIUM"},
+      {"component": "app/(tabs)/auswertungen.tsx chart cards", "issue": "testID='line-chart-card' and 'bar-chart-card' on <Card> are not queryable via [data-testid=...] on web — likely because Card is a nested component that doesn't forward testID to the DOM root. Charts DO render visually (verified via screenshot). Recommend forwarding testID or applying it via style wrapper View so it appears as data-testid on web for testability.", "testID": "line-chart-card / bar-chart-card", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_ss_backend.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Replace time-based ID generation in POST /api/offers and POST /api/orders with a unique generator (uuid4 or a Mongo atomic counter) to prevent duplicate IDs when multiple items are created in the same second.",
+    "In app/(tabs)/angebote.tsx clear the 'Angebot erstellt' success state (result/message) when the user edits price/qty/product/company after a successful submit so it doesn't overlap with a new validation error.",
+    "Forward testID from the Card component to its outer View (or add a testID on the wrapping View directly) so that [data-testid='line-chart-card'] / 'bar-chart-card' are queryable on web preview.",
+    "Optional defensive fix: de-duplicate offers by id in the frontend list before mapping (or use `${o.id}-${idx}` as key) so a backend duplicate never triggers a red-screen crash."
+  ],
+  "critical_code_review_comments": [
+    "server.py:263 `offer_no = f\"A-{now.year}-{int(now.timestamp()) % 100000:05d}\"` — not unique; same applies to server.py:312 for orders.",
+    "server.py CORS is `allow_origins=['*']` with `allow_credentials=True` — will be rejected by browsers if credentials ever used; acceptable for now since JWT is via Authorization header.",
+    "server.py:585 uses deprecated `@app.on_event('startup')` — consider lifespan handler for FastAPI ≥0.109."
+  ],
+  "updated_files": [
+    "/app/backend/tests/conftest.py",
+    "/app/backend/tests/test_ss_backend.py",
+    "/app/test_reports/iteration_1.json"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "≈95% (2 UI bugs found; all role-based flows functional)"},
+  "seed_data_creation": "None — backend seeds idempotently at startup (admin/sales/customer users, 4 companies, 4 products, orders, offers, contracts, invoices).",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Tabs render as <a href=\"/kunden\"> etc. Use `page.click('a[href=\"/kunden\"]')` instead of text-based selectors (text=Kunden collides with 'Kunden nachfassen' section header). Kunden filter testIDs are `filter-alle`, `filter-ueberfaellig`, `filter-aktiv` (German keys, not English). Chart cards' testIDs don't reach DOM — verify charts by presence of gifted-chart SVG instead. Admin/sales logout button is in the Übersicht header; customer logout is on the Mehr screen. Backend base URL is EXPO_PUBLIC_BACKEND_URL from /app/frontend/.env.",
+  "rca_of_issue": "Bug: duplicate offer id → React key crash. Reproduction: with admin token POST /api/offers twice within the same wall-clock second — both offers get identical id like `A-2026-61716`. Root cause: server.py uses `int(now.timestamp()) % 100000` (seconds-resolution, 5-digit truncation) as unique ID; two calls within one second collide. Mitigation: (a) use uuid4 hex suffix, or (b) `await db.counters.find_one_and_update({...}, {'$inc':{'seq':1}}, upsert=True)` for atomic increment; also add a unique index on offers.id / orders.id."
+}
