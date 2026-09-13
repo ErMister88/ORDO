@@ -12,12 +12,17 @@ from .routers import (  # noqa: F401,E402
     subscriptions, billing, payments, audit, shop, newsletter, push, machines,
 )
 
+import os
+
 app.include_router(api_router)
 
+# Bearer-token auth is used (no cookies), so credentials are not needed.
+# Avoid the invalid wildcard-origin + credentials combination.
+_cors_origins = os.getenv("CORS_ORIGINS", "*")
 app.add_middleware(
     CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=["*"],
+    allow_credentials=False,
+    allow_origins=[o.strip() for o in _cors_origins.split(",")] if _cors_origins != "*" else ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )

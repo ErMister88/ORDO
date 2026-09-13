@@ -122,6 +122,7 @@ async def create_shop_order(body: ShopOrderIn, uid: Annotated[Optional[str], Dep
         "discountPercent": percent,
         "taxBreakdown": tax_map, "taxTotal": tax_total,
         "status": "Neu", "paymentStatus": "Offen", "userId": uid,
+        "token": secrets.token_urlsafe(16),
         "statusHistory": [{"status": "Neu", "at": now.isoformat()}],
         "createdAt": now.isoformat(),
     }
@@ -156,16 +157,30 @@ async def create_shop_order(body: ShopOrderIn, uid: Annotated[Optional[str], Dep
             await send_email(to=email, subject=f"Bestellbestätigung {oid}", html=html)
     except Exception as e:
         logger.warning(f"E-Mail (Bestellbestätigung Shop) fehlgeschlagen: {e}")
-    return {"id": oid, "subtotal": subtotal, "shipping": shipping, "total": total,
+    return {"id": oid, "token": doc["token"], "subtotal": subtotal, "shipping": shipping, "total": total,
             "discount": discount, "discountPercent": percent,
             "taxBreakdown": tax_map, "taxTotal": tax_total}
 
 
+def _authorize_shop_order(o: dict, token: Optional[str], uid: Optional[str]) -> None:
+    """Owner (registered shop user) or a valid per-order token may access it."""
+    if o.get("userId") and uid and o["userId"] == uid:
+        return
+    if o.get("token") and token and secrets.compare_digest(str(token), str(o["token"])):
+        return
+    # Legacy orders created before per-order tokens: allow (no token stored).
+    if not o.get("token"):
+        return
+    raise HTTPException(status_code=403, detail="Kein Zugriff auf diese Bestellung")
+
+
 @api_router.post("/shop/orders/{order_id}/checkout")
-async def shop_checkout(order_id: str):
+async def shop_checkout(order_id: str, token: Optional[str] = None,
+                        uid: Annotated[Optional[str], Depends(_optional_uid)] = None):
     o = await db.shop_orders.find_one({"id": order_id})
     if not o:
         raise HTTPException(status_code=404, detail="Bestellung nicht gefunden")
+    _authorize_shop_order(o, token, uid)
     if o["paymentStatus"] == "Bezahlt":
         raise HTTPException(status_code=409, detail="Bereits bezahlt")
     try:
@@ -196,10 +211,12 @@ async def shop_checkout(order_id: str):
 
 
 @api_router.get("/shop/orders/{order_id}/payment-status")
-async def shop_payment_status(order_id: str):
+async def shop_payment_status(order_id: str, token: Optional[str] = None,
+                              uid: Annotated[Optional[str], Depends(_optional_uid)] = None):
     o = await db.shop_orders.find_one({"id": order_id})
     if not o:
         raise HTTPException(status_code=404, detail="Bestellung nicht gefunden")
+    _authorize_shop_order(o, token, uid)
     if o["paymentStatus"] == "Bezahlt":
         return {"status": "Bezahlt"}
     sid = o.get("stripeSessionId")

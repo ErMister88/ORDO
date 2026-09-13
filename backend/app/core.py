@@ -59,7 +59,9 @@ def random_password(n: int = 12) -> str:
 
 
 def gen_reset_code() -> tuple:
-    code = f"{secrets.randbelow(1000000):06d}"
+    # High-entropy, human-friendly code (no ambiguous chars). ~ 32^8 combinations.
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    code = "".join(secrets.choice(alphabet) for _ in range(8))
     digest = hashlib.sha256(code.encode()).hexdigest()
     return code, digest
 

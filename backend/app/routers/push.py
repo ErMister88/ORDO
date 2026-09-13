@@ -4,10 +4,11 @@ from datetime import datetime, timezone
 from typing import Annotated, Optional
 
 import httpx
-from fastapi import Depends, HTTPException
+import jwt
+from fastapi import Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from ..core import api_router, db, logger
+from ..core import api_router, db, logger, JWT_SECRET, JWT_ALGORITHM
 from ..deps import require_roles
 from ..models import PushBroadcastIn
 
@@ -27,17 +28,31 @@ class RegisterPushBody(BaseModel):
     device_token: str
 
 
+def _caller_id(request: Request) -> Optional[str]:
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        try:
+            return jwt.decode(auth[7:], JWT_SECRET, algorithms=[JWT_ALGORITHM]).get("sub")
+        except Exception:
+            return None
+    return None
+
+
 @api_router.post("/register-push", status_code=201)
-async def register_push(body: RegisterPushBody):
-    # Record locally first so the admin's registered-device count is accurate
-    # even before deploy (when the upstream key is a placeholder).
+async def register_push(body: RegisterPushBody, request: Request):
+    # Authenticated callers are bound to their own account id (cannot spoof
+    # another user's id); anonymous device ids are namespaced so they can never
+    # collide with or impersonate a real user account.
+    caller = _caller_id(request)
+    reg_id = caller if caller else f"anon:{body.user_id}"
     await db.push_registrations.update_one(
-        {"userId": body.user_id},
-        {"$set": {"userId": body.user_id, "platform": body.platform,
+        {"userId": reg_id},
+        {"$set": {"userId": reg_id, "platform": body.platform,
                   "updatedAt": datetime.now(timezone.utc).isoformat()}},
         upsert=True,
     )
-    resp = await _client.post("/api/v1/push/users/register", json=body.model_dump())
+    resp = await _client.post("/api/v1/push/users/register",
+                              json={"user_id": reg_id, "platform": body.platform, "device_token": body.device_token})
     if resp.status_code == 401:
         raise HTTPException(500, "EMERGENT_PUSH_KEY missing or invalid")
     if resp.status_code >= 500:

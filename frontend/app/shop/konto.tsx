@@ -85,15 +85,16 @@ export default function ShopKonto() {
   };
 
   const [payingId, setPayingId] = useState<string | null>(null);
-  const payNow = async (orderId: string) => {
+  const payNow = async (orderId: string, token: string) => {
     setPayingId(orderId);
+    const q = `?token=${encodeURIComponent(token || "")}`;
     try {
-      const res = await apiPost(`/shop/orders/${orderId}/checkout`, {});
+      const res = await apiPost(`/shop/orders/${orderId}/checkout${q}`, {});
       if (res?.url) {
         await WebBrowser.openBrowserAsync(res.url);
         for (let i = 0; i < 8; i++) {
           await new Promise((r) => setTimeout(r, 1500));
-          const st = await apiGet(`/shop/orders/${orderId}/payment-status`);
+          const st = await apiGet(`/shop/orders/${orderId}/payment-status${q}`);
           if (st.status === "Bezahlt") break;
         }
         setOrders(await shopApi.myOrders());
@@ -230,7 +231,7 @@ export default function ShopKonto() {
                         testID={`pay-now-${o.id}`}
                         title="Jetzt bezahlen"
                         loading={payingId === o.id}
-                        onPress={() => payNow(o.id)}
+                        onPress={() => payNow(o.id, o.token)}
                         style={{ marginTop: 10 }}
                       />
                     ) : null}

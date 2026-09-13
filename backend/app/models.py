@@ -34,9 +34,14 @@ class OfferCreate(BaseModel):
     reason: Optional[str] = ""
 
 
+class OrderItemIn(BaseModel):
+    productId: str
+    qty: float
+
+
 class OrderCreate(BaseModel):
     companyId: str
-    items: List[OfferItemIn]
+    items: List[OrderItemIn]
 
 
 class DecisionIn(BaseModel):

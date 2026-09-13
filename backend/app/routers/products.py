@@ -17,6 +17,10 @@ ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic", "i
 
 @api_router.get("/products")
 async def get_products(user: Annotated[dict, Depends(current_user)]):
+    # Wholesale catalog is B2B-only. Shop customers (shopusers) and any other
+    # role must never receive cost/floor/standard pricing. They use /shop/products.
+    if user["role"] not in ("admin", "sales", "customer"):
+        raise HTTPException(status_code=403, detail="Kein Zugriff auf den Großhandelskatalog")
     prods = await db.products.find({}).to_list(1000)
     result = []
     for p in prods:

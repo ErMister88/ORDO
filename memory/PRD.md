@@ -161,3 +161,11 @@ Backend split into a package: `backend/app/` with `core.py` (config/db/security)
 - **Ablehnen/Rückfrage**: `POST /machine-requests/{id}/respond` (`decline`→„Abgelehnt", `question`→„Rückfrage" + `questions[]`). Kundenscreen: Buttons Annehmen/Ablehnen/Rückfrage (+Eingabe). Admin sieht Rückfragen im Anfrage-Card.
 - **Leasing-Vertragsübersicht (Admin)**: `GET /machines/leasing-contracts` (admin/sales) gebündelt mit Firma + Kaffeesorte; Sektion in `maschinen-admin.tsx`.
 - Backend 15/15 pytest (`tests/test_iteration18.py`), Frontend verifiziert.
+
+## Security Audit Fixes (2026-06-13, Iteration 19)
+Audit-Ergebnis war FAIL → alle Punkte behoben & verifiziert (23/23 Backend-Tests):
+- **SEC-001 (HIGH)**: `GET /api/products` ist jetzt B2B-only (admin/sales/customer). shopuser/Fremde → 403. Keine Einkaufs-/Mindestpreis-Leaks mehr.
+- **SEC-002 (HIGH)**: `POST /api/orders` ignoriert Client-Preise; Serverpreis = Kundenpreis → Vertragspreis → Standardpreis (+ Mengenstaffel). Rechnung nutzt Serverpreis. Unbekanntes/inaktives Produkt → 400.
+- **SEC-003 (MEDIUM)**: Reset-Code jetzt 8-stellig alphanumerisch + Sperre nach 5 Fehlversuchen (429).
+- **Härtung**: `register-push` bindet an Auth-Caller / namespaced `anon:` (kein Spoofing); Shop-Bestellungen mit `token` (Checkout/Status brauchen Token oder Owner-Auth); CORS ohne Wildcard+Credentials.
+- Frontend: warenkorb & konto übergeben `?token=` an Checkout/Payment-Status.

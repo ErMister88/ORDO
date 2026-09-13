@@ -92,9 +92,16 @@ async def reset_password(body: ResetPwIn):
     u = await db.users.find_one({"email": email})
     if not u:
         raise HTTPException(status_code=400, detail="Code ungültig oder abgelaufen")
-    digest = hashlib.sha256(body.code.strip().encode()).hexdigest()
-    rec = await db.password_resets.find_one({"userId": u["id"], "codeHash": digest, "used": False})
+    digest = hashlib.sha256(body.code.strip().upper().encode()).hexdigest()
+    rec = await db.password_resets.find_one({"userId": u["id"], "used": False})
     if not rec:
+        raise HTTPException(status_code=400, detail="Code ungültig oder abgelaufen")
+    # Lock the reset after too many wrong attempts to stop brute forcing.
+    if rec.get("attempts", 0) >= 5:
+        await db.password_resets.delete_many({"userId": u["id"]})
+        raise HTTPException(status_code=429, detail="Zu viele Fehlversuche. Bitte fordern Sie einen neuen Code an.")
+    if rec.get("codeHash") != digest:
+        await db.password_resets.update_one({"_id": rec["_id"]}, {"$inc": {"attempts": 1}})
         raise HTTPException(status_code=400, detail="Code ungültig oder abgelaufen")
     exp = rec["expiresAt"]
     if exp.tzinfo is None:
