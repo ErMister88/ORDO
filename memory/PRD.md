@@ -52,6 +52,7 @@
 - **E-Mail-Benachrichtigungen (Resend, Emergent-managed)**: Mail an Firmen-E-Mail bei Angebot-Freigabe (`/approve`) und Bestell-Versand (`status=Versendet`). Nicht-blockierend (try/except), Absender `EMAIL_FROM_NAME` = "ORDO Connect by S&S". Guardrail-Gate `_assert_safe_email` auf jedem Send.
 
 ## Implemented (2026-06-13, Iteration 9)
+- **Schnell-Lagerbestand**: `PUT /api/products/{id}/stock` (admin) + Inline-Control (−/∞/+ /Speichern) auf jeder Produktkarte; Audit `product.stock`.
 - **Mehrere Positionen beim Nachbestellen**: Warenkorb in Bestellungen (Produktauswahl, Menge, hinzufügen/entfernen, Staffelpreis + Lager-Warnung je Position).
 - **Suche/Filter in Bestellungen**: Text (Bestellnr.) + Status-Chips.
 - **Angebots-Notiz**: optionale Notiz bei Angebots-Annahme → `order.customerNote`, Anzeige in Bestelldetails.

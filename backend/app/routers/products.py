@@ -7,9 +7,9 @@ from starlette.concurrency import run_in_threadpool
 from typing import Annotated
 from datetime import datetime, timezone
 
-from ..core import api_router, db, strip_id, next_seq
+from ..core import api_router, db, strip_id, next_seq, audit
 from ..deps import current_user, require_roles
-from ..models import ProductIn, ActiveIn
+from ..models import ProductIn, ActiveIn, StockIn
 from ..storage import put_object, get_object, APP_NAME
 
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
@@ -54,6 +54,16 @@ async def set_product_active(product_id: str, body: ActiveIn, user: Annotated[di
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Produkt nicht gefunden")
     return {"ok": True, "active": body.active}
+
+
+@api_router.put("/products/{product_id}/stock")
+async def set_product_stock(product_id: str, body: StockIn, user: Annotated[dict, Depends(require_roles("admin"))]):
+    stock = None if body.stock is None else max(0, body.stock)
+    res = await db.products.update_one({"id": product_id}, {"$set": {"stock": stock}})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Produkt nicht gefunden")
+    await audit(user, "product.stock", product_id, {"stock": stock})
+    return {"ok": True, "stock": stock}
 
 
 @api_router.post("/upload")

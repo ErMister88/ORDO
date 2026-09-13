@@ -1,11 +1,11 @@
 import { useState } from "react";
-import { View, Text, ScrollView, Pressable, KeyboardAvoidingView, Platform, ActivityIndicator, Linking } from "react-native";
+import { View, Text, ScrollView, Pressable, KeyboardAvoidingView, Platform, ActivityIndicator, Linking, TextInput } from "react-native";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
-import { ArrowLeft, Plus, PencilSimple, Camera, ImageSquare, X } from "phosphor-react-native";
+import { ArrowLeft, Plus, Minus, PencilSimple, Camera, ImageSquare, X } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
 import { apiGet, apiPost, apiPut, apiUpload, fileUrl } from "@/src/api/client";
@@ -415,6 +415,7 @@ export default function Produkte() {
                           MwSt {p.taxRate ?? 7}%
                           {p.stock != null ? ` · Lager: ${p.stock}${p.stock <= 0 ? " (leer)" : ""}` : ""}
                         </Muted>
+                        <QuickStock product={p} />
                       </View>
                     </View>
                     <Pressable
@@ -437,6 +438,43 @@ export default function Produkte() {
     </View>
   );
 }
+
+function QuickStock({ product }: { product: any }) {
+  const styles = useStyles();
+  const { colors } = useTheme();
+  const qc = useQueryClient();
+  const [val, setVal] = useState(product.stock != null ? String(product.stock) : "");
+  const save = useMutation({
+    mutationFn: (stock: number | null) => apiPut(`/products/${product.id}/stock`, { stock }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["products"] }),
+  });
+  const cur = val.trim() === "" ? null : Math.max(0, Number(val.replace(",", ".")) || 0);
+  return (
+    <View style={styles.quickStock}>
+      <Text style={styles.quickLabel}>Bestand</Text>
+      <Pressable testID={`stock-minus-${product.id}`} style={styles.stockStep} onPress={() => setVal(String(Math.max(0, (cur ?? 0) - 1)))} hitSlop={6}>
+        <Minus size={15} color={colors.onSurface} weight="bold" />
+      </Pressable>
+      <TextInput
+        testID={`stock-input-${product.id}`}
+        style={styles.stockInput}
+        value={val}
+        onChangeText={setVal}
+        keyboardType="numeric"
+        placeholder="∞"
+        placeholderTextColor={colors.muted}
+      />
+      <Pressable testID={`stock-plus-${product.id}`} style={styles.stockStep} onPress={() => setVal(String((cur ?? 0) + 1))} hitSlop={6}>
+        <Plus size={15} color={colors.onSurface} weight="bold" />
+      </Pressable>
+      <Pressable testID={`stock-save-${product.id}`} style={styles.stockSave} onPress={() => save.mutate(cur)} hitSlop={6}>
+        <Text style={styles.stockSaveTxt}>{save.isPending ? "…" : "Speichern"}</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+
 
 const useStyles = makeStyles((c) => ({
   root: { flex: 1, backgroundColor: c.surfaceSecondary },
@@ -528,4 +566,10 @@ const useStyles = makeStyles((c) => ({
   taxBtnActive: { backgroundColor: c.brandPrimary },
   taxText: { fontSize: 14, fontWeight: "700", color: c.onSurfaceSecondary },
   taxTextActive: { color: c.onBrandPrimary },
+  quickStock: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 10 },
+  quickLabel: { fontSize: 13, fontWeight: "700", color: c.onSurfaceSecondary, marginRight: 2 },
+  stockStep: { width: 32, height: 32, borderRadius: 8, backgroundColor: c.surfaceTertiary, alignItems: "center", justifyContent: "center" },
+  stockInput: { width: 56, height: 36, borderRadius: 8, backgroundColor: c.surfaceTertiary, textAlign: "center", fontSize: 15, fontWeight: "700", color: c.onSurface, paddingVertical: 0 },
+  stockSave: { marginLeft: "auto", paddingHorizontal: 12, height: 32, borderRadius: 8, backgroundColor: c.brandTertiary, alignItems: "center", justifyContent: "center" },
+  stockSaveTxt: { fontSize: 13, fontWeight: "700", color: c.brandPrimary },
 }));

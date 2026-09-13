@@ -78,6 +78,10 @@ class ActiveIn(BaseModel):
     active: bool
 
 
+class StockIn(BaseModel):
+    stock: Optional[float] = None
+
+
 class NewCompanyIn(BaseModel):
     name: str
     city: str = ""
