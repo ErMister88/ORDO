@@ -27,6 +27,7 @@ type Form = {
   discountTiers: Tier[];
   taxRate: string;
   stock: string;
+  b2cPrice: string;
 };
 
 const EMPTY: Form = {
@@ -42,6 +43,7 @@ const EMPTY: Form = {
   discountTiers: [],
   taxRate: "7",
   stock: "",
+  b2cPrice: "",
 };
 
 export default function Produkte() {
@@ -99,6 +101,7 @@ export default function Produkte() {
       })),
       taxRate: String(p.taxRate ?? 7),
       stock: p.stock != null ? String(p.stock) : "",
+      b2cPrice: p.b2cPrice != null ? String(p.b2cPrice) : "",
     });
     setMsg("");
     setOk("");
@@ -171,6 +174,7 @@ export default function Produkte() {
           .sort((a, b) => a.minQty - b.minQty),
         taxRate: Number(form.taxRate) === 19 ? 19 : 7,
         stock: form.stock.trim() === "" ? null : num(form.stock),
+        b2cPrice: form.b2cPrice.trim() === "" ? null : num(form.b2cPrice),
         active: true,
       };
       return editingId ? apiPut(`/products/${editingId}`, body) : apiPost("/products", body);
@@ -313,6 +317,9 @@ export default function Produkte() {
 
               <Text style={styles.label}>Lagerbestand (optional, leer = unbegrenzt)</Text>
               <Input testID="p-stock" value={form.stock} onChangeText={set("stock")} keyboardType="numeric" placeholder="z. B. 120" />
+
+              <Text style={styles.label}>B2C-Shop-Preis € (brutto, leer = nicht im Shop)</Text>
+              <Input testID="p-b2cprice" value={form.b2cPrice} onChangeText={set("b2cPrice")} keyboardType="decimal-pad" placeholder="z. B. 19,90" />
 
               <Text style={styles.label}>Mengenrabatt-Staffeln (optional)</Text>
               <Muted>Ab welcher Menge gilt welcher Stückpreis? Greift automatisch in Angeboten & Nachbestellungen.</Muted>

@@ -1,7 +1,7 @@
 import { View, Text, ScrollView, Pressable } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
-import { SignOut, FileText, Receipt, Export, Package, UsersThree, Lock, CaretRight, ArrowsClockwise, ClockCounterClockwise } from "phosphor-react-native";
+import { SignOut, FileText, Receipt, Export, Package, UsersThree, Lock, CaretRight, ArrowsClockwise, ClockCounterClockwise, Storefront } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
@@ -128,6 +128,15 @@ export default function Mehr() {
                 <View style={styles.linkRow}>
                   <ClockCounterClockwise size={20} color={colors.brandPrimary} weight="bold" />
                   <Text style={styles.linkText}>Audit-Log</Text>
+                  <CaretRight size={18} color={colors.muted} />
+                </View>
+              </Card>
+            </Pressable>
+            <Pressable testID="link-shop-admin" onPress={() => router.push("/shop-admin")}>
+              <Card>
+                <View style={styles.linkRow}>
+                  <Storefront size={20} color={colors.brandPrimary} weight="bold" />
+                  <Text style={styles.linkText}>Shop-Verwaltung</Text>
                   <CaretRight size={18} color={colors.muted} />
                 </View>
               </Card>

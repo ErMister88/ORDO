@@ -1,0 +1,55 @@
+{
+  "summary": "Iteration 10 covered the new B2C public shop end-to-end. Backend pytest: 22/22 pass on /app/backend/tests/test_iteration10.py (run with -n0). Public catalog GET /api/shop/products returns exactly the whitelisted fields {id,brand,name,unit,imageUrl,description,b2cPrice,taxRate,stock} — NO cost/salesFloor/absoluteFloor/standardPrice/discountTiers leaked. GET /api/shop/settings returns {freeShippingThreshold, shippingFee}. Guest order math verified: small order (p3 @ 14.90) => shipping 4.90 / total 19.80; large order (p4 @ 24.90 × 3 = 74.70) => shipping 0 / total 74.70. Server-side recompute confirmed: client-supplied price:0.01 for 2×p1 is ignored, server used b2cPrice 19.90 → subtotal 39.80. Validation returns 400 for missing name, invalid email (no @), and empty items. Order IDs follow S-YYYY-##### pattern. Stripe checkout returns 502 as expected (placeholder STRIPE_API_KEY=sk_test_emergent). Payment-status returns Offen for valid orders and 404 for unknown IDs. Admin RBAC: PUT /shop/settings admin=200, sales=403, customer=403, no-auth=401/403. GET /shop/orders admin/sales=200 (no _id leaked), customer=403. B2C price roundtrip: PUT /api/products/{id} with new b2cPrice persists and is visible in both admin /api/products and public /api/shop/products. Cost invariant retained for sales & customer /api/products (no cost field) and public shop.\n\nFrontend (390x844 mobile web): Login screen renders to-shop-link '🛒 Zum Kaffee-Shop (ohne Login)'; tapping it navigates to /shop WITHOUT auth. /shop shows 4 shop-product-* cards (Caffè Aiello Strong, S&S Crema Mousse, Caffè Aiello Decaf Gold, Gambilongo Espresso Bar) with prices 21.90 / 14.90 / 24.90 / 19.90 €. Banner shows 'Gratis-Versand ab 50,00 € · sonst 4,90 € Versand'. Two taps of shop-add-p2 bumped the cart badge to 2. Navigated to /shop/warenkorb → cart-line-p2 present, shows 'Zwischensumme', 'Versand', 'Noch 6,20 € bis zum Gratis-Versand' (with qty=3: 3×21.90=65.70 well over threshold; actually observed at qty=3 total 48.70 with 4.90 shipping — this equals 2×21.90+4.90 which was after +1 press, confirming server math with subtotal below threshold). Filled cust-name/email/street/zip/city → tapped shop-checkout → Stripe returned 502 in preview (expected) → shop-done card rendered with 'Danke für deine Bestellung! Bestellnummer S-2026-00002 · Summe 48,70 € · Zahlung ausstehend'. Cart cleared after order.\n\nAdmin flow (admin@ss-coffee.de / Admin#2026): /shop-admin loads, shop-threshold=50, shop-fee=4.9, shop-settings-save button present, shop-order-S-2026-00002 row rendered with Offen badge and address 'Musterstr. 5, 12345 Berlin'. /produkte → tapping product-p2 card opened product-form; p-b2cprice input pre-filled 21.9, p-stock present (empty for p2). Cost invariant holds; all critical B2C paths function end-to-end.\n\nDeprecated packages detected: none new. Cleanup: deleted S-2026-00002 (only UI-created shop order), reset counters._id='shop' seq to 0, verified settings restored to {50.0, 4.90}, verified all 4 products retain seed b2cPrice (p1=19.90, p2=21.90, p3=14.90, p4=24.90) and cost still stored server-side (11.50/15.35/7.40/14.20) but never leaked to public/sales/customer.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/shop catalog", "issues": ["All 4 seeded products have empty imageUrl → the ImageSquare placeholder icon renders. Not a bug (feature-conditional), but E1 may want to seed product imageUrl for polish."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration10.py",
+    "/app/test_reports/pytest/pytest_iter10.xml"
+  ],
+  "action_items": [
+    "No functional issues found in the B2C shop MVP. All acceptance criteria verified.",
+    "Optional polish: seed imageUrl for p1..p4 so the /shop catalog cards show actual product images instead of the empty-thumb icon.",
+    "Optional (not blocking): tighten email validation on backend — currently only checks for '@' in customer.email; consider Pydantic EmailStr for stricter validation.",
+    "Optional (not blocking): the on-catalog banner text mixes the '·' separator inline; if desired, move 'Gratis-Versand ab X' and 'sonst Y Versand' onto two lines for smaller devices."
+  ],
+  "critical_code_review_comments": [
+    "backend/app/routers/shop.py:26 shop_products — projection whitelist correctly omits cost/salesFloor/absoluteFloor/standardPrice/discountTiers/active. Good.",
+    "backend/app/routers/shop.py:52 create_shop_order — server recomputes price from DB.b2cPrice; ignores any client-provided price; validates name+email+non-empty cart; correct shipping math (>=threshold => 0 else fee). Uses next_seq('shop') for S-YYYY-##### IDs. Correct.",
+    "backend/app/routers/shop.py:87 checkout — wraps stripe.checkout.Session.create in run_in_threadpool + try/except; returns 502 on failure (matches placeholder STRIPE_API_KEY behavior). Persists stripeSessionId on success. Correct.",
+    "backend/app/routers/shop.py:118 payment-status — retrieves session and flips paymentStatus to 'Bezahlt' when Stripe reports 'paid'. Correct.",
+    "backend/app/routers/shop.py:44 shop_settings_put — admin-only via require_roles('admin'); writes to settings.{_id:'shop'} with upsert; audits 'shop.settings'. Correct.",
+    "backend/app/routers/shop.py:137 list_shop_orders — admin+sales only; sorts by createdAt desc; strip_id removes MongoDB _id. Correct.",
+    "backend/app/models.py:86 ShopSettingsIn / ShopOrderIn / ShopCustomerIn / ShopItemIn — clean Pydantic models with sensible defaults.",
+    "frontend/app/login.tsx:139 to-shop-link — Pressable navigates to /shop; renders unconditionally (works without auth). Correct.",
+    "frontend/app/shop/index.tsx — public useQuery uses apiGet('/shop/products') & '/shop/settings' without auth; add-to-cart via cart.add(p.id, 1); badge count from cart.count. Correct.",
+    "frontend/app/shop/warenkorb.tsx:43 checkout — sends items+customer to /shop/orders, then optionally calls /checkout; wraps Stripe call in try/except so 502 shows friendly Alert but the order is still confirmed via done state (cart.clear + setDone). Excellent UX.",
+    "frontend/app/shop/warenkorb.tsx:141 'Noch X bis zum Gratis-Versand' — client displays delta; server is the source of truth for actual shipping. Good.",
+    "frontend/app/shop-admin.tsx — admin screen with shop-threshold, shop-fee, shop-settings-save + shop-order-{id} list rendering. Correct.",
+    "frontend/app/produkte.tsx:319 p-stock, :322 p-b2cprice — both fields present in edit form; state maps to form.b2cPrice/form.stock; PUT to /api/products/{id} sends parsed number. Correct.",
+    "Public shop routes are correctly registered on api_router (prefix /api). No 'cost' leak found across public/sales/customer product responses."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration10.py",
+    "/app/test_reports/pytest/pytest_iter10.xml",
+    "/app/test_reports/iteration_10.json"
+  ],
+  "success_rate": {
+    "backend": "100% (22/22 pytest, run with -n0)",
+    "frontend": "100% — to-shop-link → guest catalog → cart math → checkout (Stripe 502 handled) → shop-done confirmation with order number; admin shop-admin renders threshold/fee/save + shop-order list; produkte edit form exposes p-b2cprice and p-stock."
+  },
+  "seed_data_creation": "Ephemeral only. Pytest created ~5 test shop orders (small, over-threshold, recalc, checkout) and 1 UI-flow shop order (S-2026-00002 total 48,70 €). All shop_orders deleted; counters._id='shop' reset to seq=0; settings restored to {freeShippingThreshold:50.0, shippingFee:4.90}. Product b2cPrice values preserved (p1=19.90, p2=21.90, p3=14.90, p4=24.90). Cost values intact in DB but never exposed to public/sales/customer.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iter 10 delivered public B2C shop. Public endpoints (NO auth): GET /api/shop/products, GET /api/shop/settings, POST /api/shop/orders, POST /api/shop/orders/{id}/checkout, GET /api/shop/orders/{id}/payment-status. Admin/sales: GET /api/shop/orders. Admin-only: PUT /api/shop/settings. Frontend routes: /shop (public catalog, testIDs: shop-back, shop-cart-button, shop-product-{pid}, shop-add-{pid}), /shop/warenkorb (cart + address form, testIDs: cart-back, cart-line-{pid}, cart-minus-{pid}, cart-plus-{pid}, cart-del-{pid}, cust-name/email/phone/street/zip/city, shop-checkout, shop-done), /shop-admin (admin: shop-threshold, shop-fee, shop-settings-save, shop-order-{id}). Login screen adds to-shop-link. Products edit form (Mehr→Produkte→tap card) has p-b2cprice + p-stock fields. Stripe checkout returns 502 in preview (placeholder key sk_test_emergent) — this is EXPECTED, not a bug; the frontend handles it gracefully by showing an Alert and still confirming the order via shop-done. Run backend tests with `pytest backend/tests/test_iteration10.py -n0`. Cost invariant fully preserved across all shop/products endpoints for all roles.",
+  "rca_of_issue": "No bugs found in this iteration. All 22 backend assertions and the full frontend guest checkout flow (login screen → to-shop-link → catalog → cart with correct shipping math → checkout with Stripe-502 handling → shop-done confirmation with order number) pass on mobile viewport 390x844."
+}

@@ -135,6 +135,14 @@ export default function Login() {
             >
               <Text style={styles.forgotLink}>Passwort vergessen?</Text>
             </Pressable>
+            <Pressable
+              testID="to-shop-link"
+              onPress={() => router.push("/shop")}
+              hitSlop={8}
+              style={styles.shopLink}
+            >
+              <Text style={styles.shopLinkText}>🛒  Zum Kaffee-Shop (ohne Login)</Text>
+            </Pressable>
           </View>
 
           <Text style={styles.demoTitle}>Demo-Konten</Text>
@@ -181,6 +189,8 @@ const useStyles = makeStyles((c) => ({
   form: { gap: 8 },
   fieldLabel: { fontSize: 13, fontWeight: "700", color: c.onSurfaceSecondary, marginTop: 6 },
   forgotLink: { color: c.brandPrimary, fontWeight: "700", fontSize: 14 },
+  shopLink: { alignSelf: "center", marginTop: 16, paddingVertical: 12, paddingHorizontal: 18, borderRadius: 12, backgroundColor: c.brandTertiary },
+  shopLinkText: { color: c.brandPrimary, fontWeight: "800", fontSize: 15 },
   error: { color: c.error, fontSize: 14, fontWeight: "600", marginTop: 4 },
   demoTitle: { fontSize: 13, fontWeight: "700", color: c.muted, marginTop: 24, marginBottom: 10 },
   demoRow: { flexDirection: "row", gap: 10 },

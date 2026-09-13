@@ -8,6 +8,7 @@ import { StatusBar } from "expo-status-bar";
 import { ErrorBoundary } from "@/src/components/error-boundary";
 import { queryClient } from "@/src/query-client";
 import { AuthProvider } from "@/src/auth/auth";
+import { CartProvider } from "@/src/shop/cart";
 
 LogBox.ignoreAllLogs(true);
 
@@ -18,20 +19,25 @@ export default function RootLayout() {
         <SafeAreaProvider>
           <QueryClientProvider client={queryClient}>
             <AuthProvider>
-              <StatusBar style="dark" />
-              <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "#F4F7FB" } }}>
-                <Stack.Screen name="index" />
-                <Stack.Screen name="login" />
-                <Stack.Screen name="(tabs)" />
-                <Stack.Screen name="kunde/[id]" options={{ presentation: "card" }} />
-                <Stack.Screen name="bestellung/[id]" options={{ presentation: "card" }} />
-                <Stack.Screen name="produkte" options={{ presentation: "card" }} />
-                <Stack.Screen name="benutzer" options={{ presentation: "card" }} />
-                <Stack.Screen name="abos" options={{ presentation: "card" }} />
-                <Stack.Screen name="audit" options={{ presentation: "card" }} />
-                <Stack.Screen name="passwort-vergessen" options={{ presentation: "card" }} />
-                <Stack.Screen name="passwort-aendern" options={{ presentation: "card" }} />
-              </Stack>
+              <CartProvider>
+                <StatusBar style="dark" />
+                <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "#F4F7FB" } }}>
+                  <Stack.Screen name="index" />
+                  <Stack.Screen name="login" />
+                  <Stack.Screen name="(tabs)" />
+                  <Stack.Screen name="kunde/[id]" options={{ presentation: "card" }} />
+                  <Stack.Screen name="bestellung/[id]" options={{ presentation: "card" }} />
+                  <Stack.Screen name="produkte" options={{ presentation: "card" }} />
+                  <Stack.Screen name="benutzer" options={{ presentation: "card" }} />
+                  <Stack.Screen name="abos" options={{ presentation: "card" }} />
+                  <Stack.Screen name="audit" options={{ presentation: "card" }} />
+                  <Stack.Screen name="shop-admin" options={{ presentation: "card" }} />
+                  <Stack.Screen name="shop/index" options={{ presentation: "card" }} />
+                  <Stack.Screen name="shop/warenkorb" options={{ presentation: "card" }} />
+                  <Stack.Screen name="passwort-vergessen" options={{ presentation: "card" }} />
+                  <Stack.Screen name="passwort-aendern" options={{ presentation: "card" }} />
+                </Stack>
+              </CartProvider>
             </AuthProvider>
           </QueryClientProvider>
         </SafeAreaProvider>

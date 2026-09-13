@@ -61,6 +61,7 @@ class ProductIn(BaseModel):
     discountTiers: List[DiscountTier] = []
     taxRate: int = 7
     stock: Optional[float] = None
+    b2cPrice: Optional[float] = None
     active: bool = True
 
 
@@ -80,6 +81,30 @@ class ActiveIn(BaseModel):
 
 class StockIn(BaseModel):
     stock: Optional[float] = None
+
+
+class ShopSettingsIn(BaseModel):
+    freeShippingThreshold: float = 50.0
+    shippingFee: float = 4.90
+
+
+class ShopCustomerIn(BaseModel):
+    name: str
+    email: str
+    phone: str = ""
+    street: str = ""
+    zip: str = ""
+    city: str = ""
+
+
+class ShopItemIn(BaseModel):
+    productId: str
+    qty: float
+
+
+class ShopOrderIn(BaseModel):
+    items: List[ShopItemIn]
+    customer: ShopCustomerIn
 
 
 class NewCompanyIn(BaseModel):
