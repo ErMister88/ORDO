@@ -2,17 +2,19 @@ import { useMemo, useState } from "react";
 import { View, Text, ScrollView, Pressable, KeyboardAvoidingView, Platform } from "react-native";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocalSearchParams } from "expo-router";
-import { CaretDown } from "phosphor-react-native";
+import { CaretDown, Export } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
 import { apiGet, apiPost } from "@/src/api/client";
 import { euro, num } from "@/src/lib/format";
+import { shareOfferPdf } from "@/src/lib/pdf";
 import { ScreenHeader } from "@/src/components/screen-header";
 import { Card, Input, Button, StatusBadge, SectionTitle, EmptyState, Muted } from "@/src/components/ui";
 
 export default function Angebote() {
   const styles = useStyles();
+  const { colors } = useTheme();
   const { user } = useAuth();
   const qc = useQueryClient();
   const params = useLocalSearchParams<{ companyId?: string }>();
@@ -79,6 +81,17 @@ export default function Angebote() {
                     {p ? `${p.brand} ${p.name}` : i.productId} · {num(i.qty)} kg · {euro(i.price)}/kg
                   </Muted>
                   {o.reason ? <Muted style={{ fontStyle: "italic" }}>{`„${o.reason}"`}</Muted> : null}
+
+                  {o.status === "Freigegeben" && (
+                    <Pressable
+                      testID={`share-offer-${o.id}`}
+                      style={styles.shareBtn}
+                      onPress={() => shareOfferPdf(o, comp, prodMap)}
+                    >
+                      <Export size={16} color={colors.brandPrimary} weight="bold" />
+                      <Text style={styles.shareText}>Als PDF teilen</Text>
+                    </Pressable>
+                  )}
 
                   {isAdmin && o.status === "Freigabe nötig" && (
                     <View style={styles.actions}>
@@ -310,4 +323,15 @@ const useStyles = makeStyles((c) => ({
   offerCompany: { fontSize: 14, fontWeight: "700", color: c.brandPrimary },
   actions: { gap: 10, marginTop: 6, borderTopWidth: 1, borderTopColor: c.divider, paddingTop: 10 },
   actionRow: { flexDirection: "row", gap: 10 },
+  shareBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    marginTop: 4,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: c.brandTertiary,
+  },
+  shareText: { color: c.brandPrimary, fontWeight: "700", fontSize: 14 },
 }));

@@ -1,12 +1,13 @@
 import { View, Text, ScrollView, Pressable } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
-import { SignOut, FileText, Receipt } from "phosphor-react-native";
+import { SignOut, FileText, Receipt, Export } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
 import { apiGet } from "@/src/api/client";
 import { euro, num, dateDE } from "@/src/lib/format";
+import { shareInvoicePdf } from "@/src/lib/pdf";
 import { ScreenHeader } from "@/src/components/screen-header";
 import { Card, InfoRow, StatusBadge, SectionTitle, EmptyState, Muted } from "@/src/components/ui";
 
@@ -19,6 +20,11 @@ export default function Mehr() {
   const contracts = useQuery({ queryKey: ["contracts"], queryFn: () => apiGet("/contracts") });
   const invoices = useQuery({ queryKey: ["invoices"], queryFn: () => apiGet("/invoices") });
   const products = useQuery({ queryKey: ["products"], queryFn: () => apiGet("/products") });
+  const company = useQuery({
+    queryKey: ["company", user?.companyId],
+    queryFn: () => apiGet(`/companies/${user?.companyId}`),
+    enabled: !!user?.companyId,
+  });
 
   const prodMap: Record<string, any> = {};
   (products.data ?? []).forEach((p: any) => (prodMap[p.id] = p));
@@ -72,6 +78,14 @@ export default function Mehr() {
               <Muted>
                 {dateDE(inv.date)} · {euro(inv.amount)}
               </Muted>
+              <Pressable
+                testID={`invoice-pdf-${inv.id}`}
+                style={styles.pdfBtn}
+                onPress={() => shareInvoicePdf(inv, company.data)}
+              >
+                <Export size={16} color={colors.brandPrimary} weight="bold" />
+                <Text style={styles.pdfText}>Öffnen / Herunterladen</Text>
+              </Pressable>
             </Card>
           ))
         )}
@@ -91,6 +105,17 @@ const useStyles = makeStyles((c) => ({
   sectionHead: { flexDirection: "row", alignItems: "center", gap: 8 },
   title: { fontSize: 15, fontWeight: "800", color: c.onSurface },
   invTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  pdfBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    marginTop: 6,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: c.brandTertiary,
+  },
+  pdfText: { color: c.brandPrimary, fontWeight: "700", fontSize: 14 },
   logout: {
     flexDirection: "row",
     alignItems: "center",

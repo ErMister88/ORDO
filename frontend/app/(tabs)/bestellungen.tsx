@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { View, Text, ScrollView, KeyboardAvoidingView, Platform, Pressable } from "react-native";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useRouter } from "expo-router";
 import { Minus, Plus } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
@@ -16,6 +17,7 @@ export default function Bestellungen() {
   const { user } = useAuth();
   const qc = useQueryClient();
   const companyId = user?.companyId;
+  const router = useRouter();
 
   const orders = useQuery({ queryKey: ["orders"], queryFn: () => apiGet("/orders") });
   const products = useQuery({ queryKey: ["products"], queryFn: () => apiGet("/products") });
@@ -95,15 +97,17 @@ export default function Bestellungen() {
             (orders.data ?? []).map((o: any) => {
               const total = o.items.reduce((a: number, i: any) => a + i.price * i.qty, 0);
               return (
-                <Card key={o.id} testID={`order-${o.id}`}>
-                  <View style={styles.orderTop}>
-                    <Text style={styles.prodTitle}>{o.id}</Text>
-                    <StatusBadge status={o.status} />
-                  </View>
-                  <Muted>
-                    {dateDE(o.createdAt)} · {num(o.items[0]?.qty)} kg · {euro(total)} netto
-                  </Muted>
-                </Card>
+                <Pressable key={o.id} testID={`order-${o.id}`} onPress={() => router.push(`/bestellung/${o.id}`)}>
+                  <Card>
+                    <View style={styles.orderTop}>
+                      <Text style={styles.prodTitle}>{o.id}</Text>
+                      <StatusBadge status={o.status} />
+                    </View>
+                    <Muted>
+                      {dateDE(o.createdAt)} · {num(o.items[0]?.qty)} kg · {euro(total)} netto
+                    </Muted>
+                  </Card>
+                </Pressable>
               );
             })
           )}

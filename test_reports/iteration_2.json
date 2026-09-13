@@ -1,0 +1,48 @@
+{
+  "summary": "Iteration 2 tested (products CRUD, customer-prices, order status flow, PDF sharing). Backend: 43/43 pytest cases pass (26 regression + 17 new) after DB cleanup. All new endpoints work correctly: POST/PUT /api/products role-gated (admin only, non-admin 403), POST/DELETE /api/customer-prices upserts/removes prices (non-admin 403), GET /api/orders/{id} returns 200/403/404 for permitted/other-company/missing, PUT /api/orders/{id}/status enforces valid ORDER_STATUS_FLOW (400 on bogus, 403 on customer). Unique sequential IDs now use atomic Mongo counter (A-2026-0201, 0202 …) — iteration-1 collision bug fixed. Frontend (mobile 390x844): Produkte screen (header 'products-button' -> /produkte) list, add-product-form (product-form, save-product) creates a product that appears in Sortiment list; tapping product-p1 opens edit form prefilled with Gambilongo/Espresso Bar; Konditionen tab on /kunde/c1 shows price-edit-p1..p4 rows, price-save-p1 persists a valid price (button active), and typing a price below absoluteFloor (14.90) disables save + shows 'Grenze'-warning. Order status timeline (/bestellung/B-2026-00987) renders order-status-card with all 5 stages; admin sees advance-status button that moves Neu→Bestätigt→Kommissioniert; customer sees the same card but NO advance-status button (correct). TWO CRITICAL BUGS: (1) BACKEND product-ID collision — POST /api/products counter starts at 1 and collides with seeded p1-p4, creating duplicate _ids; on a fresh DB, first admin-created product will overwrite the seeded p1 Espresso Bar. Reproduced (2 p1 docs after 1 POST). Needs counter seed. (2) FRONTEND PDF — share-offer-{id} and invoice-pdf-{id} throw an uncaught 'Cannot destructure property uri of undefined' at src/lib/pdf.ts:40 because expo-print's printToFileAsync is not implemented on web. Both share buttons crash the app with a red error overlay on web preview.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/products", "issue": "next_seq('product') counter is not seeded and starts at 1, colliding with seeded p1..p4. First admin-created product overwrites/duplicates p1. Fix: on startup, await db.counters.update_one({'_id':'product'},{'$setOnInsert':{'seq': await db.products.count_documents({})}}, upsert=True) — same pattern already used for 'offer'/'order'. Optionally add unique index on products.id.", "priority": "HIGH"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "src/lib/pdf.ts shareHtml()", "issue": "await Print.printToFileAsync({ html }) returns undefined on web (expo-print printToFileAsync is native-only), causing 'Cannot destructure property uri of undefined' red-screen. Guard for web by using window.print()/blob URL, or Print.printAsync({html}), or feature-detect the result before destructuring.", "testID": "share-offer-{id}, invoice-pdf-{id}", "priority": "HIGH"}
+    ],
+    "integration_issues": [
+      {"flow": "Angebot PDF share (approved offer -> share-offer-{id})", "issue": "Uncaught error on web preview when tapping share button. All 8 share-offer-* buttons render but crash on click.", "affected_testIDs": ["share-offer-A-2026-0211", "share-offer-A-2026-0210"]},
+      {"flow": "Rechnung PDF (customer Mehr -> invoice-pdf-{id})", "issue": "Same uri-undefined error on web when tapping invoice-pdf. Both invoice-pdf-RE-2026-0987 and -0921 crash.", "affected_testIDs": ["invoice-pdf-RE-2026-0987", "invoice-pdf-RE-2026-0921"]}
+    ],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_ss_backend.py",
+    "/app/backend/tests/test_iteration2.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "server.py seed(): seed the 'product' counter (e.g. await db.counters.update_one({'_id':'product'},{'$setOnInsert':{'seq': 4}}, upsert=True) after seeding products) AND add unique index on products.id to guarantee no duplicates.",
+    "src/lib/pdf.ts shareHtml(): fix web PDF generation. Option A – use `if (Platform.OS === 'web') { const win = window.open(''); win.document.write(html); win.print(); return; }` before Print.printToFileAsync. Option B – use `Print.printAsync({ html })` on web (opens browser print dialog). Also add try/catch to avoid red-screen crash.",
+    "Consider adding an idempotent cleanup or test-only endpoint so seed data (p1..p4) stays stable when admins are experimenting with products."
+  ],
+  "critical_code_review_comments": [
+    "server.py:231 create_product uses next_seq('product') but counter is never seeded — will collide with seeded p1..p4 on fresh DB.",
+    "server.py has no unique index on products.id (unlike offers/orders which have uniq_offer_id / uniq_order_id).",
+    "src/lib/pdf.ts:40 destructures printToFileAsync result without null-check; expo-print docs note printToFileAsync is not supported on web.",
+    "server.py PUT /api/products/{id} accepts a full ProductIn body — cannot partially update a single field (e.g. toggle active) without resending everything. Consider a PATCH variant.",
+    "server.py:687 @app.on_event('startup') is deprecated in FastAPI; consider lifespan handler."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration2.py",
+    "/app/test_reports/iteration_2.json"
+  ],
+  "success_rate": {"backend": "100% (43/43 after DB cleanup)", "frontend": "~85% — 2 flows crash on web (share-offer, invoice-pdf); all other flows (products CRUD UI, customer-prices editor, order-status timeline, role gating) pass"},
+  "seed_data_creation": "Cleanup performed: removed TEST_* products, restored seeded p1 Espresso Bar, reset product counter to 4, reset order B-2026-00987 status to 'Neu'.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Header product-management button uses testID='products-button' (NOT 'produkte-button' as in review request). Product form inputs are p-brand / p-name / p-unit / p-standard / p-cost / p-salesfloor / p-absfloor (not the review-request's 'product-*-input' names). Login testIDs are login-email-input / login-password-input / login-submit-button / demo-chip-{admin|vertrieb|kunde}. Backend product counter must be reset if any test creates products (see cleanup script in test_reports).",
+  "rca_of_issue": "Bug 1 (products duplicate id): next_seq('product') is called on POST /api/products but no initial counter document exists, so Mongo find_one_and_update with upsert=True and $inc:1 creates {seq:1} and returns 1 → new product gets id 'p1' — a duplicate of the seeded p1. Reproduced by inserting one product via UI/API and querying db.products.find({id:'p1'}).count() → 2. Fix: seed the counter to match seeded products count, and add unique index on products.id. Bug 2 (PDF share crash): expo-print's printToFileAsync method has no web implementation; on web it resolves to undefined, so `const { uri } = await Print.printToFileAsync(...)` throws. Fix: platform-branch in shareHtml() before destructuring (use window.print / blob URL / Print.printAsync on web) and wrap in try/catch."
+}

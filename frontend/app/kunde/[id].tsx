@@ -1,22 +1,25 @@
 import { useState } from "react";
 import { View, Text, ScrollView, Pressable } from "react-native";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArrowLeft, Phone, EnvelopeSimple, MapPin } from "phosphor-react-native";
+import { ArrowLeft, Phone, EnvelopeSimple, MapPin, Check } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
-import { apiGet } from "@/src/api/client";
+import { useAuth } from "@/src/auth/auth";
+import { apiGet, apiPost } from "@/src/api/client";
 import { euro, num, dateDE } from "@/src/lib/format";
-import { Card, InfoRow, Button, StatusBadge, EmptyState, Muted } from "@/src/components/ui";
+import { Card, InfoRow, Button, Input, StatusBadge, EmptyState, Muted } from "@/src/components/ui";
 
 export default function KundeDetail() {
   const styles = useStyles();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { user } = useAuth();
   const { id } = useLocalSearchParams<{ id: string }>();
   const [tab, setTab] = useState<"konditionen" | "historie">("konditionen");
+  const isAdmin = user?.role === "admin";
 
   const company = useQuery({ queryKey: ["company", id], queryFn: () => apiGet(`/companies/${id}`) });
   const prices = useQuery({ queryKey: ["prices", id], queryFn: () => apiGet(`/companies/${id}/prices`) });
@@ -79,7 +82,13 @@ export default function KundeDetail() {
         </View>
 
         {tab === "konditionen" ? (
-          (prices.data ?? []).length === 0 ? (
+          isAdmin ? (
+            <AdminConditions
+              companyId={id!}
+              products={products.data ?? []}
+              prices={prices.data ?? []}
+            />
+          ) : (prices.data ?? []).length === 0 ? (
             <Muted>Keine individuellen Konditionen hinterlegt.</Muted>
           ) : (
             (prices.data ?? []).map((cp: any) => {
@@ -102,14 +111,16 @@ export default function KundeDetail() {
           custOrders.map((o: any) => {
             const total = o.items.reduce((a: number, i: any) => a + i.price * i.qty, 0);
             return (
-              <Card key={o.id} testID={`order-${o.id}`}>
-                <View style={styles.orderTop}>
-                  <Text style={styles.prodTitle}>{o.id}</Text>
-                  <StatusBadge status={o.status} />
-                </View>
-                <InfoRow label="Datum" value={dateDE(o.createdAt)} />
-                <InfoRow label="Betrag" value={`${euro(total)} netto`} />
-              </Card>
+              <Pressable key={o.id} testID={`order-${o.id}`} onPress={() => router.push(`/bestellung/${o.id}`)}>
+                <Card>
+                  <View style={styles.orderTop}>
+                    <Text style={styles.prodTitle}>{o.id}</Text>
+                    <StatusBadge status={o.status} />
+                  </View>
+                  <InfoRow label="Datum" value={dateDE(o.createdAt)} />
+                  <InfoRow label="Betrag" value={`${euro(total)} netto`} />
+                </Card>
+              </Pressable>
             );
           })
         )}
@@ -125,6 +136,103 @@ export default function KundeDetail() {
     </View>
   );
 }
+
+function AdminConditions({
+  companyId,
+  products,
+  prices,
+}: {
+  companyId: string;
+  products: any[];
+  prices: any[];
+}) {
+  const qc = useQueryClient();
+  const priceMap: Record<string, number> = {};
+  prices.forEach((cp: any) => (priceMap[cp.productId] = cp.price));
+
+  return (
+    <>
+      <Muted>Kundenpreise festlegen. Leer = Standardpreis gilt.</Muted>
+      {products.map((p: any) => (
+        <PriceEditorRow
+          key={p.id}
+          product={p}
+          companyId={companyId}
+          initial={priceMap[p.id]}
+          onSaved={() => qc.invalidateQueries({ queryKey: ["prices", companyId] })}
+        />
+      ))}
+    </>
+  );
+}
+
+function PriceEditorRow({
+  product,
+  companyId,
+  initial,
+  onSaved,
+}: {
+  product: any;
+  companyId: string;
+  initial?: number;
+  onSaved: () => void;
+}) {
+  const styles = useStyles();
+  const { colors } = useTheme();
+  const [val, setVal] = useState(initial != null ? String(initial) : "");
+  const [saved, setSaved] = useState(false);
+
+  const save = useMutation({
+    mutationFn: () =>
+      apiPost("/customer-prices", {
+        companyId,
+        productId: product.id,
+        price: Number((val || "").replace(",", ".")),
+      }),
+    onSuccess: () => {
+      setSaved(true);
+      onSaved();
+      setTimeout(() => setSaved(false), 1500);
+    },
+  });
+
+  const parsed = Number((val || "").replace(",", "."));
+  const belowFloor = parsed && parsed < product.absoluteFloor;
+
+  return (
+    <Card testID={`price-edit-${product.id}`}>
+      <Text style={styles.prodTitle}>
+        {product.brand} {product.name}
+      </Text>
+      <Muted>
+        Standard {euro(product.standardPrice)} · Grenze {euro(product.absoluteFloor)}
+      </Muted>
+      <View style={styles.priceRow}>
+        <Input
+          testID={`price-input-${product.id}`}
+          value={val}
+          onChangeText={setVal}
+          keyboardType="decimal-pad"
+          placeholder={`${product.standardPrice}`}
+          style={{ flex: 1 }}
+        />
+        <Pressable
+          testID={`price-save-${product.id}`}
+          disabled={!!belowFloor || save.isPending}
+          onPress={() => save.mutate()}
+          style={[styles.priceSave, (belowFloor || save.isPending) && { opacity: 0.5 }]}
+        >
+          <Check size={18} color={colors.onBrandPrimary} weight="bold" />
+        </Pressable>
+      </View>
+      {saved ? <Text style={[styles.savedTxt, { color: colors.success }]}>Gespeichert</Text> : null}
+      {belowFloor ? (
+        <Text style={[styles.savedTxt, { color: colors.error }]}>Unter absoluter Preisgrenze</Text>
+      ) : null}
+    </Card>
+  );
+}
+
 
 const useStyles = makeStyles((c) => ({
   root: { flex: 1, backgroundColor: c.surfaceSecondary },
@@ -165,6 +273,16 @@ const useStyles = makeStyles((c) => ({
   segTextActive: { color: c.onSurface },
   prodTitle: { fontSize: 15, fontWeight: "800", color: c.onSurface },
   orderTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  priceRow: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 4 },
+  priceSave: {
+    width: 50,
+    height: 50,
+    borderRadius: 12,
+    backgroundColor: c.brandPrimary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  savedTxt: { fontSize: 13, fontWeight: "700", marginTop: 4 },
   footer: {
     padding: 20,
     paddingTop: 12,

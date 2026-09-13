@@ -102,6 +102,30 @@ class DecisionIn(BaseModel):
     note: Optional[str] = ""
 
 
+class ProductIn(BaseModel):
+    brand: str
+    name: str
+    unit: str = "kg"
+    standardPrice: float
+    salesFloor: float
+    absoluteFloor: float
+    cost: float
+    active: bool = True
+
+
+class CustomerPriceIn(BaseModel):
+    companyId: str
+    productId: str
+    price: float
+
+
+class OrderStatusIn(BaseModel):
+    status: str
+
+
+ORDER_STATUS_FLOW = ["Neu", "Bestätigt", "Kommissioniert", "Versendet", "Abgeschlossen"]
+
+
 def strip_id(doc: dict) -> dict:
     doc = dict(doc)
     doc.pop("_id", None)
@@ -200,6 +224,39 @@ async def get_products(user: Annotated[dict, Depends(current_user)]):
             p.pop("absoluteFloor", None)
         result.append(p)
     return result
+
+
+@api_router.post("/products")
+async def create_product(body: ProductIn, user: Annotated[dict, Depends(require_roles("admin"))]):
+    seq = await next_seq("product")
+    prod = {"id": f"p{seq}", **body.model_dump()}
+    await db.products.insert_one(prod)
+    return strip_id(prod)
+
+
+@api_router.put("/products/{product_id}")
+async def update_product(product_id: str, body: ProductIn, user: Annotated[dict, Depends(require_roles("admin"))]):
+    res = await db.products.update_one({"id": product_id}, {"$set": body.model_dump()})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Produkt nicht gefunden")
+    p = await db.products.find_one({"id": product_id})
+    return strip_id(p)
+
+
+@api_router.post("/customer-prices")
+async def upsert_customer_price(body: CustomerPriceIn, user: Annotated[dict, Depends(require_roles("admin"))]):
+    await db.customer_prices.update_one(
+        {"companyId": body.companyId, "productId": body.productId},
+        {"$set": {"price": body.price}},
+        upsert=True,
+    )
+    return {"ok": True, **body.model_dump()}
+
+
+@api_router.delete("/customer-prices")
+async def delete_customer_price(companyId: str, productId: str, user: Annotated[dict, Depends(require_roles("admin"))]):
+    await db.customer_prices.delete_one({"companyId": companyId, "productId": productId})
+    return {"ok": True}
 
 
 # --------------------------------------------------------------------------
@@ -333,6 +390,31 @@ async def create_order(body: OrderCreate, user: Annotated[dict, Depends(current_
     }
     await db.orders.insert_one(order)
     return strip_id(order)
+
+
+@api_router.get("/orders/{order_id}")
+async def get_order(order_id: str, user: Annotated[dict, Depends(current_user)]):
+    o = await db.orders.find_one({"id": order_id})
+    if not o:
+        raise HTTPException(status_code=404, detail="Bestellung nicht gefunden")
+    ids = await visible_company_ids(user)
+    if o["companyId"] not in ids:
+        raise HTTPException(status_code=403, detail="Keine Berechtigung")
+    return strip_id(o)
+
+
+@api_router.put("/orders/{order_id}/status")
+async def set_order_status(order_id: str, body: OrderStatusIn, user: Annotated[dict, Depends(require_roles("admin", "sales"))]):
+    if body.status not in ORDER_STATUS_FLOW:
+        raise HTTPException(status_code=400, detail="Ungültiger Status")
+    o = await db.orders.find_one({"id": order_id})
+    if not o:
+        raise HTTPException(status_code=404, detail="Bestellung nicht gefunden")
+    ids = await visible_company_ids(user)
+    if o["companyId"] not in ids:
+        raise HTTPException(status_code=403, detail="Keine Berechtigung")
+    await db.orders.update_one({"id": order_id}, {"$set": {"status": body.status}})
+    return {"ok": True, "status": body.status}
 
 
 # --------------------------------------------------------------------------
@@ -594,10 +676,15 @@ async def seed():
     # unique indexes + counter starting points (above seeded IDs)
     await db.offers.create_index("id", unique=True, name="uniq_offer_id")
     await db.orders.create_index("id", unique=True, name="uniq_order_id")
+    await db.products.create_index("id", unique=True, name="uniq_product_id")
     if await db.counters.find_one({"_id": "offer"}) is None:
         await db.counters.insert_one({"_id": "offer", "seq": 200})
     if await db.counters.find_one({"_id": "order"}) is None:
         await db.counters.insert_one({"_id": "order", "seq": 1000})
+    if await db.counters.find_one({"_id": "product"}) is None:
+        # start above the highest seeded product number so new ids never collide
+        prod_ids = [int(p["id"][1:]) for p in await db.products.find().to_list(1000) if p.get("id", "").startswith("p") and p["id"][1:].isdigit()]
+        await db.counters.insert_one({"_id": "product", "seq": max(prod_ids) if prod_ids else 0})
 
     logger.info("Seeding complete")
 

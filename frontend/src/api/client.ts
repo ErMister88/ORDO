@@ -36,6 +36,17 @@ export async function apiPost<T = any>(path: string, body?: any): Promise<T> {
   return res.json();
 }
 
+export async function apiPut<T = any>(path: string, body?: any): Promise<T> {
+  const headers = await authHeader();
+  const res = await fetch(`${API}/api${path}`, {
+    method: "PUT",
+    headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `Fehler ${res.status}`);
+  return res.json();
+}
+
 export async function loginRequest(email: string, password: string): Promise<{ access_token: string; user: User }> {
   const body = new URLSearchParams({ username: email, password });
   const res = await fetch(`${API}/api/auth/login`, {

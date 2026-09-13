@@ -2,7 +2,7 @@ import { useCallback } from "react";
 import { View, Text, ScrollView, RefreshControl, Pressable } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
-import { SignOut, Warning, ArrowRight, Coffee } from "phosphor-react-native";
+import { SignOut, Warning, ArrowRight, Coffee, Package } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
@@ -36,9 +36,16 @@ export default function Dashboard() {
         title={user?.role === "customer" ? "Willkommen" : "Übersicht"}
         subtitle={`${user?.name} · ${roleLabel}`}
         right={
-          <HeaderButton onPress={onSignOut} testID="logout-button">
-            <SignOut size={20} color={colors.onSurfaceSecondary} weight="bold" />
-          </HeaderButton>
+          <View style={styles.headerBtns}>
+            {user?.role === "admin" && (
+              <HeaderButton onPress={() => router.push("/produkte")} testID="products-button">
+                <Package size={20} color={colors.onSurfaceSecondary} weight="bold" />
+              </HeaderButton>
+            )}
+            <HeaderButton onPress={onSignOut} testID="logout-button">
+              <SignOut size={20} color={colors.onSurfaceSecondary} weight="bold" />
+            </HeaderButton>
+          </View>
         }
       />
 
@@ -173,6 +180,7 @@ function CustomerDash({ data }: { data: any }) {
 const useStyles = makeStyles((c) => ({
   root: { flex: 1, backgroundColor: c.surfaceSecondary },
   content: { padding: 20, paddingBottom: 32, gap: 12 },
+  headerBtns: { flexDirection: "row", gap: 8 },
   hero: {
     backgroundColor: c.brand,
     borderRadius: 20,

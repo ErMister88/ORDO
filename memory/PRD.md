@@ -43,5 +43,5 @@
 - **P2**: Multi-item offers/orders (currently single line item in UI).
 
 ## Next Tasks
-- Add offer/invoice PDF + share.
-- Product & price management screens for admin.
+- Multi-line-item offers in the UI.
+- Delivery date / tracking number on shipped orders.
