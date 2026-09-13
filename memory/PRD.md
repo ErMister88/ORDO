@@ -154,3 +154,10 @@ Backend split into a package: `backend/app/` with `core.py` (config/db/security)
 - **Auto-Kaffeebindung**: Annahme eines Leasing-Angebots legt automatisch einen Kaffeeliefervertrag an (`db.contracts`, `source=machine_leasing`, machine/machineRate/minQtyMonth/termMonths); erscheint in „Verträge". Idempotent (kein Duplikat). Finanzierung erzeugt keinen Vertrag.
 - **Kaufbeleg-PDF**: nach bezahltem Sofortkauf via `shareMachineInvoicePdf` (`invoice-pdf-<id>`, 19% MwSt-Ausweis).
 - Backend 7/7 pytest (`tests/test_iteration17.py`), Frontend verifiziert.
+
+## Implemented (2026-06-13, Iteration 18) — Leasing-Details: Kaffeewahl, Pflichtbindung, Ablehnen/Rückfrage, Admin-Übersicht
+- **Kaffee im Leasing wählen**: Admin wählt im Leasing-Angebot Kaffeesorte (Produkt-Chips) + Preis/kg; fließt in den Auto-Kaffeeliefervertrag (`productId`, `price`).
+- **Pflichtfeld Kaffeebindung**: Leasing-Angebot erfordert `minCoffeeKgMonth`>0, `productId` und `coffeePricePerKg`>0 (Backend 400 + Frontend-Validierung).
+- **Ablehnen/Rückfrage**: `POST /machine-requests/{id}/respond` (`decline`→„Abgelehnt", `question`→„Rückfrage" + `questions[]`). Kundenscreen: Buttons Annehmen/Ablehnen/Rückfrage (+Eingabe). Admin sieht Rückfragen im Anfrage-Card.
+- **Leasing-Vertragsübersicht (Admin)**: `GET /machines/leasing-contracts` (admin/sales) gebündelt mit Firma + Kaffeesorte; Sektion in `maschinen-admin.tsx`.
+- Backend 15/15 pytest (`tests/test_iteration18.py`), Frontend verifiziert.

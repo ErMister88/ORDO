@@ -11,7 +11,7 @@ import { makeStyles, useTheme } from "@/src/theme";
 import { apiGet, apiPost, fileUrl } from "@/src/api/client";
 import { euro } from "@/src/lib/format";
 import { shareMachineContractPdf, shareMachineInvoicePdf } from "@/src/lib/pdf";
-import { Card, Button, SectionTitle, Muted, EmptyState, InfoRow, StatusBadge } from "@/src/components/ui";
+import { Card, Button, Input, SectionTitle, Muted, EmptyState, InfoRow, StatusBadge } from "@/src/components/ui";
 
 const TERMS = [24, 36, 48];
 
@@ -47,6 +47,14 @@ export default function Maschinen() {
     onSuccess: () => { refresh(); Alert.alert("Angebot angenommen", "Vielen Dank! Wir setzen uns mit Ihnen in Verbindung."); },
     onError: (e: any) => Alert.alert("Fehler", e.message || "Konnte nicht angenommen werden"),
   });
+
+  const respond = useMutation({
+    mutationFn: (b: { id: string; action: string; message?: string }) =>
+      apiPost(`/machine-requests/${b.id}/respond`, { action: b.action, message: b.message ?? "" }),
+    onSuccess: () => { setQ(null); refresh(); },
+    onError: (e: any) => Alert.alert("Fehler", e.message || "Aktion fehlgeschlagen"),
+  });
+  const [q, setQ] = useState<{ id: string; text: string } | null>(null);
 
   const buy = async (machineId: string) => {
     setPayingId(machineId);
@@ -218,13 +226,58 @@ export default function Maschinen() {
                   {r.terms.downPayment != null ? <InfoRow label="Anzahlung" value={euro(r.terms.downPayment)} /> : null}
                   {r.terms.monthlyRate != null ? <InfoRow label={`Monatsrate (${r.terms.termMonths} Mon.)`} value={euro(r.terms.monthlyRate)} /> : null}
                   {r.terms.finalPayment != null ? <InfoRow label="Schlussrate (Übernahme)" value={euro(r.terms.finalPayment)} /> : null}
+                  {r.terms.coffeeName ? <InfoRow label="Kaffeesorte" value={r.terms.coffeeName} /> : null}
+                  {r.terms.coffeePricePerKg != null ? <InfoRow label="Kaffeepreis" value={`${euro(r.terms.coffeePricePerKg)}/kg`} /> : null}
                   {r.terms.minCoffeeKgMonth != null ? <InfoRow label="Kaffee-Mindestabnahme" value={`${r.terms.minCoffeeKgMonth} kg / Monat`} /> : null}
                   {r.terms.note ? <Muted style={{ marginTop: 6 }}>{r.terms.note}</Muted> : null}
                 </View>
               ) : null}
 
               {r.status === "Angebot" ? (
-                <Button testID={`accept-${r.id}`} title="Angebot annehmen" loading={accept.isPending} onPress={() => accept.mutate(r.id)} style={{ marginTop: 10 }} />
+                <>
+                  <Button testID={`accept-${r.id}`} title="Angebot annehmen" loading={accept.isPending} onPress={() => accept.mutate(r.id)} style={{ marginTop: 10 }} />
+                  <View style={styles.actions}>
+                    <Button
+                      testID={`decline-${r.id}`}
+                      title="Ablehnen"
+                      kind="secondary"
+                      onPress={() => Alert.alert("Angebot ablehnen?", "Möchten Sie dieses Angebot wirklich ablehnen?", [
+                        { text: "Abbrechen" },
+                        { text: "Ablehnen", style: "destructive", onPress: () => respond.mutate({ id: r.id, action: "decline" }) },
+                      ])}
+                      style={{ flex: 1 }}
+                    />
+                    <Button
+                      testID={`question-${r.id}`}
+                      title="Rückfrage"
+                      kind="secondary"
+                      onPress={() => setQ(q?.id === r.id ? null : { id: r.id, text: "" })}
+                      style={{ flex: 1 }}
+                    />
+                  </View>
+                  {q?.id === r.id ? (
+                    <View style={{ marginTop: 8 }}>
+                      <Input
+                        testID={`question-input-${r.id}`}
+                        value={q.text}
+                        onChangeText={(v) => setQ({ id: r.id, text: v })}
+                        placeholder="Ihre Frage an unser Team…"
+                        multiline
+                        style={{ minHeight: 60 }}
+                      />
+                      <Button
+                        testID={`question-send-${r.id}`}
+                        title="Frage senden"
+                        loading={respond.isPending}
+                        onPress={() => {
+                          if (!q.text.trim()) { Alert.alert("Frage fehlt", "Bitte eine Frage eingeben."); return; }
+                          respond.mutate({ id: r.id, action: "question", message: q.text.trim() });
+                        }}
+                        style={{ marginTop: 8 }}
+                      />
+                    </View>
+                  ) : null}
+                </>
               ) : null}
               {r.status === "Bestätigt" && r.type !== "kauf" ? (
                 <Pressable testID={`contract-pdf-${r.id}`} style={styles.pdfBtn} onPress={() => shareMachineContractPdf(r)}>

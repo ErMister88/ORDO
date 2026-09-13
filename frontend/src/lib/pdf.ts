@@ -138,6 +138,8 @@ export async function shareMachineContractPdf(req: any) {
   if (t.monthlyRate != null) add("Monatliche Rate", euro(t.monthlyRate));
   if (t.termMonths != null) add("Laufzeit", `${t.termMonths} Monate`);
   if (t.finalPayment != null) add("Schlussrate (Übernahme)", euro(t.finalPayment));
+  if (t.coffeeName) add("Kaffeesorte", t.coffeeName);
+  if (t.coffeePricePerKg != null) add("Kaffeepreis", `${euro(t.coffeePricePerKg)} / kg`);
   if (t.minCoffeeKgMonth != null) add("Kaffee-Mindestabnahme", `${t.minCoffeeKgMonth} kg / Monat`);
   const inner = `
     <h1>${MTYPE[req.type] || "Vertrag"} ${req.id}</h1>

@@ -161,7 +161,14 @@ class MachineTermsIn(BaseModel):
     finalPayment: Optional[float] = None
     termMonths: Optional[int] = None
     minCoffeeKgMonth: Optional[float] = None
+    productId: Optional[str] = None
+    coffeePricePerKg: Optional[float] = None
     note: str = ""
+
+
+class MachineRespondIn(BaseModel):
+    action: str  # "decline" | "question"
+    message: str = ""
 
 
 class ShopRegisterIn(BaseModel):

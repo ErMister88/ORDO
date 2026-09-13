@@ -11,7 +11,7 @@ from starlette.concurrency import run_in_threadpool
 
 from ..core import api_router, db, strip_id, next_seq, logger, audit
 from ..deps import require_roles, current_user, visible_company_ids
-from ..models import MachineIn, MachineRequestIn, MachineTermsIn
+from ..models import MachineIn, MachineRequestIn, MachineTermsIn, MachineRespondIn
 from ..emailer import send_email, email_shell
 
 stripe.api_key = os.environ.get("STRIPE_API_KEY", "")
@@ -137,12 +137,30 @@ async def set_machine_terms(req_id: str, body: MachineTermsIn, user: Annotated[d
     r = await db.machine_requests.find_one({"id": req_id})
     if not r:
         raise HTTPException(status_code=404, detail="Anfrage nicht gefunden")
+    status = body.status or "Angebot"
+    is_lease = r.get("type") == "leasing"
+    # Leasing offers require a complete coffee binding before they can be sent.
+    if is_lease and status == "Angebot":
+        if not body.minCoffeeKgMonth or body.minCoffeeKgMonth <= 0:
+            raise HTTPException(status_code=400, detail="Bitte eine Kaffee-Mindestabnahme größer 0 angeben.")
+        if not body.productId:
+            raise HTTPException(status_code=400, detail="Bitte eine Kaffeesorte für die Kaffeebindung wählen.")
+        if not body.coffeePricePerKg or body.coffeePricePerKg <= 0:
+            raise HTTPException(status_code=400, detail="Bitte einen Kaffeepreis pro kg angeben.")
+
+    coffee_name = ""
+    if body.productId:
+        p = await db.products.find_one({"id": body.productId})
+        if p:
+            coffee_name = f"{p.get('brand', '')} {p.get('name', '')}".strip()
+
     terms = {
         "downPayment": body.downPayment, "monthlyRate": body.monthlyRate,
         "finalPayment": body.finalPayment, "termMonths": body.termMonths or r.get("termMonths"),
-        "minCoffeeKgMonth": body.minCoffeeKgMonth, "note": body.note,
+        "minCoffeeKgMonth": body.minCoffeeKgMonth,
+        "productId": body.productId, "coffeePricePerKg": body.coffeePricePerKg, "coffeeName": coffee_name,
+        "note": body.note,
     }
-    status = body.status or "Angebot"
     await db.machine_requests.update_one({"id": req_id}, {"$set": {"terms": terms, "status": status}})
     await audit(user, "machine_terms", req_id, {"status": status})
 
@@ -157,7 +175,10 @@ async def set_machine_terms(req_id: str, body: MachineTermsIn, user: Annotated[d
             lines.append(f"Schlussrate (Übernahme): {terms['finalPayment']:.2f} &euro;")
         if terms["minCoffeeKgMonth"] is not None:
             lines.append(f"Mindestabnahme Kaffee: {terms['minCoffeeKgMonth']:.0f} kg / Monat")
-        body_html = "".join(f"<li>{escape(x)}</li>" for x in lines)
+        if coffee_name:
+            price_txt = f" à {terms['coffeePricePerKg']:.2f} &euro;/kg" if terms.get("coffeePricePerKg") else ""
+            lines.append(f"Kaffeesorte: {escape(coffee_name)}{price_txt}")
+        body_html = "".join(f"<li>{x}</li>" for x in lines)
         inner = (
             f"<p style='margin:0 0 10px;color:#3A4256'>Ihr Angebot für <strong>{escape(r['machineName'])}</strong> "
             f"({TYPE_LABEL.get(r['type'], r['type'])}):</p>"
@@ -195,11 +216,11 @@ async def accept_machine_offer(req_id: str, user: Annotated[dict, Depends(curren
         await db.contracts.insert_one({
             "id": contract_id,
             "companyId": r["customer"]["companyId"],
-            "productId": None,
+            "productId": t.get("productId"),
             "start": now.date().isoformat(),
             "termMonths": t.get("termMonths") or r.get("termMonths") or 48,
             "minQtyMonth": t.get("minCoffeeKgMonth") or 0,
-            "price": 0,
+            "price": t.get("coffeePricePerKg") or 0,
             "machine": r["machineName"],
             "machineRate": t.get("monthlyRate") or 0,
             "source": "machine_leasing",
@@ -217,6 +238,52 @@ def _owns(r: dict, user: dict, ids: list) -> bool:
     return (user["role"] in ("admin", "sales")
             or r["customer"].get("companyId") in ids
             or r["customer"].get("userId") == user["id"])
+
+
+@api_router.post("/machine-requests/{req_id}/respond")
+async def respond_machine_offer(req_id: str, body: MachineRespondIn, user: Annotated[dict, Depends(current_user)]):
+    r = await db.machine_requests.find_one({"id": req_id})
+    if not r:
+        raise HTTPException(status_code=404, detail="Anfrage nicht gefunden")
+    ids = await visible_company_ids(user)
+    if not _owns(r, user, ids):
+        raise HTTPException(status_code=403, detail="Keine Berechtigung")
+    if body.action not in ("decline", "question"):
+        raise HTTPException(status_code=400, detail="Ungültige Aktion")
+    now = datetime.now(timezone.utc).isoformat()
+    if body.action == "decline":
+        await db.machine_requests.update_one({"id": req_id}, {"$set": {"status": "Abgelehnt"}})
+        await audit(user, "machine_decline", req_id)
+        subject, headline = f"Angebot {req_id} abgelehnt", "Angebot abgelehnt"
+        text = f"Der Kunde hat das Angebot für {escape(r['machineName'])} abgelehnt."
+    else:
+        entry = {"message": body.message, "at": now, "by": user.get("name", "Kunde")}
+        await db.machine_requests.update_one(
+            {"id": req_id}, {"$set": {"status": "Rückfrage"}, "$push": {"questions": entry}})
+        await audit(user, "machine_question", req_id, {"message": body.message})
+        subject, headline = f"Rückfrage zu {req_id}", "Neue Rückfrage"
+        text = f"Rückfrage zu {escape(r['machineName'])}: {escape(body.message)}"
+    try:
+        inner = f"<p style='margin:0;color:#3A4256'>{text}</p>"
+        await send_email(to=r["customer"]["email"], subject=subject,
+                         html=email_shell(headline, "Maschinen-Anfrage", inner))
+    except Exception as e:
+        logger.warning(f"Antwort-Mail fehlgeschlagen: {e}")
+    return strip_id(await db.machine_requests.find_one({"id": req_id}))
+
+
+@api_router.get("/machines/leasing-contracts")
+async def leasing_contracts(user: Annotated[dict, Depends(require_roles("admin", "sales"))]):
+    rows = await db.contracts.find({"source": "machine_leasing"}).sort("start", -1).to_list(1000)
+    out = []
+    for c in rows:
+        company = await db.companies.find_one({"id": c.get("companyId")}) if c.get("companyId") else None
+        prod = await db.products.find_one({"id": c.get("productId")}) if c.get("productId") else None
+        d = strip_id(c)
+        d["companyName"] = company.get("name") if company else ""
+        d["productName"] = f"{prod.get('brand', '')} {prod.get('name', '')}".strip() if prod else ""
+        out.append(d)
+    return out
 
 
 @api_router.post("/machine-requests/{req_id}/checkout")

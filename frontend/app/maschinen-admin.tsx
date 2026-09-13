@@ -10,7 +10,7 @@ import { ArrowLeft, Plus, PencilSimple, Trash, ImageSquare, Camera } from "phosp
 import { makeStyles, useTheme } from "@/src/theme";
 import { apiGet, apiPost, apiPut, apiDelete, apiUpload, fileUrl } from "@/src/api/client";
 import { euro } from "@/src/lib/format";
-import { Card, Input, Button, SectionTitle, Muted, EmptyState, StatusBadge } from "@/src/components/ui";
+import { Card, Input, Button, SectionTitle, Muted, EmptyState, StatusBadge, InfoRow } from "@/src/components/ui";
 
 const EMPTY = { name: "", description: "", price: "", imageUrl: "", active: true };
 
@@ -23,6 +23,8 @@ export default function MaschinenAdmin() {
 
   const machines = useQuery({ queryKey: ["machines"], queryFn: () => apiGet("/machines") });
   const requests = useQuery({ queryKey: ["machine-requests"], queryFn: () => apiGet("/machine-requests") });
+  const products = useQuery({ queryKey: ["products"], queryFn: () => apiGet("/products") });
+  const leasingContracts = useQuery({ queryKey: ["leasing-contracts"], queryFn: () => apiGet("/machines/leasing-contracts") });
 
   const [editing, setEditing] = useState<string | null>(null);
   const [form, setForm] = useState<any>({ ...EMPTY });
@@ -148,7 +150,35 @@ export default function MaschinenAdmin() {
             <EmptyState title="Keine Anfragen" subtitle="Finanzierungs-/Leasing-Anfragen erscheinen hier." />
           ) : (
             (requests.data ?? []).map((r: any) => (
-              <RequestCard key={r.id} r={r} onDone={() => qc.invalidateQueries({ queryKey: ["machine-requests"] })} />
+              <RequestCard
+                key={r.id}
+                r={r}
+                products={products.data ?? []}
+                onDone={() => {
+                  qc.invalidateQueries({ queryKey: ["machine-requests"] });
+                  qc.invalidateQueries({ queryKey: ["leasing-contracts"] });
+                }}
+              />
+            ))
+          )}
+
+          <SectionTitle style={{ marginTop: 8 }}>Leasing-Kaffeeverträge ({leasingContracts.data?.length ?? 0})</SectionTitle>
+          {(leasingContracts.data ?? []).length === 0 ? (
+            <EmptyState title="Keine Leasing-Verträge" subtitle="Aus Leasing-Zusagen entstehen hier automatisch Kaffeelieferverträge." />
+          ) : (
+            (leasingContracts.data ?? []).map((ct: any) => (
+              <Card key={ct.id} testID={`lease-contract-${ct.id}`}>
+                <Text style={styles.mName}>{ct.id}</Text>
+                <Muted>{ct.companyName || "—"}</Muted>
+                <View style={{ marginTop: 8 }}>
+                  <InfoRow label="Maschine" value={ct.machine || "—"} />
+                  <InfoRow label="Leasingrate" value={`${euro(ct.machineRate)}/Monat`} />
+                  <InfoRow label="Kaffee" value={ct.productName || "—"} />
+                  <InfoRow label="Kaffeepreis" value={`${euro(ct.price)}/kg`} />
+                  <InfoRow label="Mindestabnahme" value={`${ct.minQtyMonth} kg/Monat`} />
+                  <InfoRow label="Laufzeit" value={`${ct.termMonths} Monate`} />
+                </View>
+              </Card>
             ))
           )}
         </ScrollView>
@@ -157,7 +187,7 @@ export default function MaschinenAdmin() {
   );
 }
 
-function RequestCard({ r, onDone }: { r: any; onDone: () => void }) {
+function RequestCard({ r, products, onDone }: { r: any; products: any[]; onDone: () => void }) {
   const styles = useStyles();
   const { colors } = useTheme();
   const isLease = r.type === "leasing";
@@ -168,6 +198,8 @@ function RequestCard({ r, onDone }: { r: any; onDone: () => void }) {
     finalPayment: r.terms?.finalPayment != null ? String(r.terms.finalPayment) : "",
     termMonths: String(r.terms?.termMonths ?? r.termMonths ?? 48),
     minCoffeeKgMonth: r.terms?.minCoffeeKgMonth != null ? String(r.terms.minCoffeeKgMonth) : "",
+    productId: r.terms?.productId ?? "",
+    coffeePricePerKg: r.terms?.coffeePricePerKg != null ? String(r.terms.coffeePricePerKg) : "",
     note: r.terms?.note ?? "",
   });
   const set = (k: string) => (v: string) => setT((s: any) => ({ ...s, [k]: v }));
@@ -177,11 +209,28 @@ function RequestCard({ r, onDone }: { r: any; onDone: () => void }) {
     mutationFn: () => apiPut(`/machine-requests/${r.id}`, {
       status: "Angebot",
       downPayment: num(t.downPayment), monthlyRate: num(t.monthlyRate), finalPayment: num(t.finalPayment),
-      termMonths: Number(t.termMonths) || 48, minCoffeeKgMonth: isLease ? num(t.minCoffeeKgMonth) : null, note: t.note,
+      termMonths: Number(t.termMonths) || 48,
+      minCoffeeKgMonth: isLease ? num(t.minCoffeeKgMonth) : null,
+      productId: isLease ? (t.productId || null) : null,
+      coffeePricePerKg: isLease ? num(t.coffeePricePerKg) : null,
+      note: t.note,
     }),
     onSuccess: () => { onDone(); Alert.alert("Angebot gesendet", "Der Kunde wurde per E-Mail informiert."); },
     onError: (e: any) => Alert.alert("Fehler", e.message || "Konnte nicht gesendet werden"),
   });
+
+  const submit = () => {
+    if (isLease) {
+      if (!num(t.minCoffeeKgMonth) || Number(num(t.minCoffeeKgMonth)) <= 0) {
+        Alert.alert("Kaffeebindung nötig", "Bitte eine Kaffee-Mindestabnahme größer 0 angeben."); return;
+      }
+      if (!t.productId) { Alert.alert("Kaffeesorte wählen", "Bitte eine Kaffeesorte für die Bindung wählen."); return; }
+      if (!num(t.coffeePricePerKg) || Number(num(t.coffeePricePerKg)) <= 0) {
+        Alert.alert("Kaffeepreis nötig", "Bitte einen Kaffeepreis pro kg angeben."); return;
+      }
+    }
+    send.mutate();
+  };
 
   const label = isBuy ? "Kauf" : isLease ? "Leasing (Kaffeebindung)" : "Finanzierung";
 
@@ -195,6 +244,15 @@ function RequestCard({ r, onDone }: { r: any; onDone: () => void }) {
       <Muted>{label} · {r.customer?.companyName || r.customer?.userName} · {r.customer?.email}</Muted>
       {r.message ? <Muted style={{ marginTop: 4 }}>„{r.message}"</Muted> : null}
 
+      {(r.questions ?? []).length > 0 ? (
+        <View style={styles.qBox}>
+          <Text style={styles.qHead}>Rückfragen des Kunden</Text>
+          {(r.questions ?? []).map((q: any, i: number) => (
+            <Text key={i} style={styles.qText}>• {q.message}</Text>
+          ))}
+        </View>
+      ) : null}
+
       {!isBuy ? (
         <View style={styles.termsForm}>
           <Text style={styles.label}>Anzahlung (€)</Text>
@@ -207,13 +265,26 @@ function RequestCard({ r, onDone }: { r: any; onDone: () => void }) {
           <Input testID={`t-final-${r.id}`} value={t.finalPayment} onChangeText={set("finalPayment")} keyboardType="decimal-pad" placeholder="z. B. 1200" />
           {isLease ? (
             <>
-              <Text style={styles.label}>Kaffee-Mindestabnahme (kg/Monat)</Text>
+              <Text style={styles.label}>Kaffee-Mindestabnahme (kg/Monat) *</Text>
               <Input testID={`t-coffee-${r.id}`} value={t.minCoffeeKgMonth} onChangeText={set("minCoffeeKgMonth")} keyboardType="decimal-pad" placeholder="z. B. 10" />
+              <Text style={styles.label}>Kaffeesorte *</Text>
+              <View style={styles.coffeeChips}>
+                {products.filter((p: any) => p.active !== false).map((p: any) => {
+                  const active = t.productId === p.id;
+                  return (
+                    <Pressable key={p.id} testID={`t-prod-${r.id}-${p.id}`} onPress={() => set("productId")(p.id)} style={[styles.coffeeChip, active && styles.coffeeChipActive]}>
+                      <Text style={[styles.coffeeChipTxt, active && styles.coffeeChipTxtActive]}>{p.brand} {p.name}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+              <Text style={styles.label}>Kaffeepreis (€/kg) *</Text>
+              <Input testID={`t-cprice-${r.id}`} value={t.coffeePricePerKg} onChangeText={set("coffeePricePerKg")} keyboardType="decimal-pad" placeholder="z. B. 15,90" />
             </>
           ) : null}
           <Text style={styles.label}>Notiz (optional)</Text>
           <Input testID={`t-note-${r.id}`} value={t.note} onChangeText={set("note")} placeholder="z. B. inkl. Wartung" multiline style={{ minHeight: 50 }} />
-          <Button testID={`send-offer-${r.id}`} title="Angebot senden" loading={send.isPending} onPress={() => send.mutate()} style={{ marginTop: 10 }} />
+          <Button testID={`send-offer-${r.id}`} title="Angebot senden" loading={send.isPending} onPress={submit} style={{ marginTop: 10 }} />
         </View>
       ) : (
         <Muted style={{ marginTop: 6 }}>Zahlungsstatus: {r.paymentStatus}</Muted>
@@ -245,4 +316,12 @@ const useStyles = makeStyles((c) => ({
   reqTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   reqMachine: { fontSize: 15, fontWeight: "700", color: c.onSurface, marginTop: 6 },
   termsForm: { marginTop: 10, borderTopWidth: 1, borderTopColor: c.divider, paddingTop: 8 },
+  coffeeChips: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 2 },
+  coffeeChip: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 999, backgroundColor: c.surfaceTertiary, borderWidth: 1, borderColor: c.border },
+  coffeeChipActive: { backgroundColor: c.brandPrimary, borderColor: c.brandPrimary },
+  coffeeChipTxt: { fontSize: 12, fontWeight: "700", color: c.onSurfaceSecondary },
+  coffeeChipTxtActive: { color: c.onBrandPrimary },
+  qBox: { marginTop: 8, padding: 10, borderRadius: 10, backgroundColor: c.warningContainer ?? c.surfaceTertiary },
+  qHead: { fontSize: 12, fontWeight: "800", color: c.onSurfaceSecondary, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 },
+  qText: { fontSize: 13, color: c.onSurface, lineHeight: 19 },
 }));
