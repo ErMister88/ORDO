@@ -1,0 +1,58 @@
+{
+  "summary": "Iteration 11 covered the new Newsletter+configurable-discount+Push-broadcast features. Backend pytest: 21/21 pass on /app/backend/tests/test_iteration11.py (-n0). Newsletter: POST /api/newsletter/subscribe returns {ok:true, code:'SS-XXXXXX', percent:10, enabled:true}; idempotent (same email lowercased returns the same code); rejects invalid emails with 400. POST /api/shop/validate-code: valid code -> {valid:true, percent:10}; unknown code / empty -> {valid:false, percent:0}; when settings.newsletterDiscountEnabled=false, even a real code returns {valid:false, percent:0}. GET /api/shop/settings now includes newsletterDiscountPercent and newsletterDiscountEnabled with correct types. PUT /api/shop/settings (admin) persists both fields; sales gets 403. POST /api/shop/orders: without promoCode or with invalid promoCode -> discount=0, discountPercent=0; with valid code (case-insensitive) -> discount = round(subtotal*percent/100,2), subtotal is reduced, tax_map values scaled by (1-percent/100) so sum(taxBreakdown) == taxTotal, and total = discounted_subtotal + shipping. POST /api/register-push with placeholder EMERGENT_PUSH_KEY returns 500 gracefully (per spec, not treated as bug). POST /api/push/broadcast: 403 for customer, 401/403 for no-auth, 400 when title or message blank; with admin + placeholder key returns 200 (0 recipients) or 502 with detail 'Push konnte nicht gesendet werden (erst nach Deploy/Build aktiv).' — both acceptable per spec. GET /api/push/stats: admin -> {registered:int}; customer -> 403.\n\nFrontend (390x844): /shop renders newsletter-card with 'Anmelden & 10% sichern' button; submitting a valid email displays newsletter-code = 'SS-A48B30' inside the dashed frame and message 'Willkommen! 10% Rabatt gesichert'. After adding one item and navigating to /shop/warenkorb, the promo-input + promo-apply row is visible; entering the returned code and tapping apply shows promo-msg '10% Rabatt aktiviert' (success green). Cart summary: Zwischensumme 21,90 €, Rabatt (10%) -2,19 €, Versand 4,90 €, inkl. MwSt 7% 1,29 €, Gesamt 24,61 € — matches server math exactly. Admin login (admin@ss-coffee.de / Admin#2026) -> /shop-admin: Newsletter-Rabatt section shows nl-enabled switch (ON), nl-percent input pre-filled '10', nl-save button. Changing to 12 and tapping nl-save persists (verified via GET /api/shop/settings -> newsletterDiscountPercent:12); reset to 10 verified. Push-Nachricht card shows '0 Gerät(e) registriert · funktioniert erst nach Veröffentlichung + App-Build.', push-title + push-message inputs and push-send button; sending with content triggers the broadcast request (expected 502 in preview with 0 registrations). Existing shop-threshold/shop-fee/shop-settings-save and shop-order-{id} list still render correctly.\n\nDeprecated packages detected: none new.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration11.py",
+    "/app/test_reports/pytest/pytest_iter11.xml"
+  ],
+  "action_items": [
+    "No functional bugs found. Feature set (newsletter, configurable discount, admin push composer) meets all acceptance criteria.",
+    "Optional polish: /api/shop/settings PUT currently accepts newsletterDiscountPercent as int with no upper-bound validation server-side (frontend clamps 0..100, but a direct API call could pass negative or >100). Consider adding Pydantic Field(ge=0, le=100).",
+    "Optional polish: push_broadcast() catches ValueError from send_push() (missing title/message) via generic except and remaps to 502; since inline validation already covers it, this is fine — but consider narrowing the except to httpx errors only for clearer logs.",
+    "Optional: /api/register-push calls the upstream provider BEFORE inserting the local push_registrations doc; with placeholder key the local row is never created. If you want /api/push/stats to reflect real Expo users during preview, insert the local row first, then fire-and-forget the upstream call. This is only a nit — spec explicitly said 'expected/non-blocking'."
+  ],
+  "critical_code_review_comments": [
+    "backend/app/routers/newsletter.py:22 subscribe — validates email pattern (contains @ and TLD dot), normalises to lowercase, generates SS-XXXXXX code via secrets.token_hex, upserts by email so idempotent. Correct.",
+    "backend/app/routers/newsletter.py:64 validate_code — trims, uppercases, respects newsletterDiscountEnabled flag; returns {valid,percent} in both branches. Correct.",
+    "backend/app/routers/newsletter.py:78 resolve_discount — pure helper that returns 0 when disabled or code unknown; reused by shop.create_shop_order. Good separation.",
+    "backend/app/routers/shop.py:97 promo application — computes discount = round(subtotal*percent/100,2), reduces subtotal, and scales EACH tax bracket by factor=(1-percent/100). This keeps sum(taxBreakdown)==taxTotal, which the test verifies to 0.03 € tolerance. Correct.",
+    "backend/app/routers/shop.py:105 shipping calc — evaluated on the DISCOUNTED subtotal, so a customer who dips below freeShippingThreshold due to promo pays shipping. Intentional and consistent with response fields.",
+    "backend/app/routers/shop.py:36 _settings() default seeds newsletterDiscountPercent=10, newsletterDiscountEnabled=True; backwards compatible.",
+    "backend/app/routers/push.py:30 register_push — httpx call to Emergent relay; on 401 -> 500 'EMERGENT_PUSH_KEY missing or invalid', on 5xx -> 502; only after successful upstream does it upsert push_registrations. Consistent with spec (expected 500 in preview).",
+    "backend/app/routers/push.py:66 push_broadcast — admin-only via require_roles('admin'); 400 for blank title/message; calls send_push then returns 502 on any exception with the exact German detail 'erst nach Deploy/Build aktiv'. Correct.",
+    "backend/app/routers/push.py:85 push_stats — admin-only; returns {registered:int}. Correct.",
+    "backend/app/models.py:86 ShopSettingsIn — includes newsletterDiscountPercent:int and newsletterDiscountEnabled:bool with defaults 10/True. No upper-bound validator (see action_items).",
+    "backend/app/models.py:107 ShopOrderIn.promoCode Optional[str] — clean.",
+    "backend/app/models.py:122 PushBroadcastIn — title/message required, actionUrl optional. Good.",
+    "frontend/app/shop/index.tsx:16 NewsletterCard — POSTs {email,name} to /newsletter/subscribe, on success replaces the form with the code display; testIDs newsletter-card, newsletter-email, newsletter-submit, newsletter-code. Correct.",
+    "frontend/app/shop/index.tsx:117 conditional render — only shows the newsletter card if settings.newsletterDiscountEnabled is true. Nice.",
+    "frontend/app/shop/warenkorb.tsx:30..44 promo state — apply() calls /shop/validate-code, sets promo state on valid, shows success/error via promo-msg (green/red). testIDs promo-input, promo-apply, promo-msg. Correct.",
+    "frontend/app/shop/warenkorb.tsx:89 checkout — sends promoCode from state to /shop/orders; server is source of truth for discount math. Correct.",
+    "frontend/app/shop-admin.tsx:83 Newsletter-Rabatt card — testIDs nl-enabled (Switch), nl-percent (Input), nl-save (Button). Save button reuses same mutation as shop-settings-save which PUTs the full body (threshold+fee+nl fields).",
+    "frontend/app/shop-admin.tsx:102 Push-Nachricht card — reads pushStats from GET /push/stats; push-send guards blank title/message with an Alert; broadcast.mutate() POSTs {title,message,actionUrl:'/shop'} and shows an Alert on both success (recipients count) and error (502 friendly message). Correct.",
+    "frontend/app/shop-admin.tsx:22 useQuery for push-stats will refire on nav; consider staleTime if noisy — not a bug."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration11.py",
+    "/app/test_reports/pytest/pytest_iter11.xml",
+    "/app/test_reports/iteration_11.json"
+  ],
+  "success_rate": {
+    "backend": "100% (21/21 pytest, -n0)",
+    "frontend": "100% — newsletter signup + code display on /shop, promo apply + discount math on /shop/warenkorb, admin Newsletter-Rabatt + Push composer flows on /shop-admin (percent persistence verified via API)."
+  },
+  "seed_data_creation": "Ephemeral only. Created ~8 TEST_ newsletter subscriptions (idempotent + valid-code + promo tests) and 4 TEST shop orders; cleaned up post-run. shop_orders collection reset to 0 rows, newsletter collection cleared, counters.shop.seq reset to 0, settings restored to {freeShippingThreshold:50.0, shippingFee:4.90, newsletterDiscountPercent:10, newsletterDiscountEnabled:true}. push_registrations untouched (0 rows).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iter 11 shipped Newsletter signup (SS-XXXXXX code, idempotent by email), a configurable discount (settings.newsletterDiscountPercent + newsletterDiscountEnabled, defaults 10 / true), and an admin push-broadcast composer. Public endpoints: POST /api/newsletter/subscribe {email,name?}, POST /api/shop/validate-code {code}. Shop settings PUT now takes the extended body {freeShippingThreshold, shippingFee, newsletterDiscountPercent, newsletterDiscountEnabled}. POST /api/shop/orders honours body.promoCode: server calls newsletter.resolve_discount(code) -> percent; if >0 it deducts percent from subtotal and scales each tax bracket by (1-percent/100); response adds discount + discountPercent. Push routes: POST /api/register-push {user_id,platform,device_token} (upstream call FIRST, so preview 500 is expected and no local row is created — spec explicitly said non-blocking); POST /api/push/broadcast (admin) {title,message,actionUrl?}; GET /api/push/stats (admin). With placeholder EMERGENT_PUSH_KEY broadcast returns 502 IF there are recipients, or 200 with recipients:0 otherwise — the frontend Alerts either way. Frontend testIDs added: newsletter-card, newsletter-email, newsletter-submit, newsletter-code (on /shop); promo-input, promo-apply, promo-msg (on /shop/warenkorb); nl-enabled, nl-percent, nl-save, push-title, push-message, push-send (on /shop-admin). Login screen testIDs are the older forms: login-email-input, login-password-input, login-submit-button. Run tests via `pytest backend/tests/test_iteration11.py -n0 --junitxml=/app/test_reports/pytest/pytest_iter11.xml`. Base URL from frontend/.env EXPO_PUBLIC_BACKEND_URL (routed via /api).",
+  "rca_of_issue": "No bugs to root-cause; every requested acceptance criterion (idempotent code, disabled-flag suppression, promo math with proportional tax reduction, admin RBAC, empty-input validation, placeholder-key graceful failure) passed on the first run for both backend (21/21) and frontend flows (newsletter signup+code display, promo apply+discounted totals, admin percent persistence, push composer wiring)."
+}

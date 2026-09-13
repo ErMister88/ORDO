@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
-import { View, Text, ScrollView, Pressable, KeyboardAvoidingView, Platform } from "react-native";
+import { View, Text, ScrollView, Pressable, KeyboardAvoidingView, Platform, Switch, Alert } from "react-native";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArrowLeft } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
-import { apiGet, apiPut } from "@/src/api/client";
+import { apiGet, apiPut, apiPost } from "@/src/api/client";
 import { euro, dateDE } from "@/src/lib/format";
 import { Card, Input, Button, SectionTitle, StatusBadge, EmptyState, Muted, InfoRow } from "@/src/components/ui";
 
@@ -19,13 +19,18 @@ export default function ShopAdmin() {
 
   const settings = useQuery({ queryKey: ["shop-settings"], queryFn: () => apiGet("/shop/settings") });
   const orders = useQuery({ queryKey: ["shop-orders"], queryFn: () => apiGet("/shop/orders") });
+  const pushStats = useQuery({ queryKey: ["push-stats"], queryFn: () => apiGet("/push/stats") });
 
   const [thr, setThr] = useState("");
   const [fee, setFee] = useState("");
+  const [nlPercent, setNlPercent] = useState("10");
+  const [nlEnabled, setNlEnabled] = useState(true);
   useEffect(() => {
     if (settings.data) {
       setThr(String(settings.data.freeShippingThreshold));
       setFee(String(settings.data.shippingFee));
+      setNlPercent(String(settings.data.newsletterDiscountPercent ?? 10));
+      setNlEnabled(settings.data.newsletterDiscountEnabled ?? true);
     }
   }, [settings.data]);
 
@@ -34,8 +39,22 @@ export default function ShopAdmin() {
       apiPut("/shop/settings", {
         freeShippingThreshold: Number(thr.replace(",", ".")) || 0,
         shippingFee: Number(fee.replace(",", ".")) || 0,
+        newsletterDiscountPercent: Math.max(0, Math.min(100, Math.round(Number(nlPercent.replace(",", ".")) || 0))),
+        newsletterDiscountEnabled: nlEnabled,
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["shop-settings"] }),
+  });
+
+  const [pushTitle, setPushTitle] = useState("");
+  const [pushMsg, setPushMsg] = useState("");
+  const broadcast = useMutation({
+    mutationFn: () => apiPost("/push/broadcast", { title: pushTitle, message: pushMsg, actionUrl: "/shop" }),
+    onSuccess: (res: any) => {
+      setPushTitle("");
+      setPushMsg("");
+      Alert.alert("Push gesendet", `An ${res.recipients} Gerät(e) gesendet.`);
+    },
+    onError: (e: any) => Alert.alert("Hinweis", e.message || "Push konnte nicht gesendet werden."),
   });
 
   return (
@@ -59,6 +78,49 @@ export default function ShopAdmin() {
             <Text style={styles.label}>Versandkosten sonst (€)</Text>
             <Input testID="shop-fee" value={fee} onChangeText={setFee} keyboardType="decimal-pad" />
             <Button testID="shop-settings-save" title="Speichern" loading={save.isPending} onPress={() => save.mutate()} style={{ marginTop: 10 }} />
+          </Card>
+
+          <SectionTitle style={{ marginTop: 4 }}>Newsletter-Rabatt</SectionTitle>
+          <Card>
+            <View style={styles.switchRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.label2}>Rabatt aktiv</Text>
+                <Muted>Abonnenten erhalten einen Rabattcode per E-Mail</Muted>
+              </View>
+              <Switch
+                testID="nl-enabled"
+                value={nlEnabled}
+                onValueChange={setNlEnabled}
+                trackColor={{ true: colors.brandPrimary, false: colors.divider }}
+              />
+            </View>
+            <Text style={styles.label}>Rabatt in Prozent (%)</Text>
+            <Input testID="nl-percent" value={nlPercent} onChangeText={setNlPercent} keyboardType="number-pad" />
+            <Button testID="nl-save" title="Newsletter-Rabatt speichern" loading={save.isPending} onPress={() => save.mutate()} style={{ marginTop: 10 }} />
+          </Card>
+
+          <SectionTitle style={{ marginTop: 4 }}>Push-Nachricht an Kunden</SectionTitle>
+          <Card>
+            <Muted>
+              {pushStats.data?.registered ?? 0} Gerät(e) registriert · funktioniert erst nach Veröffentlichung + App-Build.
+            </Muted>
+            <Text style={styles.label}>Titel</Text>
+            <Input testID="push-title" value={pushTitle} onChangeText={setPushTitle} placeholder="z. B. Nur heute: 20% auf Espresso" />
+            <Text style={styles.label}>Nachricht</Text>
+            <Input testID="push-message" value={pushMsg} onChangeText={setPushMsg} placeholder="Befristetes Angebot – jetzt zugreifen!" multiline style={{ minHeight: 70 }} />
+            <Button
+              testID="push-send"
+              title="An alle Kunden senden"
+              loading={broadcast.isPending}
+              onPress={() => {
+                if (!pushTitle.trim() || !pushMsg.trim()) {
+                  Alert.alert("Angaben fehlen", "Bitte Titel und Nachricht ausfüllen.");
+                  return;
+                }
+                broadcast.mutate();
+              }}
+              style={{ marginTop: 10 }}
+            />
           </Card>
 
           <SectionTitle style={{ marginTop: 4 }}>Shop-Bestellungen ({orders.data?.length ?? 0})</SectionTitle>
@@ -99,6 +161,8 @@ const useStyles = makeStyles((c) => ({
   subtitle: { fontSize: 13, color: c.muted, marginTop: 1 },
   content: { padding: 20, gap: 12, paddingBottom: 32 },
   label: { fontSize: 13, fontWeight: "700", color: c.onSurfaceSecondary, marginTop: 8, marginBottom: 4 },
+  label2: { fontSize: 15, fontWeight: "700", color: c.onSurface },
+  switchRow: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 4 },
   rowTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 4 },
   oId: { fontSize: 16, fontWeight: "800", color: c.onSurface },
 }));

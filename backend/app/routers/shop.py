@@ -32,7 +32,8 @@ APP_URL = os.environ.get("APP_URL", "https://ordo-connect.app")
 async def _settings():
     s = await db.settings.find_one({"_id": "shop"})
     if not s:
-        s = {"_id": "shop", "freeShippingThreshold": 50.0, "shippingFee": 4.90}
+        s = {"_id": "shop", "freeShippingThreshold": 50.0, "shippingFee": 4.90,
+             "newsletterDiscountPercent": 10, "newsletterDiscountEnabled": True}
         await db.settings.insert_one(s)
     return s
 
@@ -53,7 +54,9 @@ async def shop_products():
 @api_router.get("/shop/settings")
 async def shop_settings_get():
     s = await _settings()
-    return {"freeShippingThreshold": s["freeShippingThreshold"], "shippingFee": s["shippingFee"]}
+    return {"freeShippingThreshold": s["freeShippingThreshold"], "shippingFee": s["shippingFee"],
+            "newsletterDiscountPercent": int(s.get("newsletterDiscountPercent", 10)),
+            "newsletterDiscountEnabled": bool(s.get("newsletterDiscountEnabled", True))}
 
 
 @api_router.put("/shop/settings")
@@ -90,6 +93,15 @@ async def create_shop_order(body: ShopOrderIn, uid: Annotated[Optional[str], Dep
     if not lines:
         raise HTTPException(status_code=400, detail="Warenkorb ist leer")
     subtotal = round(subtotal, 2)
+    gross_subtotal = subtotal
+    from .newsletter import resolve_discount
+    percent = await resolve_discount(body.promoCode)
+    discount = 0.0
+    if percent > 0:
+        factor = 1 - percent / 100
+        discount = round(subtotal * percent / 100, 2)
+        subtotal = round(subtotal - discount, 2)
+        tax_map = {r: round(v * factor, 2) for r, v in tax_map.items()}
     shipping = 0.0 if subtotal >= s["freeShippingThreshold"] else float(s["shippingFee"])
     total = round(subtotal + shipping, 2)
     tax_total = round(sum(tax_map.values()), 2)
@@ -99,6 +111,8 @@ async def create_shop_order(body: ShopOrderIn, uid: Annotated[Optional[str], Dep
     doc = {
         "id": oid, "items": lines, "customer": body.customer.model_dump(),
         "subtotal": subtotal, "shipping": shipping, "total": total,
+        "discount": discount, "promoCode": (body.promoCode or "").strip().upper() or None,
+        "discountPercent": percent,
         "taxBreakdown": tax_map, "taxTotal": tax_total,
         "status": "Neu", "paymentStatus": "Offen", "userId": uid, "createdAt": now.isoformat(),
     }
@@ -121,8 +135,9 @@ async def create_shop_order(body: ShopOrderIn, uid: Annotated[Optional[str], Dep
                 f"vielen Dank f&uuml;r Ihre Bestellung <strong>{oid}</strong>. Hier Ihre &Uuml;bersicht:</p>"
                 "<table role='presentation' width='100%' cellpadding='0' cellspacing='0' style='font-size:14px;color:#3A4256'>"
                 f"{rows}</table>"
-                f"<div style='text-align:right;margin-top:8px'>Zwischensumme: {subtotal:.2f} &euro;</div>"
-                f"<div style='text-align:right'>Versand: {'Gratis' if shipping == 0 else f'{shipping:.2f} €'}</div>"
+                f"<div style='text-align:right;margin-top:8px'>Zwischensumme: {gross_subtotal:.2f} &euro;</div>"
+                + (f"<div style='text-align:right;color:#1a7f4b'>Rabatt ({percent}%): -{discount:.2f} &euro;</div>" if discount else "")
+                + f"<div style='text-align:right'>Versand: {'Gratis' if shipping == 0 else f'{shipping:.2f} €'}</div>"
                 f"{vat_rows}"
                 f"<div style='text-align:right;font-weight:bold;font-size:16px;margin-top:6px'>Gesamt: {total:.2f} &euro;</div>"
                 "<p style='margin:16px 0 0;color:#8A90A2;font-size:13px'>Die Zahlung erfolgt sicher &uuml;ber unser Bezahlfenster. "
@@ -133,6 +148,7 @@ async def create_shop_order(body: ShopOrderIn, uid: Annotated[Optional[str], Dep
     except Exception as e:
         logger.warning(f"E-Mail (Bestellbestätigung Shop) fehlgeschlagen: {e}")
     return {"id": oid, "subtotal": subtotal, "shipping": shipping, "total": total,
+            "discount": discount, "discountPercent": percent,
             "taxBreakdown": tax_map, "taxTotal": tax_total}
 
 

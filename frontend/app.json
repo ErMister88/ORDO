@@ -20,7 +20,8 @@
         "backgroundColor": "#000000"
       },
       "package": "com.emergent.mobileappbuilder.ryz89a",
-      "permissions": ["READ_MEDIA_IMAGES"]
+      "permissions": ["READ_MEDIA_IMAGES"],
+      "googleServicesFile": "./google-services.json"
     },
     "web": {
       "bundler": "metro",
@@ -43,7 +44,8 @@
       "expo-secure-store",
       "expo-web-browser",
       "expo-status-bar",
-      "expo-sharing"
+      "expo-sharing",
+      "expo-notifications"
     ],
     "experiments": {
       "typedRoutes": true

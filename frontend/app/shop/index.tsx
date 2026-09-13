@@ -1,15 +1,78 @@
+import { useState } from "react";
 import { View, Text, ScrollView, Pressable } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Image } from "expo-image";
-import { ArrowLeft, ShoppingCart, ImageSquare, Plus, UserCircle } from "phosphor-react-native";
+import { ArrowLeft, ShoppingCart, ImageSquare, Plus, UserCircle, EnvelopeSimple, CheckCircle } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
 import { apiGet, fileUrl } from "@/src/api/client";
 import { euro } from "@/src/lib/format";
 import { useCart } from "@/src/shop/cart";
-import { Card, EmptyState, Muted } from "@/src/components/ui";
+import { shopApi } from "@/src/shop/auth";
+import { Card, EmptyState, Muted, Input, Button } from "@/src/components/ui";
+
+function NewsletterCard({ percent }: { percent: number }) {
+  const styles = useStyles();
+  const { colors } = useTheme();
+  const [email, setEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<null | { code: string; percent: number }>(null);
+  const [err, setErr] = useState("");
+
+  const submit = async () => {
+    setErr("");
+    if (!email.includes("@")) {
+      setErr("Bitte eine gültige E-Mail eingeben.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await shopApi.newsletter({ email: email.trim() });
+      setDone({ code: res.code, percent: res.percent });
+    } catch (e: any) {
+      setErr(e.message || "Anmeldung fehlgeschlagen");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card testID="newsletter-card">
+      {done ? (
+        <View style={{ alignItems: "center" }}>
+          <CheckCircle size={34} color={colors.success} weight="fill" />
+          <Text style={styles.nlTitle}>Willkommen! {done.percent}% Rabatt gesichert</Text>
+          <Muted style={{ textAlign: "center" }}>Dein Rabattcode – auch per E-Mail verschickt:</Muted>
+          <View style={styles.codeBox}>
+            <Text style={styles.codeText} selectable testID="newsletter-code">{done.code}</Text>
+          </View>
+          <Muted style={{ textAlign: "center", marginTop: 6 }}>Einfach im Warenkorb eingeben und sparen.</Muted>
+        </View>
+      ) : (
+        <>
+          <View style={styles.nlHead}>
+            <EnvelopeSimple size={20} color={colors.brandPrimary} weight="bold" />
+            <Text style={styles.nlTitle}>Newsletter & {percent}% Rabatt</Text>
+          </View>
+          <Muted>Jetzt anmelden und {percent}% Rabatt auf deine Bestellungen erhalten.</Muted>
+          <Input
+            testID="newsletter-email"
+            value={email}
+            onChangeText={setEmail}
+            placeholder="deine@email.de"
+            autoCapitalize="none"
+            keyboardType="email-address"
+            style={{ marginTop: 10 }}
+          />
+          {err ? <Text style={styles.nlErr}>{err}</Text> : null}
+          <Button testID="newsletter-submit" title={`Anmelden & ${percent}% sichern`} loading={busy} onPress={submit} style={{ marginTop: 10 }} />
+        </>
+      )}
+    </Card>
+  );
+}
 
 export default function Shop() {
   const styles = useStyles();
@@ -51,6 +114,9 @@ export default function Shop() {
             </Text>
           </View>
         )}
+        {settings.data?.newsletterDiscountEnabled ? (
+          <NewsletterCard percent={settings.data?.newsletterDiscountPercent ?? 10} />
+        ) : null}
         {(products.data ?? []).length === 0 ? (
           <EmptyState title="Noch keine Produkte" subtitle="Der Shop wird gerade bestückt" />
         ) : (
@@ -103,6 +169,11 @@ const useStyles = makeStyles((c) => ({
   content: { padding: 20, gap: 12, paddingBottom: 32 },
   banner: { backgroundColor: c.brandTertiary, borderRadius: 12, padding: 12 },
   bannerText: { color: c.brandPrimary, fontWeight: "700", fontSize: 13, textAlign: "center" },
+  nlHead: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 4 },
+  nlTitle: { fontSize: 16, fontWeight: "800", color: c.onSurface, marginTop: 6 },
+  nlErr: { color: c.error, fontSize: 13, fontWeight: "600", marginTop: 6 },
+  codeBox: { marginTop: 10, paddingVertical: 12, paddingHorizontal: 20, borderRadius: 12, borderWidth: 2, borderStyle: "dashed", borderColor: c.brandPrimary, backgroundColor: c.brandTertiary },
+  codeText: { fontSize: 22, fontWeight: "800", letterSpacing: 2, color: c.brandPrimary },
   row: { flexDirection: "row", gap: 12, alignItems: "center" },
   thumb: { width: 64, height: 64, borderRadius: 12, backgroundColor: c.surfaceTertiary },
   thumbEmpty: { alignItems: "center", justifyContent: "center" },

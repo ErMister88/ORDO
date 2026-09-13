@@ -35,4 +35,6 @@ export const shopApi = {
   me: () => req("/shop/me", "GET", undefined, true),
   myOrders: () => req("/shop/my-orders", "GET", undefined, true),
   createOrder: (b: any) => req("/shop/orders", "POST", b, true),
+  newsletter: (b: { email: string; name?: string }) => req("/newsletter/subscribe", "POST", b, false),
+  validateCode: (code: string) => req("/shop/validate-code", "POST", { code }, false),
 };

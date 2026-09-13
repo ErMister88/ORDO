@@ -27,6 +27,32 @@ export default function Warenkorb() {
   const set = (k: string) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<null | { id: string; total: number; paid: boolean }>(null);
+  const [promoInput, setPromoInput] = useState("");
+  const [promo, setPromo] = useState<null | { code: string; percent: number }>(null);
+  const [promoMsg, setPromoMsg] = useState("");
+  const [promoBusy, setPromoBusy] = useState(false);
+
+  const applyPromo = async () => {
+    setPromoMsg("");
+    const code = promoInput.trim();
+    if (!code) return;
+    setPromoBusy(true);
+    try {
+      const res = await shopApi.validateCode(code);
+      if (res.valid) {
+        setPromo({ code: code.toUpperCase(), percent: res.percent });
+        setPromoMsg(`${res.percent}% Rabatt aktiviert`);
+      } else {
+        setPromo(null);
+        setPromoMsg(res.detail || "Code ungültig");
+      }
+    } catch (e: any) {
+      setPromo(null);
+      setPromoMsg(e.message || "Code konnte nicht geprüft werden");
+    } finally {
+      setPromoBusy(false);
+    }
+  };
 
   const pMap: Record<string, any> = {};
   (products.data ?? []).forEach((p: any) => (pMap[p.id] = p));
@@ -36,13 +62,16 @@ export default function Warenkorb() {
     [cart.items, products.data],
   );
   const subtotal = lines.reduce((a, l) => a + l.p.b2cPrice * l.qty, 0);
+  const discountPercent = promo?.percent ?? 0;
+  const discount = subtotal * (discountPercent / 100);
+  const discounted = subtotal - discount;
   const threshold = settings.data?.freeShippingThreshold ?? 50;
   const fee = settings.data?.shippingFee ?? 4.9;
-  const shipping = subtotal >= threshold ? 0 : fee;
-  const total = subtotal + shipping;
+  const shipping = discounted >= threshold ? 0 : fee;
+  const total = discounted + shipping;
   const vatByRate = lines.reduce((acc: Record<number, number>, l) => {
     const rate = l.p.taxRate ?? 7;
-    const gross = l.p.b2cPrice * l.qty;
+    const gross = l.p.b2cPrice * l.qty * (1 - discountPercent / 100);
     acc[rate] = (acc[rate] ?? 0) + (gross - gross / (1 + rate / 100));
     return acc;
   }, {});
@@ -57,6 +86,7 @@ export default function Warenkorb() {
       const order = await shopApi.createOrder({
         items: cart.items.map((i) => ({ productId: i.productId, qty: i.qty })),
         customer: form,
+        promoCode: promo?.code,
       });
       let paid = false;
       try {
@@ -140,12 +170,18 @@ export default function Warenkorb() {
                   <Text style={styles.sumLabel}>Zwischensumme</Text>
                   <Text style={styles.sumVal}>{euro(subtotal)}</Text>
                 </View>
+                {discountPercent > 0 ? (
+                  <View style={styles.sumRow}>
+                    <Text style={[styles.sumLabel, { color: colors.success }]}>Rabatt ({discountPercent}%)</Text>
+                    <Text style={[styles.sumVal, { color: colors.success }]}>-{euro(discount)}</Text>
+                  </View>
+                ) : null}
                 <View style={styles.sumRow}>
                   <Text style={styles.sumLabel}>Versand</Text>
                   <Text style={styles.sumVal}>{shipping === 0 ? "Gratis" : euro(shipping)}</Text>
                 </View>
                 {shipping > 0 ? (
-                  <Muted>Noch {euro(threshold - subtotal)} bis zum Gratis-Versand</Muted>
+                  <Muted>Noch {euro(threshold - discounted)} bis zum Gratis-Versand</Muted>
                 ) : null}
                 {Object.entries(vatByRate).map(([rate, amt]) => (
                   <View key={rate} style={styles.sumRow}>
@@ -157,6 +193,36 @@ export default function Warenkorb() {
                   <Text style={styles.totalLabel}>Gesamt</Text>
                   <Text style={styles.totalVal}>{euro(total)}</Text>
                 </View>
+              </Card>
+
+              <SectionTitle style={{ marginTop: 4 }}>Rabattcode</SectionTitle>
+              <Card>
+                <View style={styles.promoRow}>
+                  <View style={{ flex: 1 }}>
+                    <Input
+                      testID="promo-input"
+                      value={promoInput}
+                      onChangeText={setPromoInput}
+                      placeholder="z. B. SS-XXXXXX"
+                      autoCapitalize="characters"
+                    />
+                  </View>
+                  <Button
+                    testID="promo-apply"
+                    title={promo ? "Geändert" : "Einlösen"}
+                    kind="secondary"
+                    loading={promoBusy}
+                    onPress={applyPromo}
+                    style={{ width: 120 }}
+                  />
+                </View>
+                {promoMsg ? (
+                  <Text style={[styles.promoMsg, { color: promo ? colors.success : colors.error }]} testID="promo-msg">
+                    {promoMsg}
+                  </Text>
+                ) : (
+                  <Muted style={{ marginTop: 8 }}>Newsletter-Abonnenten erhalten einen Rabattcode per E-Mail.</Muted>
+                )}
               </Card>
 
               <SectionTitle style={{ marginTop: 4 }}>Lieferadresse</SectionTitle>
@@ -204,4 +270,6 @@ const useStyles = makeStyles((c) => ({
   totalVal: { fontSize: 20, fontWeight: "800", color: c.brandPrimary },
   rowGap: { flexDirection: "row", gap: 8, marginTop: 8 },
   doneTitle: { fontSize: 18, fontWeight: "800", color: c.onSurface, marginTop: 8 },
+  promoRow: { flexDirection: "row", gap: 8, alignItems: "center" },
+  promoMsg: { fontSize: 13, fontWeight: "700", marginTop: 8 },
 }));

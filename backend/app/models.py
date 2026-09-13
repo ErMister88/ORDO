@@ -86,6 +86,8 @@ class StockIn(BaseModel):
 class ShopSettingsIn(BaseModel):
     freeShippingThreshold: float = 50.0
     shippingFee: float = 4.90
+    newsletterDiscountPercent: int = 10
+    newsletterDiscountEnabled: bool = True
 
 
 class ShopCustomerIn(BaseModel):
@@ -105,6 +107,22 @@ class ShopItemIn(BaseModel):
 class ShopOrderIn(BaseModel):
     items: List[ShopItemIn]
     customer: ShopCustomerIn
+    promoCode: Optional[str] = None
+
+
+class NewsletterIn(BaseModel):
+    email: str
+    name: Optional[str] = ""
+
+
+class ValidateCodeIn(BaseModel):
+    code: str
+
+
+class PushBroadcastIn(BaseModel):
+    title: str
+    message: str
+    actionUrl: Optional[str] = None
 
 
 class ShopRegisterIn(BaseModel):

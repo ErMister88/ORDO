@@ -104,3 +104,13 @@ Backend split into a package: `backend/app/` with `core.py` (config/db/security)
 ## Next Tasks
 - Optional light-mode toggle if ever requested.
 - Show product images across offer/order line items.
+
+## Implemented (2026-06-13, Iteration 11b) — Newsletter, Rabatt & Push
+- **Newsletter-Anmeldung**: `POST /api/newsletter/subscribe` (public) legt Abonnent in `db.newsletter` an, erzeugt persönlichen Rabattcode `SS-XXXXXX` (idempotent je E-Mail), sendet Willkommens-E-Mail (Resend) mit Code. UI-Karte auf Shop-Startseite (`app/shop/index.tsx`), zeigt Code nach Anmeldung.
+- **Konfigurierbarer Rabatt (Default 10%)**: Shop-Settings erweitert um `newsletterDiscountPercent` + `newsletterDiscountEnabled` (Admin in `/shop-admin`, GET `/shop/settings` liefert beide public). `POST /api/shop/validate-code` prüft Code; `POST /api/shop/orders` akzeptiert `promoCode` → rabattierter subtotal + proportional reduzierte MwSt; Bestätigungs-E-Mail zeigt Rabattzeile. Warenkorb (`app/shop/warenkorb.tsx`) hat Code-Eingabe + Rabattanzeige.
+- **Push-Broadcast (Emergent managed / SuprSend)**: `POST /api/register-push`, `send_push()` Helper, `POST /api/push/broadcast` (admin) an alle registrierten Geräte, `GET /api/push/stats`. Geräte werden über stabile anonyme Device-ID in `db.push_registrations` verwaltet (`src/push.ts`, Registrierung in `app/_layout.tsx`). Admin-Composer in `/shop-admin`. `expo-notifications`+`expo-device` installiert, Plugin + `android.googleServicesFile` in app.json. EMERGENT_PUSH_KEY=placeholder (wird beim Deploy gesetzt). **Push nur nach Deploy + nativem Build auf echten Geräten testbar; Android benötigt google-services.json.**
+- Backend: 21/21 pytest pass (`tests/test_iteration11.py`); Frontend-Flows verifiziert.
+
+## Noch offen (Backlog)
+- B2C Passwort-vergessen-Flow für Shop-Kunden (P1)
+- B2C Bestelldetails: Positionen + Lieferstatus in „Meine Bestellungen" (P1)

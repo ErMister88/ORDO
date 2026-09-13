@@ -1,18 +1,68 @@
+import { useEffect } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { Stack } from "expo-router";
-import { LogBox } from "react-native";
+import { Stack, useRouter } from "expo-router";
+import { LogBox, Platform } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
+import * as Notifications from "expo-notifications";
+import * as Linking from "expo-linking";
 
 import { ErrorBoundary } from "@/src/components/error-boundary";
 import { queryClient } from "@/src/query-client";
 import { AuthProvider } from "@/src/auth/auth";
 import { CartProvider } from "@/src/shop/cart";
+import { registerForPush } from "@/src/push";
 
 LogBox.ignoreAllLogs(true);
 
+// Foreground display behaviour — module scope, before any component
+if (Platform.OS !== "web") {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowAlert: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+    }),
+  });
+}
+
+// Android channel — module scope
+if (Platform.OS === "android") {
+  Notifications.setNotificationChannelAsync("default", {
+    name: "Default",
+    importance: Notifications.AndroidImportance.MAX,
+    sound: "default",
+  });
+}
+
 export default function RootLayout() {
+  const router = useRouter();
+
+  useEffect(() => {
+    if (Platform.OS === "web") return;
+
+    registerForPush();
+
+    const openFromData = (data: any) => {
+      const url = data?.deeplink || data?.action_url;
+      if (!url) return;
+      url.startsWith("http") ? Linking.openURL(url) : router.push(url);
+    };
+
+    const tapSub = Notifications.addNotificationResponseReceivedListener((response) => {
+      openFromData(response.notification.request.content.data || {});
+    });
+
+    Notifications.getLastNotificationResponseAsync().then((response) => {
+      if (response) openFromData(response.notification.request.content.data || {});
+    });
+
+    return () => {
+      tapSub.remove();
+    };
+  }, []);
+
   return (
     <ErrorBoundary>
       <GestureHandlerRootView style={{ flex: 1 }}>
