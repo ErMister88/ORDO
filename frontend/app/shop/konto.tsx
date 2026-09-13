@@ -7,7 +7,7 @@ import { ArrowLeft, SignOut } from "phosphor-react-native";
 import { makeStyles, useTheme } from "@/src/theme";
 import { euro, dateDE } from "@/src/lib/format";
 import { shopApi, shopSetToken, shopLogout, shopToken } from "@/src/shop/auth";
-import { Card, Input, Button, SectionTitle, Muted, EmptyState } from "@/src/components/ui";
+import { Card, Input, Button, SectionTitle, Muted, EmptyState, InfoRow, StatusBadge } from "@/src/components/ui";
 
 export default function ShopKonto() {
   const styles = useStyles();
@@ -92,9 +92,33 @@ export default function ShopKonto() {
                   <Card key={o.id} testID={`myorder-${o.id}`}>
                     <View style={styles.row}>
                       <Text style={styles.oId}>{o.id}</Text>
-                      <Text style={styles.oStatus}>{o.paymentStatus === "Bezahlt" ? "Bezahlt" : "Offen"}</Text>
+                      <StatusBadge status={o.paymentStatus} />
                     </View>
-                    <Muted>{dateDE(o.createdAt)} · {o.items.length} Position(en) · {euro(o.total)}</Muted>
+                    <Muted>{dateDE(o.createdAt)}</Muted>
+
+                    <View style={styles.itemsBox}>
+                      {(o.items ?? []).map((it: any, idx: number) => (
+                        <View key={idx} style={styles.itemRow}>
+                          <Text style={styles.itemName} numberOfLines={2}>{it.name}</Text>
+                          <Text style={styles.itemQty}>{it.qty}×</Text>
+                          <Text style={styles.itemPrice}>{euro(it.price * it.qty)}</Text>
+                        </View>
+                      ))}
+                    </View>
+
+                    {o.discount > 0 ? (
+                      <InfoRow label={`Rabatt${o.discountPercent ? ` (${o.discountPercent}%)` : ""}`} value={`-${euro(o.discount)}`} />
+                    ) : null}
+                    <InfoRow label="Versand" value={o.shipping === 0 ? "Gratis" : euro(o.shipping)} />
+                    {o.taxTotal != null ? <InfoRow label="enthaltene MwSt" value={euro(o.taxTotal)} /> : null}
+                    <View style={styles.totalRow}>
+                      <Text style={styles.totalLabel}>Gesamt</Text>
+                      <Text style={styles.totalVal}>{euro(o.total)}</Text>
+                    </View>
+                    <View style={styles.deliveryRow}>
+                      <Text style={styles.deliveryLabel}>Lieferstatus</Text>
+                      <Text style={styles.deliveryVal}>{o.status || "Neu"}</Text>
+                    </View>
                   </Card>
                 ))
               )}
@@ -149,4 +173,15 @@ const useStyles = makeStyles((c) => ({
   row: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   oId: { fontSize: 16, fontWeight: "800", color: c.onSurface },
   oStatus: { fontSize: 13, fontWeight: "700", color: c.brandPrimary },
+  itemsBox: { marginTop: 10, borderTopWidth: 1, borderTopColor: c.divider, paddingTop: 8 },
+  itemRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 4 },
+  itemName: { flex: 1, fontSize: 14, color: c.onSurface, fontWeight: "600" },
+  itemQty: { fontSize: 13, color: c.muted, fontWeight: "700", minWidth: 30, textAlign: "right" },
+  itemPrice: { fontSize: 14, color: c.onSurface, fontWeight: "700", minWidth: 70, textAlign: "right" },
+  totalRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 8, borderTopWidth: 1, borderTopColor: c.divider, paddingTop: 8 },
+  totalLabel: { fontSize: 15, fontWeight: "800", color: c.onSurface },
+  totalVal: { fontSize: 17, fontWeight: "800", color: c.brandPrimary },
+  deliveryRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 8 },
+  deliveryLabel: { fontSize: 13, fontWeight: "700", color: c.onSurfaceSecondary },
+  deliveryVal: { fontSize: 13, fontWeight: "800", color: c.onSurface },
 }));

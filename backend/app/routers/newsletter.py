@@ -29,7 +29,15 @@ def _new_code() -> str:
     return "SS-" + secrets.token_hex(3).upper()
 
 
-async def _send_welcome(email: str, code: str, percent: int) -> None:
+async def _send_welcome(email: str, code: str, percent: int, unsub_token: str = "", base: str = "") -> None:
+    unsub = f"{_safe_base(base)}/api/newsletter/unsubscribe?token={unsub_token}" if unsub_token else ""
+    unsub_html = (
+        f"<p style='margin:16px 0 0;color:#8A90A2;font-size:12px'>Sie k&ouml;nnen sich jederzeit "
+        f"<a href='{escape(unsub)}' style='color:#8A90A2'>vom Newsletter abmelden</a>.</p>"
+        if unsub else
+        "<p style='margin:16px 0 0;color:#8A90A2;font-size:12px'>Sie k&ouml;nnen sich jederzeit vom Newsletter "
+        "abmelden, indem Sie uns kurz eine E-Mail schreiben.</p>"
+    )
     inner = (
         f"<p style='margin:0 0 12px;color:#3A4256;font-size:15px'>Willkommen im S&amp;S Newsletter! "
         f"Als Dankesch&ouml;n erhalten Sie <strong>{percent}% Rabatt</strong> auf Ihre Bestellungen im Kaffee-Shop.</p>"
@@ -39,8 +47,7 @@ async def _send_welcome(email: str, code: str, percent: int) -> None:
         "</div>"
         f"<p style='margin:16px 0 0;color:#3A4256;font-size:14px'>Geben Sie den Code einfach im Warenkorb ein "
         f"und sparen Sie {percent}%.</p>"
-        "<p style='margin:16px 0 0;color:#8A90A2;font-size:12px'>Sie k&ouml;nnen sich jederzeit vom Newsletter abmelden, "
-        "indem Sie uns kurz eine E-Mail schreiben.</p>"
+        f"{unsub_html}"
     )
     html = email_shell("Willkommen &amp; Ihr Rabattcode", "Ihre Anmeldung ist best&auml;tigt.", inner)
     await send_email(to=email, subject=f"Willkommen – {percent}% Rabatt im S&S Kaffee-Shop", html=html)
@@ -63,7 +70,7 @@ async def newsletter_subscribe(body: NewsletterIn):
         code = existing["code"]
         if enabled:
             try:
-                await _send_welcome(email, code, percent)
+                await _send_welcome(email, code, percent, existing.get("unsubToken", ""), body.baseUrl)
             except Exception as e:
                 logger.warning(f"Newsletter-Willkommensmail fehlgeschlagen: {e}")
         return {"ok": True, "confirmed": True, "code": code,
@@ -81,6 +88,7 @@ async def newsletter_subscribe(body: NewsletterIn):
             "name": (body.name or "").strip(),
             "confirmed": False,
             "confirmToken": token,
+            "unsubToken": secrets.token_urlsafe(16),
             "createdAt": datetime.now(timezone.utc).isoformat(),
         })
 
@@ -129,13 +137,14 @@ async def newsletter_confirm(token: str):
     percent = int(s.get("newsletterDiscountPercent", 10))
     if not sub.get("confirmed"):
         code = _new_code()
+        unsub_token = sub.get("unsubToken") or secrets.token_urlsafe(16)
         await db.newsletter.update_one(
             {"confirmToken": token},
-            {"$set": {"confirmed": True, "code": code,
+            {"$set": {"confirmed": True, "code": code, "unsubToken": unsub_token,
                       "confirmedAt": datetime.now(timezone.utc).isoformat()}},
         )
         try:
-            await _send_welcome(sub["email"], code, percent)
+            await _send_welcome(sub["email"], code, percent, unsub_token)
         except Exception as e:
             logger.warning(f"Newsletter-Willkommensmail fehlgeschlagen: {e}")
     else:
@@ -146,6 +155,19 @@ async def newsletter_confirm(token: str):
         "<div style='margin:12px 0;padding:16px;border:2px dashed #0B1B3D;border-radius:12px;text-align:center;"
         f"color:#0B1B3D;font-size:24px;font-weight:bold;letter-spacing:2px'>{escape(code)}</div>"
         "<p style='color:#8A90A2;font-size:14px'>Geben Sie den Code im Warenkorb ein und sparen Sie.</p>"
+    )
+
+
+@api_router.get("/newsletter/unsubscribe")
+async def newsletter_unsubscribe(token: str):
+    sub = await db.newsletter.find_one({"unsubToken": token})
+    if not sub:
+        return _confirm_page("<h2 style='color:#0B1B3D'>Link ungültig</h2>"
+                             "<p>Dieser Abmeldelink ist ungültig oder Sie sind bereits abgemeldet.</p>", status=404)
+    await db.newsletter.delete_one({"unsubToken": token})
+    return _confirm_page(
+        "<h2 style='color:#0B1B3D'>Abgemeldet ✓</h2>"
+        "<p>Sie wurden erfolgreich vom Newsletter abgemeldet und erhalten keine weiteren E-Mails von uns.</p>"
     )
 
 

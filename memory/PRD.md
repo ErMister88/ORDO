@@ -120,3 +120,9 @@ Backend split into a package: `backend/app/` with `core.py` (config/db/security)
 - **AGB/Widerruf-Checkbox** im Checkout (`app/shop/warenkorb.tsx`): „Kostenpflichtig bestellen" ist deaktiviert bis akzeptiert; AGB/Widerruf als Links.
 - **Newsletter Double-Opt-In** (DSGVO): `subscribe` → `{ok, pending}` + Bestätigungsmail mit Link; `GET /api/newsletter/confirm?token=` bestätigt, erzeugt Code + Willkommensmail. Rabattcode gilt nur nach Bestätigung (`validate-code`/`resolve_discount` filtern `confirmed:true`). Confirm-Link nutzt vom Client übergebene `baseUrl` (Fallback APP_URL), Rückgabe als gestylte HTML-Seite mit Code.
 - Backend 7/7 pytest (`tests/test_iteration12.py`), Frontend-Flows verifiziert.
+
+## Implemented (2026-06-13, Iteration 13) — Recht II & Bestelldetails
+- **Impressum vervollständigt**: Vertreten durch Sergio & Salvatore Lucchetta, E-Mail Info@aiello-germany.de, Tel. +49 151 23500862. AGB um Eigentumsvorbehalt/Gewährleistung/Streitbeilegung erweitert, Datenschutz um Push-Abschnitt.
+- **Newsletter abbestellen**: `unsubToken` je Abonnent, Abmeldelink in Willkommensmail, `GET /api/newsletter/unsubscribe?token=` löscht Abonnent (gestylte HTML-Seite).
+- **Bestelldetails immer sichtbar**: `/shop/konto` „Meine Bestellungen" zeigt Positionen (Name, Menge, Preis), Rabatt, Versand, MwSt, Gesamt und Lieferstatus je Bestellung.
+- Backend 11/11 pytest (`tests/test_iteration13.py`), Frontend verifiziert.

@@ -1,0 +1,46 @@
+{
+  "summary": "Iteration 13 verifies: (a) Newsletter GET /api/newsletter/unsubscribe?token=<valid> returns HTML 200 with 'Abgemeldet' and deletes the subscriber; invalid/re-used token returns 404 HTML 'Link ungültig'. (b) POST /api/newsletter/subscribe still returns {ok:true, pending:true} without a code and stores unsubToken+confirmToken on the doc; GET /api/newsletter/confirm still issues an SS-XXXXXX code, POST /api/shop/validate-code confirms the fresh code and rejects a garbage one. (c) B2C order flow: registered new shop user via /api/shop/register, created an order via POST /api/shop/orders with Bearer token, then /api/shop/my-orders returns the order with items[], shipping, total, taxTotal, discount, status, paymentStatus and no MongoDB _id leak. (d) /legal/impressum now shows 'Sergio Lucchetta und Salvatore Lucchetta', 'Info@aiello-germany.de', '+49 151 23500862' and none of the '[…]' placeholders remain. (e) /legal/agb renders § 1 Geltungsbereich, § 7 Eigentumsvorbehalt, § 8 Gewährleistung and § 9 Streitbeilegung. Frontend on 390x844: registered via UI (tab-register + acc-name/email/password + acc-submit), got 'Hallo TEST UI Shopper2 👋', created an authenticated order via same-origin fetch, reloaded /shop/konto and confirmed a myorder-S-2026-00005 Card with 'Caffè Aiello Strong 2× 43,80 €', Versand 4,90 €, enthaltene MwSt 2,87 €, Gesamt 48,70 €, Lieferstatus 'Neu', and StatusBadge 'Offen'. Backend pytest: 11/11 green in /app/backend/tests/test_iteration13.py. Deprecated packages detected: none.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration13.py",
+    "/app/test_reports/pytest/pytest_iter13.xml"
+  ],
+  "action_items": [
+    "No functional bugs. Unsubscribe, konto order details, updated Impressum text and expanded AGB all meet acceptance criteria.",
+    "Nice-to-have (unchanged from iter 12): confirmToken/unsubToken never expire — consider adding expiresAt to db.newsletter and rejecting stale tokens.",
+    "Optional: /shop/konto could show the customer street/city on each order card (currently items/discount/shipping/MwSt/Gesamt/Lieferstatus are shown, address is available in the doc but hidden). Not requested — flagging as UX suggestion.",
+    "Optional: paymentStatus 'Offen' is rendered via StatusBadge; consider a subtle info line 'Zahlung noch offen — jetzt bezahlen' with a re-checkout button so users can resume a preview-created (Stripe placeholder) order."
+  ],
+  "critical_code_review_comments": [
+    "backend/app/routers/newsletter.py:161-171 newsletter_unsubscribe — looks up by unsubToken, returns HTML 404 for unknown/re-used tokens, deletes the doc on success. No enumeration risk (token is 16-byte urlsafe). Correct.",
+    "backend/app/routers/newsletter.py:86-93 subscribe seeds unsubToken=secrets.token_urlsafe(16) at insert time, so unsubscribe works even before double-opt-in confirm. Consistent with the welcome-mail link building in _send_welcome (line 33).",
+    "backend/app/routers/newsletter.py:33 unsubscribe link uses _safe_base(baseUrl) → falls back to APP_URL env if the caller doesn't send a trustworthy https baseUrl; matches the confirm link. Good.",
+    "backend/app/routers/shop.py:70-118 create_shop_order stores userId from optional Bearer via _optional_uid; POST /api/shop/orders with an anonymous request keeps userId=None (guest checkout); with Bearer sets userId → the doc is later returned by /api/shop/my-orders. Correct.",
+    "backend/app/routers/shop.py:261-264 shop_my_orders filters by user['id'] and strips _id via strip_id — no ObjectId leak (verified in pytest).",
+    "frontend/app/shop/konto.tsx:91-123 order card renders items list, discount row (only if discount>0 and shows percent when known), Versand, enthaltene MwSt, Gesamt total row, and Lieferstatus row. Uses testID={`myorder-${o.id}`}. Correct.",
+    "frontend/app/shop/konto.tsx:47-49 register response is stored via shopSetToken and setUser(res.user), then myOrders() is called immediately — so first-run konto after register shows any orders instantly. Correct.",
+    "frontend/src/legal.ts:10-12 representatives/email/phone are now real values (previously placeholders). Verified in the rendered /legal/impressum.",
+    "frontend/src/legal.ts:127-135 AGB § 7 Eigentumsvorbehalt and § 8 Gewährleistung present; § 9 Streitbeilegung retained.",
+    "src/shop/auth.ts:37 createOrder passes auth=true, so the shop user token is attached; server-side _optional_uid links userId. Correct data flow for the 'Meine Bestellungen' feature."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration13.py",
+    "/app/test_reports/pytest/pytest_iter13.xml",
+    "/app/test_reports/iteration_13.json"
+  ],
+  "success_rate": {
+    "backend": "100% (11/11 pytest, -n0)",
+    "frontend": "100% — impressum text updated, AGB expanded sections present, register→authenticated order→konto card with items/Versand/MwSt/Gesamt/Lieferstatus verified on 390x844"
+  },
+  "seed_data_creation": "Ephemeral: ~6 TEST_ newsletter subs, 2 TEST_ shop users and 1 test order created during the run — all cleaned up post-run (pytest teardown + explicit mongo cleanup). Production data untouched.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iter 13 shipped: (1) GET /api/newsletter/unsubscribe?token=<unsubToken> → HTML 200 'Abgemeldet' + deletes db.newsletter doc; bad token → HTML 404 'Link ungültig'. (2) db.newsletter docs are created with both confirmToken AND unsubToken on subscribe. (3) /shop/konto now shows full order details (items, Versand, MwSt, Gesamt, Lieferstatus + StatusBadge) via testID='myorder-<id>' — driven by GET /api/shop/my-orders which already returned all fields; the change was purely in konto.tsx render. (4) /legal/impressum has real Vertreter/E-Mail/Telefon; /legal/agb has § 1..§ 9 including Eigentumsvorbehalt+Gewährleistung. To recreate a UI-driven test order in preview (Stripe checkout does NOT complete): register via /shop/konto → grab localStorage['shop_token'] via page.evaluate → POST /api/shop/orders same-origin with Bearer + a product from /api/shop/products; reload /shop/konto. Cleanup: db.users+db.shop_orders on emails matching /^test_/i, db.newsletter on emails matching /^test_/i. Run: `pytest backend/tests/test_iteration13.py -n0 --junitxml=/app/test_reports/pytest/pytest_iter13.xml`.",
+  "rca_of_issue": "No bugs to root-cause; every requested acceptance criterion (unsubscribe valid=HTML 'Abgemeldet' + delete, unsubscribe invalid/reused=404 'Link ungültig', subscribe still {ok,pending:true}, confirm still issues SS-XXXXXX + validate-code works, my-orders returns items+shipping+taxTotal+total+status+discount, konto renders those, impressum real data, AGB expanded) passed on first run."
+}

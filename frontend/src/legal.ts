@@ -7,10 +7,9 @@ export const COMPANY = {
   zip: "92348",
   city: "Berg",
   vatId: "DE449803615",
-  // Not yet provided – please fill in:
-  representatives: "[Vertretungsberechtigte Gesellschafter eintragen]",
-  email: "[E-Mail eintragen]",
-  phone: "[Telefon eintragen]",
+  representatives: "Sergio Lucchetta und Salvatore Lucchetta",
+  email: "Info@aiello-germany.de",
+  phone: "+49 151 23500862",
 };
 
 export type LegalSection = { heading?: string; body: string };
@@ -61,22 +60,29 @@ export const DATENSCHUTZ: LegalSection[] = [
     body:
       "Für den Newsletter nutzen wir das Double-Opt-In-Verfahren: Nach Ihrer Anmeldung erhalten Sie eine E-Mail mit " +
       "Bestätigungslink. Erst nach Bestätigung versenden wir den Newsletter. Sie können Ihre Einwilligung jederzeit " +
-      "widerrufen, indem Sie sich abmelden.",
+      "mit Wirkung für die Zukunft widerrufen – über den Abmeldelink in jeder Newsletter-E-Mail oder per Nachricht an uns.",
   },
   {
-    heading: "5. Empfänger / Auftragsverarbeiter",
+    heading: "5. Push-Benachrichtigungen",
+    body:
+      "Wenn Sie Push-Benachrichtigungen erlauben, verarbeiten wir ein Gerät-Token, um Sie über Angebote zu informieren. " +
+      "Grundlage ist Ihre Einwilligung (Art. 6 Abs. 1 lit. a DSGVO), die Sie jederzeit in den Geräteeinstellungen " +
+      "widerrufen können.",
+  },
+  {
+    heading: "6. Empfänger / Auftragsverarbeiter",
     body:
       "Zur Zahlungsabwicklung: Stripe. Zum E-Mail-Versand nutzen wir einen E-Mail-Dienstleister. " +
       "Mit diesen bestehen Verträge zur Auftragsverarbeitung, soweit erforderlich.",
   },
   {
-    heading: "6. Speicherdauer",
+    heading: "7. Speicherdauer",
     body:
       "Wir speichern personenbezogene Daten nur so lange, wie es für die genannten Zwecke erforderlich ist oder " +
       "gesetzliche Aufbewahrungsfristen (z. B. handels- und steuerrechtlich) dies vorschreiben.",
   },
   {
-    heading: "7. Ihre Rechte",
+    heading: "8. Ihre Rechte",
     body:
       "Sie haben das Recht auf Auskunft, Berichtigung, Löschung, Einschränkung der Verarbeitung, Datenübertragbarkeit " +
       "sowie Widerspruch. Zudem können Sie sich bei einer Aufsichtsbehörde beschweren.",
@@ -116,6 +122,22 @@ export const AGB: LegalSection[] = [
     heading: "§ 6 Widerrufsrecht",
     body:
       "Verbrauchern steht ein gesetzliches Widerrufsrecht zu. Einzelheiten entnehmen Sie bitte der Widerrufsbelehrung.",
+  },
+  {
+    heading: "§ 7 Eigentumsvorbehalt",
+    body: "Die Ware bleibt bis zur vollständigen Bezahlung unser Eigentum.",
+  },
+  {
+    heading: "§ 8 Gewährleistung",
+    body:
+      "Es gilt das gesetzliche Mängelhaftungsrecht. Bei berechtigten Mängeln haben Sie im Rahmen der gesetzlichen " +
+      "Bestimmungen Anspruch auf Nacherfüllung, Rücktritt oder Minderung.",
+  },
+  {
+    heading: "§ 9 Streitbeilegung",
+    body:
+      "Plattform der EU-Kommission zur Online-Streitbeilegung: https://ec.europa.eu/consumers/odr. Wir sind zur " +
+      "Teilnahme an einem Streitbeilegungsverfahren vor einer Verbraucherschlichtungsstelle weder verpflichtet noch bereit.",
   },
 ];
 
