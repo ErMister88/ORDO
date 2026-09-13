@@ -15,8 +15,8 @@ APP_URL = os.environ.get("APP_URL", "https://ordo-connect.app")
 
 
 def _safe_base(base: str | None) -> str:
-    if base and base.startswith("https://") and "." in base:
-        return base.rstrip("/")
+    # Security: never trust a client-supplied base URL for links in brand-sent
+    # emails (open-redirect / phishing). Always use the server-configured APP_URL.
     return APP_URL.rstrip("/")
 
 

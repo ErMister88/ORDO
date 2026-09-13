@@ -1,0 +1,37 @@
+{
+  "summary": "Verified re-audit fixes: (1) SEC machines scoping — sales role is now company-scoped via visible_company_ids in GET /machine-requests, PUT /machine-requests/{id}, POST /machine-requests/{id}/accept, and GET /machines/leasing-contracts. Admin sees all. Confirmed no PII leak of company c2 to sales u-sales. (2) SEC machines floor — PUT /machine-requests/{id} rejects coffeePricePerKg below product.absoluteFloor with 400; at/above floor succeeds. (3) SEC newsletter open-redirect — _safe_base() always returns server APP_URL and drops any client-supplied baseUrl. Subscribe + confirm end-to-end still works and issues an SS-XXXXXX discount code. Regressions: full leasing happy path (customer request -> admin terms -> customer accept -> auto machine_leasing contract) works and appears in admin leasing-contracts. Kauf checkout returns 502 in preview as expected. Prior fixes still hold: shopuser -> 403 on /products, customer /orders ignores client price, shop-order checkout/payment-status require token or owner. B2B admin/sales/customer login all healthy. 22/22 tests pass.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration20_machines_newsletter.py",
+    "/app/test_reports/pytest/pytest_iter20.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "machines.py:list_machine_requests correctly branches on role: admin -> all, else visible_company_ids + userId OR — matches assignedSalesRepId model.",
+    "machines.py:set_machine_terms enforces scoping for sales (403 out-of-scope) and absoluteFloor check happens BEFORE persist — correct ordering.",
+    "machines.py:accept_machine_offer relies on _owns() which uses visible_company_ids — correctly denies out-of-scope for sales while still allowing customer via userId.",
+    "machines.py:leasing_contracts scopes to visible_company_ids for non-admin — no c2 leak confirmed.",
+    "newsletter.py:_safe_base ignores the incoming base argument entirely and returns APP_URL — clean, minimal, no bypass. Confirm and unsubscribe links are always server-hosted.",
+    "Regression: pricing/orders/shop-order token flows all continue to work (SEC-001..003 from iteration 19).",
+    "Nit: newsletter.py APP_URL falls back to 'https://ordo-connect.app' if env is unset — acceptable as it's still a fixed server value, but consider surfacing a startup warning if APP_URL is not configured.",
+    "Nit: machines.py APP_URL fallback ('https://ordo-connect.preview.emergentagent.com') is hardcoded — same recommendation."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration20_machines_newsletter.py (new)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "n/a (backend-only request)"},
+  "seed_data_creation": "All test-created machine_requests (id prefix 'M-TEST-'), contracts (id prefix 'S&S-TEST-'), newsletter subs (email prefix 'nl_sec_'/'nl_ok_'), shop-users ('reg_shop_'), and their orders/invoices are removed by module teardown. Demo machines and real user accounts (sergio_iphone/lucchetta114) untouched.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Reuse test_iteration20_machines_newsletter.py as regression suite when touching /app/backend/app/routers/machines.py, newsletter.py, or deps.py:visible_company_ids. Company assignments: c1/c3/c4 -> u-sales, c2 -> u-admin. Seed helper _seed_machine_request(company_id, req_type, ...) inserts machine_requests directly (used because there's no seeded user under c2). Stripe key is a placeholder in preview => /machine-requests/{id}/checkout returns 502 for authorised callers — that path is currently exercised.",
+  "rca_of_issue": "Not applicable — verification-only iteration. All targeted security fixes behave as specified in the request."
+}

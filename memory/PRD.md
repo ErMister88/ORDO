@@ -169,3 +169,9 @@ Audit-Ergebnis war FAIL → alle Punkte behoben & verifiziert (23/23 Backend-Tes
 - **SEC-003 (MEDIUM)**: Reset-Code jetzt 8-stellig alphanumerisch + Sperre nach 5 Fehlversuchen (429).
 - **Härtung**: `register-push` bindet an Auth-Caller / namespaced `anon:` (kein Spoofing); Shop-Bestellungen mit `token` (Checkout/Status brauchen Token oder Owner-Auth); CORS ohne Wildcard+Credentials.
 - Frontend: warenkorb & konto übergeben `?token=` an Checkout/Payment-Status.
+
+## Security Re-Audit (2026-06-13, Iteration 20)
+Re-Audit bestätigte alle Iteration-19-Fixes als geschlossen. Zwei neue Befunde behoben & verifiziert (22/22):
+- **Maschinen-Modul Mandantentrennung (MEDIUM)**: Vertrieb ist jetzt firmenscoped (`visible_company_ids`) in `list_machine_requests`, `set_machine_terms`, `accept`, `leasing-contracts`, `_owns`; Admin sieht alles. Zusätzlich: `coffeePricePerKg` darf `absoluteFloor` des Produkts nicht unterschreiten (400).
+- **Newsletter Open-Redirect (LOW)**: `_safe_base` ignoriert vom Client übergebene `baseUrl`; Links in Marken-Mails nutzen immer Server-`APP_URL`.
+- Offene P3-Härtungen (bewusst später): unauth `/api/files` (nur Produktbilder), In-Memory Login-Lockout, JWT-Invalidierung bei Passwortwechsel.

@@ -122,7 +122,7 @@ async def create_machine_request(body: MachineRequestIn, user: Annotated[dict, D
 
 @api_router.get("/machine-requests")
 async def list_machine_requests(user: Annotated[dict, Depends(current_user)]):
-    if user["role"] in ("admin", "sales"):
+    if user["role"] == "admin":
         rows = await db.machine_requests.find({}).sort("createdAt", -1).to_list(1000)
     else:
         ids = await visible_company_ids(user)
@@ -137,6 +137,10 @@ async def set_machine_terms(req_id: str, body: MachineTermsIn, user: Annotated[d
     r = await db.machine_requests.find_one({"id": req_id})
     if not r:
         raise HTTPException(status_code=404, detail="Anfrage nicht gefunden")
+    if user["role"] != "admin":
+        ids = await visible_company_ids(user)
+        if r["customer"].get("companyId") not in ids:
+            raise HTTPException(status_code=403, detail="Keine Berechtigung")
     status = body.status or "Angebot"
     is_lease = r.get("type") == "leasing"
     # Leasing offers require a complete coffee binding before they can be sent.
@@ -153,6 +157,11 @@ async def set_machine_terms(req_id: str, body: MachineTermsIn, user: Annotated[d
         p = await db.products.find_one({"id": body.productId})
         if p:
             coffee_name = f"{p.get('brand', '')} {p.get('name', '')}".strip()
+            # Never bind coffee below the product's absolute floor price.
+            floor = p.get("absoluteFloor")
+            if body.coffeePricePerKg is not None and floor is not None and body.coffeePricePerKg < floor:
+                raise HTTPException(status_code=400,
+                                    detail=f"Kaffeepreis darf {floor:.2f} €/kg nicht unterschreiten.")
 
     terms = {
         "downPayment": body.downPayment, "monthlyRate": body.monthlyRate,
@@ -198,9 +207,9 @@ async def accept_machine_offer(req_id: str, user: Annotated[dict, Depends(curren
     r = await db.machine_requests.find_one({"id": req_id})
     if not r:
         raise HTTPException(status_code=404, detail="Anfrage nicht gefunden")
-    if user["role"] not in ("admin", "sales"):
+    if user["role"] != "admin":
         ids = await visible_company_ids(user)
-        if r["customer"].get("companyId") not in ids and r["customer"].get("userId") != user["id"]:
+        if not _owns(r, user, ids):
             raise HTTPException(status_code=403, detail="Keine Berechtigung")
     if r.get("status") != "Angebot":
         raise HTTPException(status_code=409, detail="Es liegt kein offenes Angebot vor")
@@ -235,8 +244,10 @@ async def accept_machine_offer(req_id: str, user: Annotated[dict, Depends(curren
 
 
 def _owns(r: dict, user: dict, ids: list) -> bool:
-    return (user["role"] in ("admin", "sales")
-            or r["customer"].get("companyId") in ids
+    if user["role"] == "admin":
+        return True
+    # sales and customers are both bounded by their visible companies
+    return (r["customer"].get("companyId") in ids
             or r["customer"].get("userId") == user["id"])
 
 
@@ -274,7 +285,11 @@ async def respond_machine_offer(req_id: str, body: MachineRespondIn, user: Annot
 
 @api_router.get("/machines/leasing-contracts")
 async def leasing_contracts(user: Annotated[dict, Depends(require_roles("admin", "sales"))]):
-    rows = await db.contracts.find({"source": "machine_leasing"}).sort("start", -1).to_list(1000)
+    q = {"source": "machine_leasing"}
+    if user["role"] != "admin":
+        ids = await visible_company_ids(user)
+        q["companyId"] = {"$in": ids}
+    rows = await db.contracts.find(q).sort("start", -1).to_list(1000)
     out = []
     for c in rows:
         company = await db.companies.find_one({"id": c.get("companyId")}) if c.get("companyId") else None
