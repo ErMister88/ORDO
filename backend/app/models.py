@@ -128,6 +128,40 @@ class PushBroadcastIn(BaseModel):
 
 class ShopStatusIn(BaseModel):
     status: str
+    trackingNumber: Optional[str] = None
+
+
+class ShopAddressIn(BaseModel):
+    name: str = ""
+    phone: str = ""
+    street: str = ""
+    zip: str = ""
+    city: str = ""
+
+
+class MachineIn(BaseModel):
+    name: str
+    description: str = ""
+    imageUrl: str = ""
+    price: float  # Bruttopreis inkl. 19% MwSt (Kauf)
+    active: bool = True
+
+
+class MachineRequestIn(BaseModel):
+    machineId: str
+    type: str  # "kauf" | "finanzierung" | "leasing"
+    termMonths: Optional[int] = 48
+    message: str = ""
+
+
+class MachineTermsIn(BaseModel):
+    status: Optional[str] = None
+    downPayment: Optional[float] = None
+    monthlyRate: Optional[float] = None
+    finalPayment: Optional[float] = None
+    termMonths: Optional[int] = None
+    minCoffeeKgMonth: Optional[float] = None
+    note: str = ""
 
 
 class ShopRegisterIn(BaseModel):

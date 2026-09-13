@@ -91,6 +91,8 @@ export default function RootLayout() {
                   <Stack.Screen name="legal/datenschutz" options={{ presentation: "card" }} />
                   <Stack.Screen name="legal/agb" options={{ presentation: "card" }} />
                   <Stack.Screen name="legal/widerruf" options={{ presentation: "card" }} />
+                  <Stack.Screen name="maschinen" options={{ presentation: "card" }} />
+                  <Stack.Screen name="maschinen-admin" options={{ presentation: "card" }} />
                 </Stack>
               </CartProvider>
             </AuthProvider>

@@ -1,0 +1,30 @@
+{
+  "summary": "Iteration 15 - Tested all 5 new features end-to-end. BACKEND (15/15 pytest passing): (1) Newsletter promo code applied to shopuser (discount>0) AND guest (discount>0) but NOT to admin/sales/customer B2B users (discount=0, discountPercent=0) - via POST /api/shop/orders. (2) PUT /api/shop/me/address persists {name,phone,street,zip,city} and GET /api/shop/me returns it; register and login responses both include an 'address' field (empty object for new user). (3) New shop orders have statusHistory=[{status:'Neu',at}]; PUT /api/shop/orders/{id}/status with trackingNumber sets trackingNumber + carrier 'GLS' and appends to statusHistory; without tracking still 200; invalid status=400; unknown order=404; shopuser=403; no-auth=401. (4) FRONTEND /shop/konto: register+login, 'Meine Lieferadresse' card (addr-name/phone/street/zip/city/save) persists and prefills after reload from GET /shop/me. (5) FRONTEND /shop/warenkorb: with saved address, Lieferadresse form auto-prefills (name, email, phone, street, zip, city) via useEffect calling shopApi.me(). (6) FRONTEND /shop/konto order card renders 'STATUSVERLAUF' timeline (Neu -> Versendet w/ dates), invoice-pdf-<id> button tappable (no page errors on click, expo-print opens web print dialog silently as expected), track-<id> 'Sendung verfolgen · <tracking>' link visible when trackingNumber set. (7) FRONTEND /shop-admin: tracking-<id> input accepts GLS number; tapping status-<id>-Versendet chip updates order to status=Versendet, trackingNumber=01234567890, carrier=GLS (verified via GET /api/shop/orders after tap).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration15.py",
+    "/app/test_reports/pytest/pytest_iter15.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "shop.py create_shop_order correctly gates discount by user.role via _optional_uid + users.find_one lookup; guests keep is_b2c=True (correct spec: guests are B2C).",
+    "shop.py update_shop_order_status uses $push on statusHistory (append semantics) and only sets trackingNumber/carrier when tracking is truthy. GLS is hardcoded as carrier which matches spec.",
+    "shop.py _gls_track_url falls back to a general GLS tracking URL when zip is missing - good defensive default.",
+    "konto.tsx timeline renders statusHistory or falls back to a single [{status,createdAt}] entry so legacy orders without history still render safely.",
+    "pdf.ts shopWrap correctly overrides B2B header/footer with 'S&S coffee and more' branding and shows tracking + tax breakdown; Print.printAsync used on web (browser print dialog) - Sharing skipped on web (Platform.OS === 'web' branch).",
+    "warenkorb.tsx prefill uses shopApi.me() in useEffect and only overrides empty form fields (f.name || ...) - won't clobber user edits.",
+    "MongoDB _id stripped from all order/user responses via strip_id / _shop_user_public helpers - verified no leakage in status update response and my-orders."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration15.py (new)"],
+  "success_rate": {"backend": "100% (15/15)", "frontend": "100% (address save+prefill, cart prefill, status timeline, invoice-pdf tap, track link, admin tracking + Versendet chip all verified)"},
+  "seed_data_creation": "Transient shop users (email prefix iter15*_), one newsletter doc (SS-XXX) and shop orders were created during tests, then all cleaned up post-run (10 users, 0 newsletter, 6 orders deleted from MongoDB).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "AsyncStorage on web JSON.stringify's values - when reading 'shop_token' from localStorage directly you must JSON.parse it (or the extra wrapping quotes will cause 401). Login test IDs: login-email-input, login-password-input, login-submit-button. Shop admin test IDs: tracking-<orderId>, status-<orderId>-<Status>. Konto test IDs: acc-name/email/password/submit, addr-name/phone/street/zip/city/save, myorder-<id>, invoice-pdf-<id>, track-<id>, pay-now-<id>. Cart test IDs: cust-name/email/phone/street/zip/city. Statusverlauf label renders UPPERCASE in the UI. When creating orders via page.evaluate for a specific user, JSON.parse the token before adding to Authorization header otherwise userId will be null in the created order."
+}

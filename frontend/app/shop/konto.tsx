@@ -1,15 +1,18 @@
 import { useEffect, useState } from "react";
-import { View, Text, ScrollView, Pressable, KeyboardAvoidingView, Platform, Alert } from "react-native";
+import { View, Text, ScrollView, Pressable, KeyboardAvoidingView, Platform, Alert, Linking } from "react-native";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as WebBrowser from "expo-web-browser";
-import { ArrowLeft, SignOut, MapPin } from "phosphor-react-native";
+import { ArrowLeft, SignOut, MapPin, Receipt, Truck } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
 import { apiGet, apiPost } from "@/src/api/client";
 import { euro, dateDE } from "@/src/lib/format";
 import { shopApi, shopSetToken, shopLogout, shopToken } from "@/src/shop/auth";
+import { shareShopInvoicePdf, glsTrackUrl } from "@/src/lib/pdf";
 import { Card, Input, Button, SectionTitle, Muted, EmptyState, InfoRow, StatusBadge } from "@/src/components/ui";
+
+const EMPTY_ADDR = { name: "", phone: "", street: "", zip: "", city: "" };
 
 export default function ShopKonto() {
   const styles = useStyles();
@@ -26,6 +29,9 @@ export default function ShopKonto() {
   const [password, setPassword] = useState("");
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
+  const [addr, setAddr] = useState({ ...EMPTY_ADDR });
+  const [addrSaving, setAddrSaving] = useState(false);
+  const setA = (k: string) => (v: string) => setAddr((a) => ({ ...a, [k]: v }));
 
   const loadAccount = async () => {
     try {
@@ -33,6 +39,7 @@ export default function ShopKonto() {
       if (!t) { setReady(true); return; }
       const me = await shopApi.me();
       setUser(me);
+      setAddr({ ...EMPTY_ADDR, ...(me.address || {}) });
       setOrders(await shopApi.myOrders());
     } catch {
       await shopLogout();
@@ -42,6 +49,18 @@ export default function ShopKonto() {
   };
   useEffect(() => { loadAccount(); }, []);
 
+  const saveAddr = async () => {
+    setAddrSaving(true);
+    try {
+      await shopApi.saveAddress(addr);
+      Alert.alert("Gespeichert", "Deine Lieferadresse wurde gespeichert und wird beim nächsten Kauf vorausgefüllt.");
+    } catch (e: any) {
+      Alert.alert("Fehler", e.message || "Adresse konnte nicht gespeichert werden");
+    } finally {
+      setAddrSaving(false);
+    }
+  };
+
   const submit = async () => {
     setMsg(""); setLoading(true);
     try {
@@ -50,6 +69,7 @@ export default function ShopKonto() {
         : await shopApi.login({ email, password });
       await shopSetToken(res.access_token);
       setUser(res.user);
+      setAddr({ ...EMPTY_ADDR, ...(res.user.address || {}) });
       setPassword("");
       setOrders(await shopApi.myOrders());
     } catch (e: any) {
@@ -110,11 +130,30 @@ export default function ShopKonto() {
                 </Pressable>
               </Card>
 
+              <SectionTitle style={{ marginTop: 4 }}>Meine Lieferadresse</SectionTitle>
+              <Card>
+                <Muted>Wird beim Checkout automatisch vorausgefüllt.</Muted>
+                <Input testID="addr-name" value={addr.name} onChangeText={setA("name")} placeholder="Name" style={{ marginTop: 8 }} />
+                <Input testID="addr-phone" value={addr.phone} onChangeText={setA("phone")} placeholder="Telefon (optional)" keyboardType="phone-pad" style={{ marginTop: 8 }} />
+                <Input testID="addr-street" value={addr.street} onChangeText={setA("street")} placeholder="Straße & Nr." style={{ marginTop: 8 }} />
+                <View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
+                  <View style={{ flex: 1 }}>
+                    <Input testID="addr-zip" value={addr.zip} onChangeText={setA("zip")} placeholder="PLZ" keyboardType="numeric" />
+                  </View>
+                  <View style={{ flex: 2 }}>
+                    <Input testID="addr-city" value={addr.city} onChangeText={setA("city")} placeholder="Ort" />
+                  </View>
+                </View>
+                <Button testID="addr-save" title="Adresse speichern" loading={addrSaving} onPress={saveAddr} style={{ marginTop: 10 }} />
+              </Card>
+
               <SectionTitle style={{ marginTop: 4 }}>Meine Bestellungen</SectionTitle>
               {orders.length === 0 ? (
                 <EmptyState title="Noch keine Bestellungen" subtitle="Deine Shop-Bestellungen erscheinen hier" />
               ) : (
-                orders.map((o) => (
+                orders.map((o) => {
+                  const track = glsTrackUrl(o.trackingNumber, o.customer?.zip);
+                  return (
                   <Card key={o.id} testID={`myorder-${o.id}`}>
                     <View style={styles.row}>
                       <Text style={styles.oId}>{o.id}</Text>
@@ -141,10 +180,32 @@ export default function ShopKonto() {
                       <Text style={styles.totalLabel}>Gesamt</Text>
                       <Text style={styles.totalVal}>{euro(o.total)}</Text>
                     </View>
-                    <View style={styles.deliveryRow}>
-                      <Text style={styles.deliveryLabel}>Lieferstatus</Text>
-                      <Text style={styles.deliveryVal}>{o.status || "Neu"}</Text>
+
+                    <Text style={styles.blockLabel}>Statusverlauf</Text>
+                    <View style={styles.timeline}>
+                      {(o.statusHistory ?? [{ status: o.status || "Neu", at: o.createdAt }]).map((h: any, i: number, arr: any[]) => {
+                        const last = i === arr.length - 1;
+                        return (
+                          <View key={i} style={styles.tlRow}>
+                            <View style={styles.tlLeft}>
+                              <View style={[styles.tlDot, last && styles.tlDotActive]} />
+                              {i < arr.length - 1 ? <View style={styles.tlLine} /> : null}
+                            </View>
+                            <View style={{ flex: 1, paddingBottom: last ? 0 : 12 }}>
+                              <Text style={[styles.tlStatus, last && styles.tlStatusActive]}>{h.status}</Text>
+                              <Text style={styles.tlDate}>{dateDE(h.at)}</Text>
+                            </View>
+                          </View>
+                        );
+                      })}
                     </View>
+
+                    {o.trackingNumber ? (
+                      <Pressable testID={`track-${o.id}`} style={styles.trackBtn} onPress={() => track && Linking.openURL(track)}>
+                        <Truck size={16} color={colors.brandPrimary} weight="bold" />
+                        <Text style={styles.trackText}>Sendung verfolgen · {o.trackingNumber}</Text>
+                      </Pressable>
+                    ) : null}
 
                     {o.customer?.street ? (
                       <View style={styles.addrBox}>
@@ -159,17 +220,23 @@ export default function ShopKonto() {
                       </View>
                     ) : null}
 
+                    <Pressable testID={`invoice-pdf-${o.id}`} style={styles.pdfBtn} onPress={() => shareShopInvoicePdf(o)}>
+                      <Receipt size={16} color={colors.brandPrimary} weight="bold" />
+                      <Text style={styles.pdfText}>Rechnung als PDF</Text>
+                    </Pressable>
+
                     {o.paymentStatus !== "Bezahlt" ? (
                       <Button
                         testID={`pay-now-${o.id}`}
                         title="Jetzt bezahlen"
                         loading={payingId === o.id}
                         onPress={() => payNow(o.id)}
-                        style={{ marginTop: 12 }}
+                        style={{ marginTop: 10 }}
                       />
                     ) : null}
                   </Card>
-                ))
+                  );
+                })
               )}
             </>
           ) : (
@@ -233,6 +300,20 @@ const useStyles = makeStyles((c) => ({
   deliveryRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 8 },
   deliveryLabel: { fontSize: 13, fontWeight: "700", color: c.onSurfaceSecondary },
   deliveryVal: { fontSize: 13, fontWeight: "800", color: c.onSurface },
+  blockLabel: { fontSize: 12, fontWeight: "800", color: c.onSurfaceSecondary, marginTop: 12, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 },
+  timeline: { paddingLeft: 2 },
+  tlRow: { flexDirection: "row", gap: 10 },
+  tlLeft: { alignItems: "center", width: 16 },
+  tlDot: { width: 12, height: 12, borderRadius: 6, backgroundColor: c.border, marginTop: 2 },
+  tlDotActive: { backgroundColor: c.brandPrimary },
+  tlLine: { flex: 1, width: 2, backgroundColor: c.divider, marginTop: 2 },
+  tlStatus: { fontSize: 14, fontWeight: "700", color: c.onSurfaceSecondary },
+  tlStatusActive: { color: c.onSurface, fontWeight: "800" },
+  tlDate: { fontSize: 12, color: c.muted, marginTop: 1 },
+  trackBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 12, paddingVertical: 10, borderRadius: 10, backgroundColor: c.brandTertiary },
+  trackText: { color: c.brandPrimary, fontWeight: "700", fontSize: 13 },
+  pdfBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 10, paddingVertical: 10, borderRadius: 10, backgroundColor: c.surfaceTertiary },
+  pdfText: { color: c.brandPrimary, fontWeight: "700", fontSize: 14 },
   addrBox: { marginTop: 10, padding: 10, borderRadius: 10, backgroundColor: c.surfaceTertiary },
   addrHead: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 4 },
   addrTitle: { fontSize: 13, fontWeight: "800", color: c.onSurface },

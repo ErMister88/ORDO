@@ -9,7 +9,7 @@ from .seed import seed
 # Import routers so their @api_router routes register before we include it.
 from .routers import (  # noqa: F401,E402
     auth, users, products, pricing, companies, offers, orders, invoices, dashboard, analytics,
-    subscriptions, billing, payments, audit, shop, newsletter, push,
+    subscriptions, billing, payments, audit, shop, newsletter, push, machines,
 )
 
 app.include_router(api_router)

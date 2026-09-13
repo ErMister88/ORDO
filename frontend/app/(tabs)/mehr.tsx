@@ -1,7 +1,7 @@
 import { View, Text, ScrollView, Pressable } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
-import { SignOut, FileText, Receipt, Export, Package, UsersThree, Lock, CaretRight, ArrowsClockwise, ClockCounterClockwise, Storefront, Scales, ShieldCheck } from "phosphor-react-native";
+import { SignOut, FileText, Receipt, Export, Package, UsersThree, Lock, CaretRight, ArrowsClockwise, ClockCounterClockwise, Storefront, Scales, ShieldCheck, Coffee } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
@@ -90,6 +90,20 @@ export default function Mehr() {
           ))
         )}
 
+        <View style={[styles.sectionHead, { marginTop: 8 }]}>
+          <Coffee size={18} color={colors.brandPrimary} weight="fill" />
+          <SectionTitle>Maschinen</SectionTitle>
+        </View>
+        <Pressable testID="link-maschinen" onPress={() => router.push("/maschinen")}>
+          <Card>
+            <View style={styles.linkRow}>
+              <Coffee size={20} color={colors.brandPrimary} weight="bold" />
+              <Text style={styles.linkText}>Maschine kaufen, finanzieren oder leasen</Text>
+              <CaretRight size={18} color={colors.muted} />
+            </View>
+          </Card>
+        </Pressable>
+
         {user?.role === "admin" && (
           <>
             <View style={[styles.sectionHead, { marginTop: 8 }]}>
@@ -137,6 +151,15 @@ export default function Mehr() {
                 <View style={styles.linkRow}>
                   <Storefront size={20} color={colors.brandPrimary} weight="bold" />
                   <Text style={styles.linkText}>Shop-Verwaltung</Text>
+                  <CaretRight size={18} color={colors.muted} />
+                </View>
+              </Card>
+            </Pressable>
+            <Pressable testID="link-maschinen-admin" onPress={() => router.push("/maschinen-admin")}>
+              <Card>
+                <View style={styles.linkRow}>
+                  <Coffee size={20} color={colors.brandPrimary} weight="bold" />
+                  <Text style={styles.linkText}>Maschinen-Verwaltung</Text>
                   <CaretRight size={18} color={colors.muted} />
                 </View>
               </Card>

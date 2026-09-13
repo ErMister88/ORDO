@@ -1,0 +1,33 @@
+{
+  "summary": "Iteration 16 - Machines feature (B2B acquisition: Kauf / Finanzierung / Leasing). BACKEND 19/19 pytest passing. GET /api/machines auto-seeds 3 demo machines; taxRate=19; customer only sees active; admin sees inactive. POST/PUT/DELETE /api/machines admin-only (403 for customer+sales). POST /api/machine-requests: kauf -> status 'Zahlung offen' paymentStatus 'Offen' termMonths 48 default; finanzierung/leasing -> 'Angefragt'; invalid type=400; unknown machine=404. PUT /api/machine-requests/{id} admin/sales sets terms+status='Angebot' with downPayment/monthlyRate/finalPayment/termMonths/note; customer=403. POST /accept requires status='Angebot' -> sets 'Bestätigt'; else 409. POST /checkout returns 200 url OR 502 in preview (both accepted per spec); non-kauf=400. GET /payment-status returns status. FRONTEND (mobile 390x844): customer /maschinen shows 3 machine-<id> cards with buy/finance/lease buttons and inline term chips (24/36/48); submit-request creates request which appears in 'Meine Anfragen'. Admin /maschinen-admin shows catalog with edit/deactivate + '+' new-machine form (m-name, m-price, m-save works, catalog goes 3->4). Requests section renders t-down/t-rate/t-term/t-final/t-note inputs; send-offer sets status='Angebot' and customer then sees terms panel with accept-<id> button; tapping accept moves status to 'Bestätigt' (verified visually). Nav: 'Mehr' shows link-maschinen for all, link-maschinen-admin only for admin (customer view hides it, admin view shows it).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration16.py",
+    "/app/test_reports/pytest/pytest_iter16.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "machines.py: _ensure_seed correctly inserts exactly 3 demo machines only when collection empty (count==0 guard). Race not an issue for preview.",
+    "machines.py list_machines: sorts by price asc, filters active for non-staff, strips _id — good.",
+    "machines.py create_machine_request: status is 'Zahlung offen' for kauf and 'Angefragt' otherwise, termMonths defaults 48 via body.termMonths or 48, snapshot machinePrice at creation time (immutable price) — good defensive design.",
+    "machines.py set_machine_terms: preserves termMonths from request if body doesn't provide one; defaults status to 'Angebot'; sends email best-effort with try/except. Good.",
+    "machines.py accept_machine_offer: 409 if status != 'Angebot' (correct). Ownership check uses visible_company_ids OR userId — matches other endpoints.",
+    "machines.py checkout: 502 wrapper around Stripe exception is intentional and documented; stores stripeSessionId on success only.",
+    "machines.py payment-status: does a Stripe.Session.retrieve on cache-miss and idempotently updates DB with $ne 'Bezahlt' guard — safe against concurrent writes.",
+    "maschinen.tsx: buy() creates a machine-request then checkout in a single flow; polls payment-status 8x @ 1.5s = 12s window; falls back gracefully on 502 (Alert). Good UX.",
+    "maschinen-admin.tsx RequestCard: sends null for empty numeric fields (correct - server model uses Optional[float]); prefills termMonths from existing terms or request. Good.",
+    "mehr.tsx: link-maschinen-admin correctly gated behind user?.role === 'admin'. link-maschinen (public) always shown."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration16.py (new)"],
+  "success_rate": {"backend": "100% (19/19)", "frontend": "100% (customer catalog+finanzierung request, admin CRUD+send-offer, customer accept-<id>, nav visibility all verified)"},
+  "seed_data_creation": "Transient test machines (name prefix TEST_) and machine_requests for kunde@ss-coffee.de created during tests then cleaned up post-run. 3 demo machines preserved. Final state: 3 machines, 0 requests.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Machines testIDs — customer /maschinen: machine-<id>, buy-<id>, finance-<id>, lease-<id>, term-<id>-24/36/48, submit-request-<id>, req-<id>, accept-<id>, pay-<id>. Admin /maschinen-admin: new-machine, machine-form, m-name, m-desc, m-price, m-save, adm-machine-<id>, edit-<id>, del-<id>, adm-req-<id>, t-down/t-rate/t-term/t-final/t-coffee/t-note-<id>, send-offer-<id>. Mehr tab: link-maschinen (all), link-maschinen-admin (admin only). Stripe checkout returns 502 in preview (placeholder key) — expected, not a bug. Email delivery best-effort — expected. Demo machines auto-seed once on first /api/machines GET (3 machines). When testing xdist-scheduled tests, don't rely on module-level state across classes — each class runs in its own worker (LoadScopeScheduling), so create needed fixtures within each test class."
+}

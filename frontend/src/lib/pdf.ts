@@ -2,6 +2,7 @@ import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
 import { Platform } from "react-native";
 import { euro, num, dateDE } from "@/src/lib/format";
+import { COMPANY } from "@/src/legal";
 
 const BRAND = "#0B1B3D";
 const ACCENT = "#1D3B8E";
@@ -50,6 +51,65 @@ async function shareHtml(html: string, filename: string) {
   } catch (e) {
     console.warn("PDF konnte nicht erstellt werden", e);
   }
+}
+
+export function glsTrackUrl(tracking?: string, zip?: string): string {
+  const t = (tracking || "").trim();
+  if (!t) return "";
+  const z = (zip || "").trim();
+  return z
+    ? `https://gls-group.eu/track/${t}/postalcode/${z}`
+    : `https://gls-group.eu/DE/de/paketverfolgung?match=${t}`;
+}
+
+export async function shareShopInvoicePdf(order: any) {
+  const c = order.customer || {};
+  const rows = (order.items || [])
+    .map((i: any) => {
+      const gross = i.price * i.qty;
+      const rate = i.taxRate ?? 7;
+      const net = gross / (1 + rate / 100);
+      return `<tr><td>${i.name ?? i.productId}</td>
+        <td class="right">${num(i.qty)}</td>
+        <td class="right">${euro(i.price)}</td>
+        <td class="right">${rate}%</td>
+        <td class="right">${euro(net)}</td>
+        <td class="right">${euro(gross)}</td></tr>`;
+    })
+    .join("");
+  const vat = taxSummary(order.taxBreakdown);
+  const paid = order.paymentStatus === "Bezahlt";
+  const inner = `
+    <h1>Rechnung ${order.id}</h1>
+    <span class="badge">${paid ? "Bezahlt" : "Offen"}</span>
+    <div class="box" style="margin-top:16px;">
+      <strong>Rechnungsempfänger</strong><br/>
+      <span class="muted">${c.name ?? ""}<br/>${c.street ?? ""}<br/>${c.zip ?? ""} ${c.city ?? ""}${c.email ? `<br/>${c.email}` : ""}</span>
+    </div>
+    <table>
+      <tr><th>Position</th><th class="right">Menge</th><th class="right">Einzelpreis</th><th class="right">MwSt</th><th class="right">Netto</th><th class="right">Brutto</th></tr>
+      ${rows}
+    </table>
+    ${order.discount > 0 ? `<div class="right muted">Rabatt${order.discountPercent ? ` (${order.discountPercent}%)` : ""}: -${euro(order.discount)}</div>` : ""}
+    <div class="right muted">Versand: ${order.shipping === 0 ? "Gratis" : euro(order.shipping)}</div>
+    ${vat}
+    <div class="right total" style="margin-top:6px;">Gesamt (brutto): ${euro(order.total)}</div>
+    <p class="muted">Bestelldatum: ${dateDE(order.createdAt)} · Zahlungsstatus: ${order.paymentStatus ?? "Offen"} · Lieferstatus: ${order.status ?? "Neu"}</p>
+    ${order.trackingNumber ? `<p class="muted">Sendungsnummer (GLS): ${order.trackingNumber}</p>` : ""}`;
+  const html = shopWrap(`Rechnung ${order.id}`, inner);
+  await shareHtml(html, `Rechnung-${order.id}.pdf`);
+}
+
+function shopWrap(title: string, inner: string): string {
+  return wrap(title, inner)
+    .replace(
+      "S&amp;S Großhandel<small>B2B VERTRIEBSPORTAL</small>",
+      "S&amp;S coffee and more<small>KAFFEE-SHOP</small>",
+    )
+    .replace(
+      "S&amp;S Großhandel GmbH · Nürnberg · Dieses Dokument wurde automatisch erzeugt.",
+      `${COMPANY.name} · ${COMPANY.street}, ${COMPANY.zip} ${COMPANY.city} · USt-IdNr. ${COMPANY.vatId} · Dieses Dokument wurde automatisch erzeugt.`,
+    );
 }
 
 export async function shareOfferPdf(offer: any, company: any, products: Record<string, any>) {

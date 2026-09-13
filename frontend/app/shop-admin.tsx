@@ -58,8 +58,10 @@ export default function ShopAdmin() {
   });
 
   const SHOP_STATUSES = ["Neu", "Bestätigt", "In Bearbeitung", "Versendet", "Abgeschlossen"];
+  const [tracking, setTracking] = useState<Record<string, string>>({});
   const updateStatus = useMutation({
-    mutationFn: ({ id, status }: { id: string; status: string }) => apiPut(`/shop/orders/${id}/status`, { status }),
+    mutationFn: ({ id, status, trackingNumber }: { id: string; status: string; trackingNumber?: string }) =>
+      apiPut(`/shop/orders/${id}/status`, { status, trackingNumber }),
     onSuccess: (_res, vars) => {
       qc.invalidateQueries({ queryKey: ["shop-orders"] });
       Alert.alert("Status aktualisiert", `Bestellung auf „${vars.status}" gesetzt. Der Kunde wurde per E-Mail informiert.`);
@@ -154,6 +156,14 @@ export default function ShopAdmin() {
                     {o.customer.street}, {o.customer.zip} {o.customer.city}
                   </Muted>
                 ) : null}
+                <Text style={styles.statusLabel}>GLS-Sendungsnummer (optional)</Text>
+                <Input
+                  testID={`tracking-${o.id}`}
+                  value={tracking[o.id] ?? o.trackingNumber ?? ""}
+                  onChangeText={(v) => setTracking((t) => ({ ...t, [o.id]: v }))}
+                  placeholder="z. B. 01234567890"
+                  autoCapitalize="characters"
+                />
                 <Text style={styles.statusLabel}>Lieferstatus</Text>
                 <View style={styles.chips}>
                   {SHOP_STATUSES.map((st) => {
@@ -163,7 +173,7 @@ export default function ShopAdmin() {
                         key={st}
                         testID={`status-${o.id}-${st}`}
                         disabled={active || updateStatus.isPending}
-                        onPress={() => updateStatus.mutate({ id: o.id, status: st })}
+                        onPress={() => updateStatus.mutate({ id: o.id, status: st, trackingNumber: (tracking[o.id] ?? o.trackingNumber) || undefined })}
                         style={[styles.chip, active && styles.chipActive]}
                       >
                         <Text style={[styles.chipTxt, active && styles.chipTxtActive]}>{st}</Text>

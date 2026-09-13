@@ -133,3 +133,17 @@ Backend split into a package: `backend/app/` with `core.py` (config/db/security)
 - **Bestellstatus-Updates**: `PUT /api/shop/orders/{id}/status` (admin/sales), Status-Chips in Shop-Verwaltung (Neu → Bestätigt → In Bearbeitung → Versendet → Abgeschlossen/Storniert); Kunde erhält Status-E-Mail.
 - **B2B-Rechtsseiten**: „Rechtliches"-Sektion im „Mehr"-Tab mit Impressum/Datenschutz/AGB/Widerruf.
 - Backend 13/13 pytest (`tests/test_iteration14.py`), Frontend verifiziert. Hinweis: Alert bei Zahlungsfehler ist auf Web ein No-op (nativ ok).
+
+## Implemented (2026-06-13, Iteration 15) — B2C-Rabatt-Beschränkung, Statusverlauf, GLS, Adresse, PDF
+- **Newsletter-Rabatt nur B2C**: `create_shop_order` überspringt den Rabatt, wenn der bestellende Account ein B2B-Konto (admin/sales/customer) ist; Gäste & shopuser erhalten ihn.
+- **Statusverlauf**: `statusHistory` je Bestellung; Timeline im Kundenkonto.
+- **GLS-Sendungsverfolgung (optional)**: Admin gibt Trackingnummer bei „Versendet" ein; Kunde erhält „Sendung verfolgen"-Link (GLS-URL) + E-Mail.
+- **Adresse speichern**: `PUT /api/shop/me/address`, im Konto editierbar, füllt Checkout vor.
+- **B2C-PDF-Rechnung**: `shareShopInvoicePdf` im Konto (Firmenkopf = GbR-Daten).
+- Backend 15/15 pytest, Frontend verifiziert (Iteration 15).
+
+## Implemented (2026-06-13, Iteration 16) — B2B Maschinen-Erwerb
+- **Maschinen-Katalog** (Admin): `machines` Collection + CRUD (`/api/machines`), Bruttopreis inkl. 19% MwSt, Bild-Upload (Object Storage), 3 Demo-Maschinen auto-seed. Admin-Screen `app/maschinen-admin.tsx`.
+- **Erwerb** (`machine_requests`): Kauf = Sofortkauf via Stripe (`/machine-requests/{id}/checkout` + payment-status); Finanzierung & Leasing = Anfrage → Admin setzt Konditionen manuell (`PUT /machine-requests/{id}`: Anzahlung, Monatsrate, Schlussrate/Übernahme, Laufzeit 24/36/48, Kaffee-Mindestabnahme kg/Monat bei Leasing) → E-Mail an Kunde → Kunde nimmt an (`/accept`). Kunden-Screen `app/maschinen.tsx`.
+- Verlinkt im „Mehr"-Tab (`link-maschinen` für alle, `link-maschinen-admin` für Admin).
+- Backend 19/19 pytest (`tests/test_iteration16.py`), Frontend-Workflow verifiziert. Stripe-Checkout in Preview 502 (erst nach Deploy aktiv).

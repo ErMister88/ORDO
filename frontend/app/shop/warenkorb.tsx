@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { View, Text, ScrollView, Pressable, KeyboardAvoidingView, Platform, Alert } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
@@ -32,6 +32,29 @@ export default function Warenkorb() {
   const [promoMsg, setPromoMsg] = useState("");
   const [promoBusy, setPromoBusy] = useState(false);
   const [accepted, setAccepted] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const me = await shopApi.me();
+        const a = me?.address;
+        if (a && (a.street || a.name)) {
+          setForm((f) => ({
+            name: f.name || a.name || me.name || "",
+            email: f.email || me.email || "",
+            phone: f.phone || a.phone || "",
+            street: f.street || a.street || "",
+            zip: f.zip || a.zip || "",
+            city: f.city || a.city || "",
+          }));
+        } else if (me?.email) {
+          setForm((f) => ({ ...f, name: f.name || me.name || "", email: f.email || me.email }));
+        }
+      } catch {
+        /* guest checkout – no prefill */
+      }
+    })();
+  }, []);
 
   const applyPromo = async () => {
     setPromoMsg("");

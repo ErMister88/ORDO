@@ -11,7 +11,7 @@ from starlette.concurrency import run_in_threadpool
 from ..core import (api_router, db, strip_id, next_seq, logger, audit,
                     JWT_SECRET, JWT_ALGORITHM, create_token, hash_pw, verify_pw)
 from ..deps import require_roles, current_user
-from ..models import ShopSettingsIn, ShopOrderIn, ShopRegisterIn, ShopLoginIn, ShopStatusIn
+from ..models import ShopSettingsIn, ShopOrderIn, ShopRegisterIn, ShopLoginIn, ShopStatusIn, ShopAddressIn
 from ..emailer import send_email, email_shell
 from html import escape
 
@@ -94,8 +94,15 @@ async def create_shop_order(body: ShopOrderIn, uid: Annotated[Optional[str], Dep
         raise HTTPException(status_code=400, detail="Warenkorb ist leer")
     subtotal = round(subtotal, 2)
     gross_subtotal = subtotal
+    # Newsletter discount applies to B2C customers only (guests or shopusers),
+    # never to B2B accounts (admin/sales/customer) who have their own pricing.
+    is_b2c = True
+    if uid:
+        ordering_user = await db.users.find_one({"id": uid})
+        if ordering_user and ordering_user.get("role") != "shopuser":
+            is_b2c = False
     from .newsletter import resolve_discount
-    percent = await resolve_discount(body.promoCode)
+    percent = await resolve_discount(body.promoCode) if is_b2c else 0
     discount = 0.0
     if percent > 0:
         factor = 1 - percent / 100
@@ -114,7 +121,9 @@ async def create_shop_order(body: ShopOrderIn, uid: Annotated[Optional[str], Dep
         "discount": discount, "promoCode": (body.promoCode or "").strip().upper() or None,
         "discountPercent": percent,
         "taxBreakdown": tax_map, "taxTotal": tax_total,
-        "status": "Neu", "paymentStatus": "Offen", "userId": uid, "createdAt": now.isoformat(),
+        "status": "Neu", "paymentStatus": "Offen", "userId": uid,
+        "statusHistory": [{"status": "Neu", "at": now.isoformat()}],
+        "createdAt": now.isoformat(),
     }
     await db.shop_orders.insert_one(doc)
     try:
@@ -225,6 +234,17 @@ async def list_shop_orders(user: Annotated[dict, Depends(require_roles("admin", 
 
 SHOP_STATUSES = ["Neu", "Bestätigt", "In Bearbeitung", "Versendet", "Abgeschlossen", "Storniert"]
 
+
+def _gls_track_url(tracking: str, zip_code: str = "") -> str:
+    t = (tracking or "").strip()
+    if not t:
+        return ""
+    z = (zip_code or "").strip()
+    if z:
+        return f"https://gls-group.eu/track/{t}/postalcode/{z}"
+    return f"https://gls-group.eu/DE/de/paketverfolgung?match={t}"
+
+
 _STATUS_MAIL = {
     "Bestätigt": ("Bestellung bestätigt",
                   "wir haben Ihre Bestellung <strong>{oid}</strong> bestätigt und bereiten sie vor."),
@@ -250,19 +270,39 @@ async def update_shop_order_status(
     o = await db.shop_orders.find_one({"id": order_id})
     if not o:
         raise HTTPException(status_code=404, detail="Bestellung nicht gefunden")
-    await db.shop_orders.update_one({"id": order_id}, {"$set": {"status": body.status}})
-    await audit(user, "shop_order_status", order_id, {"status": body.status})
+    now = datetime.now(timezone.utc)
+    tracking = (body.trackingNumber or "").strip()
+    set_fields = {"status": body.status}
+    if tracking:
+        set_fields["trackingNumber"] = tracking
+        set_fields["carrier"] = "GLS"
+    await db.shop_orders.update_one(
+        {"id": order_id},
+        {"$set": set_fields,
+         "$push": {"statusHistory": {"status": body.status, "at": now.isoformat()}}},
+    )
+    await audit(user, "shop_order_status", order_id, {"status": body.status, "tracking": tracking or None})
 
+    track_url = _gls_track_url(tracking, (o.get("customer") or {}).get("zip", "")) if tracking else ""
     mail = _STATUS_MAIL.get(body.status)
     email = (o.get("customer") or {}).get("email")
     if mail and email:
         subject, line = mail
         name = escape((o.get("customer") or {}).get("name", "").split(" ")[0] or "")
         greet = f"Hallo {name}," if name else "Hallo,"
+        track_html = ""
+        if body.status == "Versendet" and track_url:
+            track_html = (
+                f"<p style='margin:12px 0 0;color:#3A4256;font-size:14px'>Sendungsnummer (GLS): "
+                f"<strong>{escape(tracking)}</strong></p>"
+                f"<p style='margin:8px 0 0'><a href='{escape(track_url)}' "
+                "style='color:#0B1B3D;font-weight:bold'>Sendung verfolgen</a></p>"
+            )
         inner = (
             f"<p style='margin:0 0 12px;color:#3A4256;font-size:15px'>{greet}</p>"
             f"<p style='margin:0 0 12px;color:#3A4256;font-size:15px'>{line.format(oid=escape(order_id))}</p>"
             f"<p style='margin:0;color:#8A90A2;font-size:13px'>Aktueller Status: <strong>{escape(body.status)}</strong></p>"
+            f"{track_html}"
         )
         try:
             await send_email(to=email, subject=f"{subject} – {order_id}",
@@ -275,7 +315,8 @@ async def update_shop_order_status(
 
 
 def _shop_user_public(u: dict) -> dict:
-    return {"id": u["id"], "name": u.get("name", ""), "email": u["email"]}
+    return {"id": u["id"], "name": u.get("name", ""), "email": u["email"],
+            "address": u.get("address") or {}}
 
 
 @api_router.post("/shop/register")
@@ -307,6 +348,13 @@ async def shop_login(body: ShopLoginIn):
 @api_router.get("/shop/me")
 async def shop_me(user: Annotated[dict, Depends(current_user)]):
     return _shop_user_public(user)
+
+
+@api_router.put("/shop/me/address")
+async def shop_save_address(body: ShopAddressIn, user: Annotated[dict, Depends(current_user)]):
+    addr = body.model_dump()
+    await db.users.update_one({"id": user["id"]}, {"$set": {"address": addr}})
+    return {"address": addr}
 
 
 @api_router.get("/shop/my-orders")
