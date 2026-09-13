@@ -81,6 +81,22 @@ def strip_id(doc: dict) -> dict:
     return doc
 
 
+async def audit(user: dict, action: str, entity: str = "", meta: dict = None) -> None:
+    """Best-effort audit trail of sensitive actions."""
+    try:
+        await db.audit_log.insert_one({
+            "at": datetime.now(timezone.utc).isoformat(),
+            "userId": (user or {}).get("id"),
+            "userEmail": (user or {}).get("email"),
+            "role": (user or {}).get("role"),
+            "action": action,
+            "entity": entity,
+            "meta": meta or {},
+        })
+    except Exception:
+        pass
+
+
 async def next_seq(name: str) -> int:
     doc = await db.counters.find_one_and_update(
         {"_id": name},

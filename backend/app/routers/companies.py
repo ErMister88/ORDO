@@ -3,7 +3,7 @@ from fastapi import Depends, HTTPException
 from typing import Annotated
 from datetime import datetime, timezone
 
-from ..core import api_router, db, strip_id
+from ..core import api_router, db, strip_id, audit
 from ..deps import current_user, require_roles, visible_company_ids
 from ..models import CompanyUpdateIn
 
@@ -47,6 +47,7 @@ async def update_company(company_id: str, body: CompanyUpdateIn, user: Annotated
         raise HTTPException(status_code=404, detail="Kunde nicht gefunden")
     await db.companies.update_one({"id": company_id}, {"$set": body.model_dump()})
     updated = await db.companies.find_one({"id": company_id})
+    await audit(user, "company.update", company_id, {"name": body.name})
     return strip_id(updated)
 
 

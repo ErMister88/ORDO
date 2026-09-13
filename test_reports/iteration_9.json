@@ -1,0 +1,51 @@
+{
+  "summary": "Iteration 9 covered 4 new features: (1) Multi-item reorder cart on Customer Bestellungen, (2) Bestellhistorie search + status chips, (3) Offer accept-note flow with customerNote persisting to order detail (order-note-card), (4) Audit log (admin-only /api/audit + /audit UI screen). Backend: 11/11 pytest pass (test_iteration9.py, run with -n0). Cost invariant intact — admin sees cost on all 4 products; sales/customer never receive cost (customer also stripped of salesFloor+absoluteFloor). Multi-item POST /api/orders creates a B-YYYY-##### order with N items — verified via 2-item payload (p1+p2). Offer approve → accept flow: admin POST /api/offers/A-2026-0187/approve (200 + audit entry offer.approve), then customer POST /api/offers/A-2026-0187/accept {note} → 200, returns order with customerNote and fromOffer link; second accept correctly returns 400. Offer updated to Angenommen + orderId. Audit log: GET /api/audit admin 200 with entries; 403 for sales and customer; offer.approve/offer.accept/order.status entries confirmed after actions. Order status change (PUT /orders/{id}/status admin) creates order.status audit entry with meta.status.\n\nFrontend (390x844 mobile web): Kunde Bestellungen tab reorder-card renders with reorder-product (picker), reorder-opt-{p1..p4}, qty-minus/qty-plus stepper, add-to-cart, cart with cart-row-{pid} + cart-remove-{pid}, submit-order. Multi-item flow verified: added p2 (21 kg) → added p1 (13 kg) → removed p1 → submitted → cart cleared and new order appears in history. History section shows order-search input (verified filters), order-filter-{Alle,Neu,Bestätigt,Kommissioniert,Versendet,Abgeschlossen,Storniert} all 7 chips present and clickable, search filters to 'Keine Bestellungen' when no matches. Admin Angebote tab: approve-A-2026-0187 works (offer flips to Freigegeben). Customer Angebote tab shows accept-note-A-2026-0187 (text input) above accept-offer-A-2026-0187 (green button). Accept → routes to /bestellung/B-2026-00989 → order-note-card visible with 'Notiz des Kunden UI TEST_iter9 — Lieferung morgens bitte'. /audit screen loaded as admin shows 20+ audit rows including Anmeldung / Angebot freigegeben / Angebot angenommen / Bestellstatus geändert with correct entity IDs and de-DE timestamps; customer navigating to /audit gets 403 from API → EmptyState 'Noch keine Einträge' rendered (verified). Stock-warning NOT observed on p3 during UI test (p3.stock may be null; needs seed check — not a bug, feature-conditional).\n\nCleanup: deleted 2 UI-created orders (B-2026-00988, B-2026-00989) + backend-test orders; restored offer A-2026-0187 to 'Freigabe nötig' (unset orderId+decisionNote); counters aligned (order=987 matching max seed B-2026-00987, invoice=1000). Seed baseline preserved: 3 users, 4 products, 4 invoices, 25 orders. Deprecated packages detected: none new. Duplicate Pydantic class detected in /app/backend/app/models.py: AcceptOfferIn defined twice (lines 122 & 138) — Python uses the last definition, harmless but should be de-duplicated.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "app/models.py", "issue": "AcceptOfferIn declared twice (lines 122-123 and 138-139). Second definition overwrites the first — both functionally equivalent, but the duplicate should be removed to avoid confusion."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "src/components/ui.tsx (Card shadow*)", "issue": "Carry-over from earlier iterations — react-native-web deprecation warning 'shadow*' style props; migrate to 'boxShadow'. Non-blocking. Reference: /app/frontend/src/components/ui.tsx."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration9.py",
+    "/app/test_reports/pytest/pytest_iter9.xml"
+  ],
+  "action_items": [
+    "Optional cleanup: dedupe AcceptOfferIn class in /app/backend/app/models.py (line 122-123 vs 138-139) — keep only one definition. Non-blocking, both are equivalent.",
+    "Optional: seed p3.stock (or any product) with a low integer so testers can visually verify stock-warning testID triggers when qty>stock (backend logic is fine; UI conditional renders only when product.stock != null).",
+    "No functional issues — all 4 new features work end-to-end for admin/sales/customer as specified."
+  ],
+  "critical_code_review_comments": [
+    "app/routers/offers.py:80 accept_offer — validates 'Freigegeben' status, prevents double-accept via orderId guard, writes customerNote (trimmed), links offer.orderId and status='Angenommen', calls audit('offer.accept', offer_id, {orderId}). Correct.",
+    "app/routers/offers.py:51 approve_offer — admin-only via require_roles('admin'), sets status='Freigegeben' + decisionNote, sends email (best-effort try/except with logger.warning), audits offer.approve. Correct.",
+    "app/routers/orders.py:20 create_order — admin/sales/customer all allowed via current_user + companyId visibility check; accepts multi-item payload; sequential B-YYYY-##### via next_seq('order'). No audit entry for order.create (only order.status is audited per spec — acceptable, matches action_items list).",
+    "app/routers/orders.py:51 set_order_status — admin/sales only; audits order.status with meta.status; auto-generates trackingNumber+shippedAt+estimatedDelivery on 'Versendet'. Good.",
+    "app/routers/audit.py — admin-only GET /api/audit; sorts by 'at' desc, limits 200. Read-only endpoint; no delete/purge exposed — good.",
+    "app/core.py:84 audit() — best-effort insert wrapped in try/except; never crashes the request path. Good.",
+    "app/models.py — AcceptOfferIn defined twice (line 122 with Optional[str]=\"\" and line 138 with str=\"\"). Second wins. Functionally identical serialization. Minor code hygiene.",
+    "frontend bestellungen.tsx:47 unitPriceFor — correctly picks tier-applied price min(base, tier.price); multi-item POST /orders sends tier-applied prices per line. Good.",
+    "frontend bestellungen.tsx:199 history filter — client-side filter by status + case-insensitive id substring; empty-state rendered when 0 matches. Correct.",
+    "frontend angebote.tsx:48 accept mutation — POST /offers/{id}/accept {note}; onSuccess pushes router to /bestellung/{order.id}. Correct routing.",
+    "frontend audit.tsx — admin-only screen; labels map action → de-DE title. Customer/sales hitting /audit gets 403 from API → apiGet returns nothing → EmptyState 'Noch keine Einträge' rendered. Note: the screen itself doesn't role-gate rendering, but the API 403 is the effective gate. Consider role-check + redirect for defense-in-depth.",
+    "Cost invariant fully preserved: sales & customer /api/products responses never include 'cost' (verified via pytest for all products)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration9.py",
+    "/app/test_reports/pytest/pytest_iter9.xml",
+    "/app/test_reports/iteration_9.json"
+  ],
+  "success_rate": {"backend": "100% (11/11 pytest, run with -n0)", "frontend": "100% — multi-item cart, order filter/search chips, offer accept-note, order-note-card, admin audit list, and customer-403→EmptyState all verified on 390x844."},
+  "seed_data_creation": "Ephemeral only. Backend tests created 3 orders (multi-item, offer-accept, status-change) + approved A-2026-0187. UI tests created 2 more orders (B-2026-00988 from multi-item; B-2026-00989 from offer-accept). All 5 orders deleted in cleanup; offer A-2026-0187 restored to 'Freigabe nötig' (orderId+decisionNote unset); counters realigned (order=987, invoice=1000). Seed baseline verified post-cleanup: 3 users, 4 products, 4 invoices, 25 orders.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iter 9 delivered: (1) multi-item reorder cart at frontend/app/(tabs)/bestellungen.tsx — testIDs: reorder-card, reorder-product, reorder-opt-{pid}, qty-minus, qty-plus, add-to-cart, cart, cart-row-{pid}, cart-remove-{pid}, submit-order, tier-active, stock-warning. (2) history search+filter — testIDs: order-search, order-filter-{Alle|Neu|Bestätigt|Kommissioniert|Versendet|Abgeschlossen|Storniert}. (3) offer accept-note at frontend/app/(tabs)/angebote.tsx — testIDs: accept-note-{oid}, accept-offer-{oid}; POST /api/offers/{id}/accept {note} → order.customerNote + order-note-card at frontend/app/bestellung/[id].tsx. (4) audit log: GET /api/audit admin-only; UI at frontend/app/audit.tsx reachable via Mehr → link-audit; rows use testID audit-{idx}. Actions audited: login, user.create, user.reset, company.update, price.set, order.status, invoice.paid, offer.approve, offer.accept. Stripe 502 is EXPECTED (placeholder key). Run backend tests with `pytest backend/tests/test_iteration9.py -n0`. Test IDs in login screen are `login-email-input`, `login-password-input`, `login-submit-button`, and `demo-chip-{admin|vertrieb|kunde}` for quick login. Admin tab bar shows only ~4-5 icons at 390 wide — 'Mehr' may be off-screen; use direct navigation to /audit for admin audit access. Customer/sales navigating to /audit get 403 from API → EmptyState 'Noch keine Einträge' rendered (screen itself is not role-gated; API is the effective gate). Cost invariant fully preserved.",
+  "rca_of_issue": "No product bugs. Minor code-hygiene: duplicate AcceptOfferIn class in models.py (harmless — Python resolves to the last definition, which is functionally equivalent to the first). One UX observation: stock-warning didn't render in UI test because p3.stock appears to be null in seed; feature works logically (verified via code inspection at bestellungen.tsx:128) — E1 may want to seed a small stock value for visual QA."
+}

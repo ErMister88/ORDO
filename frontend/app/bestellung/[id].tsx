@@ -238,6 +238,13 @@ export default function BestellungDetail() {
               </View>
             </Card>
 
+            {o.customerNote ? (
+              <Card testID="order-note-card">
+                <Text style={styles.cardTitle}>Notiz des Kunden</Text>
+                <Muted>{o.customerNote}</Muted>
+              </Card>
+            ) : null}
+
             <Card testID="order-docs-card">
               <Text style={styles.cardTitle}>Dokumente</Text>
               {(o.status === "Versendet" || o.status === "Abgeschlossen") && (

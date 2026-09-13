@@ -7,7 +7,7 @@ from typing import Annotated
 from datetime import datetime, timedelta, timezone
 
 from ..core import (api_router, db, hash_pw, verify_pw, create_token, DUMMY_HASH,
-                    strip_id, gen_reset_code, logger)
+                    strip_id, gen_reset_code, logger, audit)
 from ..deps import current_user
 from ..models import Token, PublicUser, ForgotPwIn, ResetPwIn, ChangePwIn
 from ..emailer import send_email, email_shell
@@ -51,6 +51,7 @@ async def login(form: Annotated[OAuth2PasswordRequestForm, Depends()]):
         _register_fail(email)
         raise HTTPException(status_code=401, detail="E-Mail oder Passwort falsch")
     _LOGIN_FAILS.pop(email, None)
+    await audit(user, "login")
     return {"access_token": create_token(user), "user": PublicUser(**strip_id(user))}
 
 

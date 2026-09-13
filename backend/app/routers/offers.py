@@ -4,9 +4,9 @@ from fastapi import Depends, HTTPException
 from typing import Annotated
 from datetime import datetime, timezone
 
-from ..core import api_router, db, strip_id, next_seq, logger
+from ..core import api_router, db, strip_id, next_seq, logger, audit
 from ..deps import current_user, require_roles, visible_company_ids
-from ..models import OfferCreate, DecisionIn
+from ..models import OfferCreate, DecisionIn, AcceptOfferIn
 from ..emailer import send_email, email_shell, company_recipient, items_html
 
 
@@ -73,11 +73,12 @@ async def approve_offer(offer_id: str, body: DecisionIn, user: Annotated[dict, D
             await send_email(to=email, subject=f"Angebot {o['id']} freigegeben", html=html)
     except Exception as e:
         logger.warning(f"E-Mail (Angebot freigegeben) fehlgeschlagen: {e}")
+    await audit(user, "offer.approve", offer_id, {})
     return {"ok": True, "status": "Freigegeben"}
 
 
 @api_router.post("/offers/{offer_id}/accept")
-async def accept_offer(offer_id: str, user: Annotated[dict, Depends(current_user)]):
+async def accept_offer(offer_id: str, body: AcceptOfferIn, user: Annotated[dict, Depends(current_user)]):
     o = await db.offers.find_one({"id": offer_id})
     if not o:
         raise HTTPException(status_code=404, detail="Angebot nicht gefunden")
@@ -98,10 +99,12 @@ async def accept_offer(offer_id: str, user: Annotated[dict, Depends(current_user
         "status": "Neu",
         "items": o["items"],
         "fromOffer": offer_id,
+        "customerNote": (body.note or "").strip(),
         "createdAt": now.isoformat(),
     }
     await db.orders.insert_one(order)
     await db.offers.update_one({"id": offer_id}, {"$set": {"status": "Angenommen", "orderId": order_no}})
+    await audit(user, "offer.accept", offer_id, {"orderId": order_no})
     return strip_id(order)
 
 

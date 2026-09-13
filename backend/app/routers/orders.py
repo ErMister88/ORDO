@@ -4,7 +4,7 @@ from fastapi import Depends, HTTPException
 from typing import Annotated
 from datetime import datetime, timedelta, timezone
 
-from ..core import api_router, db, strip_id, next_seq, logger, ORDER_STATUS_FLOW
+from ..core import api_router, db, strip_id, next_seq, logger, ORDER_STATUS_FLOW, audit
 from ..deps import current_user, require_roles, visible_company_ids
 from ..models import OrderCreate, OrderStatusIn
 from ..emailer import send_email, email_shell, company_recipient
@@ -66,6 +66,7 @@ async def set_order_status(order_id: str, body: OrderStatusIn, user: Annotated[d
         update["shippedAt"] = now.isoformat()
         update["estimatedDelivery"] = eta.date().isoformat()
     await db.orders.update_one({"id": order_id}, {"$set": update})
+    await audit(user, "order.status", order_id, {"status": body.status})
     if body.status == "Versendet":
         try:
             email, cname = await company_recipient(o["companyId"])

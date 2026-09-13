@@ -3,7 +3,7 @@ from fastapi import Depends, HTTPException
 from typing import Annotated
 from datetime import datetime, timezone
 
-from ..core import api_router, db, strip_id
+from ..core import api_router, db, strip_id, audit
 from ..deps import current_user, require_roles, visible_company_ids
 from ..models import CustomerPriceIn
 
@@ -27,6 +27,7 @@ async def upsert_customer_price(body: CustomerPriceIn, user: Annotated[dict, Dep
         {"$set": {"price": body.price}},
         upsert=True,
     )
+    await audit(user, "price.set", body.companyId, {"productId": body.productId, "price": body.price})
     return {"ok": True, **body.model_dump()}
 
 

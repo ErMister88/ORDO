@@ -51,6 +51,12 @@
 - **Mengenrabatt-Staffeln**: Produkt-Feld `discountTiers:[{minQty,price}]`; Admin-Editor in /produkte; automatische Staffelpreise in Angebotserstellung (apply-tier) und Kunden-Nachbestellung (tier-active). Seed p1/p2 mit Staffeln.
 - **E-Mail-Benachrichtigungen (Resend, Emergent-managed)**: Mail an Firmen-E-Mail bei Angebot-Freigabe (`/approve`) und Bestell-Versand (`status=Versendet`). Nicht-blockierend (try/except), Absender `EMAIL_FROM_NAME` = "ORDO Connect by S&S". Guardrail-Gate `_assert_safe_email` auf jedem Send.
 
+## Implemented (2026-06-13, Iteration 9)
+- **Mehrere Positionen beim Nachbestellen**: Warenkorb in Bestellungen (Produktauswahl, Menge, hinzufügen/entfernen, Staffelpreis + Lager-Warnung je Position).
+- **Suche/Filter in Bestellungen**: Text (Bestellnr.) + Status-Chips.
+- **Angebots-Notiz**: optionale Notiz bei Angebots-Annahme → `order.customerNote`, Anzeige in Bestelldetails.
+- **Audit-Log**: `db.audit_log` + `GET /api/audit` (nur Admin); protokolliert login, user.create/reset, company.update, price.set, order.status, invoice.paid, offer.approve/accept. Screen `/audit` (Mehr → Verwaltung).
+
 ## Architecture (Iteration 8 — modularized)
 Backend split into a package: `backend/app/` with `core.py` (config/db/security), `emailer.py`, `storage.py`, `deps.py`, `models.py`, `seed.py`, `main.py`, and `routers/*` (auth, users, products, pricing, companies, offers, orders, invoices, dashboard, analytics, subscriptions, billing, payments). Entry stays `server:app` → `app.main:app`.
 

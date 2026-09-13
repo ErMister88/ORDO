@@ -4,7 +4,7 @@ from fastapi import Depends, HTTPException
 from typing import Annotated
 from datetime import datetime, timezone
 
-from ..core import api_router, db, hash_pw, random_password
+from ..core import api_router, db, hash_pw, random_password, audit
 from ..deps import require_roles
 from ..models import CreateUserIn
 
@@ -57,6 +57,7 @@ async def create_user(body: CreateUserIn, admin: Annotated[dict, Depends(require
         "createdAt": datetime.now(timezone.utc).isoformat(),
     }
     await db.users.insert_one(doc)
+    await audit(admin, "user.create", uid, {"role": body.role, "email": email})
     return {"id": uid, "name": doc["name"], "email": email, "role": body.role,
             "companyId": company_id, "initialPassword": pw}
 
@@ -68,4 +69,5 @@ async def admin_reset_password(user_id: str, admin: Annotated[dict, Depends(requ
         raise HTTPException(status_code=404, detail="Benutzer nicht gefunden")
     pw = random_password()
     await db.users.update_one({"id": user_id}, {"$set": {"hashed_password": hash_pw(pw), "must_change_password": True}})
+    await audit(admin, "user.reset", user_id, {"email": u["email"]})
     return {"id": user_id, "email": u["email"], "initialPassword": pw}

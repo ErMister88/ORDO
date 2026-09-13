@@ -46,13 +46,14 @@ export default function Angebote() {
   });
 
   const accept = useMutation({
-    mutationFn: (id: string) => apiPost(`/offers/${id}/accept`, {}),
+    mutationFn: ({ id, note }: { id: string; note: string }) => apiPost(`/offers/${id}/accept`, { note }),
     onSuccess: (order: any) => {
       qc.invalidateQueries({ queryKey: ["offers"] });
       qc.invalidateQueries({ queryKey: ["orders"] });
       router.push(`/bestellung/${order.id}`);
     },
   });
+  const [notes, setNotes] = useState<Record<string, string>>({});
 
   return (
     <View style={styles.root}>
@@ -151,14 +152,23 @@ export default function Angebote() {
                   )}
 
                   {!isStaff && o.status === "Freigegeben" && (
-                    <Button
-                      testID={`accept-offer-${o.id}`}
-                      title="Angebot annehmen & bestellen"
-                      kind="success"
-                      loading={accept.isPending && accept.variables === o.id}
-                      onPress={() => accept.mutate(o.id)}
-                      style={{ marginTop: 8 }}
-                    />
+                    <>
+                      <Input
+                        testID={`accept-note-${o.id}`}
+                        value={notes[o.id] ?? ""}
+                        onChangeText={(v) => setNotes((n) => ({ ...n, [o.id]: v }))}
+                        placeholder="Notiz zur Bestellung (optional)…"
+                        style={{ marginTop: 8 }}
+                      />
+                      <Button
+                        testID={`accept-offer-${o.id}`}
+                        title="Angebot annehmen & bestellen"
+                        kind="success"
+                        loading={accept.isPending && accept.variables?.id === o.id}
+                        onPress={() => accept.mutate({ id: o.id, note: notes[o.id] ?? "" })}
+                        style={{ marginTop: 8 }}
+                      />
+                    </>
                   )}
                   {!isStaff && o.status === "Angenommen" && o.orderId && (
                     <Pressable
