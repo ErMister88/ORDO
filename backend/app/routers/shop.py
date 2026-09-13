@@ -9,6 +9,8 @@ from starlette.concurrency import run_in_threadpool
 from ..core import api_router, db, strip_id, next_seq, logger, audit
 from ..deps import require_roles
 from ..models import ShopSettingsIn, ShopOrderIn
+from ..emailer import send_email, email_shell
+from html import escape
 
 stripe.api_key = os.environ.get("STRIPE_API_KEY", "")
 APP_URL = os.environ.get("APP_URL", "https://ordo-connect.app")
@@ -88,6 +90,35 @@ async def create_shop_order(body: ShopOrderIn):
         "status": "Neu", "paymentStatus": "Offen", "createdAt": now.isoformat(),
     }
     await db.shop_orders.insert_one(doc)
+    try:
+        email = (body.customer.email or "").strip()
+        if email and "@" in email:
+            rows = "".join(
+                f"<tr><td style='padding:6px 8px;border-bottom:1px solid #E6E8EF'>{escape(li['name'])}</td>"
+                f"<td style='padding:6px 8px;border-bottom:1px solid #E6E8EF;text-align:right'>{li['qty']:g}</td>"
+                f"<td style='padding:6px 8px;border-bottom:1px solid #E6E8EF;text-align:right'>{li['price']:.2f} &euro;</td></tr>"
+                for li in lines
+            )
+            vat_rows = "".join(
+                f"<div style='text-align:right;color:#8A90A2;font-size:13px'>inkl. MwSt {r}%: {a:.2f} &euro;</div>"
+                for r, a in tax_map.items()
+            )
+            inner = (
+                f"<p style='margin:0 0 12px;color:#3A4256;font-size:15px'>Hallo {escape(body.customer.name)},<br>"
+                f"vielen Dank f&uuml;r Ihre Bestellung <strong>{oid}</strong>. Hier Ihre &Uuml;bersicht:</p>"
+                "<table role='presentation' width='100%' cellpadding='0' cellspacing='0' style='font-size:14px;color:#3A4256'>"
+                f"{rows}</table>"
+                f"<div style='text-align:right;margin-top:8px'>Zwischensumme: {subtotal:.2f} &euro;</div>"
+                f"<div style='text-align:right'>Versand: {'Gratis' if shipping == 0 else f'{shipping:.2f} €'}</div>"
+                f"{vat_rows}"
+                f"<div style='text-align:right;font-weight:bold;font-size:16px;margin-top:6px'>Gesamt: {total:.2f} &euro;</div>"
+                "<p style='margin:16px 0 0;color:#8A90A2;font-size:13px'>Die Zahlung erfolgt sicher &uuml;ber unser Bezahlfenster. "
+                "Sobald sie best&auml;tigt ist, wird Ihre Bestellung bearbeitet.</p>"
+            )
+            html = email_shell("Bestellbest&auml;tigung", "Ihre Bestellung ist bei uns eingegangen.", inner)
+            await send_email(to=email, subject=f"Bestellbestätigung {oid}", html=html)
+    except Exception as e:
+        logger.warning(f"E-Mail (Bestellbestätigung Shop) fehlgeschlagen: {e}")
     return {"id": oid, "subtotal": subtotal, "shipping": shipping, "total": total,
             "taxBreakdown": tax_map, "taxTotal": tax_total}
 

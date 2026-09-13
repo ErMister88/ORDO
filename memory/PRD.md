@@ -51,6 +51,9 @@
 - **Mengenrabatt-Staffeln**: Produkt-Feld `discountTiers:[{minQty,price}]`; Admin-Editor in /produkte; automatische Staffelpreise in Angebotserstellung (apply-tier) und Kunden-Nachbestellung (tier-active). Seed p1/p2 mit Staffeln.
 - **E-Mail-Benachrichtigungen (Resend, Emergent-managed)**: Mail an Firmen-E-Mail bei Angebot-Freigabe (`/approve`) und Bestell-Versand (`status=Versendet`). Nicht-blockierend (try/except), Absender `EMAIL_FROM_NAME` = "ORDO Connect by S&S". Guardrail-Gate `_assert_safe_email` auf jedem Send.
 
+- **B2C MwSt & Bestätigung**: MwSt-Aufschlüsselung (7% Kaffee / 19% Maschine) in Katalog/Warenkorb/Bestellung; Bestellbestätigung per E-Mail (Resend) mit MwSt-Ausweis bei Shop-Bestellung. Demo-Maschine `m1` (19%) angelegt.
+- **Noch offen**: B2C-Konten (Registrierung/Login mit Bestellverlauf) – aktuell nur Gast-Checkout.
+
 ## Implemented (2026-06-13, Iteration 10) — B2C-Shop
 - **Öffentlicher Shop** (ohne Login, erreichbar über Login → „Zum Kaffee-Shop"): `GET /api/shop/products` (public, kein cost-Leak), Katalog `/shop`, Warenkorb `/shop/warenkorb` (Cart-Context `src/shop/cart.tsx`).
 - **Gast-Checkout**: `POST /api/shop/orders` (serverseitige Preisberechnung aus `b2cPrice`), Versand gratis ab Schwelle, sonst Pauschale; Bestellnr. `S-YYYY-#####`.
