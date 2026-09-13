@@ -12,6 +12,8 @@ import { apiGet, apiPost, apiPut, apiUpload, fileUrl } from "@/src/api/client";
 import { euro } from "@/src/lib/format";
 import { Card, Input, Button, SectionTitle, Muted } from "@/src/components/ui";
 
+type Tier = { minQty: string; price: string };
+
 type Form = {
   brand: string;
   name: string;
@@ -22,6 +24,7 @@ type Form = {
   cost: string;
   description: string;
   imageUrl: string;
+  discountTiers: Tier[];
 };
 
 const EMPTY: Form = {
@@ -34,6 +37,7 @@ const EMPTY: Form = {
   cost: "",
   description: "",
   imageUrl: "",
+  discountTiers: [],
 };
 
 export default function Produkte() {
@@ -78,6 +82,10 @@ export default function Produkte() {
       cost: String(p.cost ?? ""),
       description: p.description ?? "",
       imageUrl: p.imageUrl ?? "",
+      discountTiers: (p.discountTiers ?? []).map((t: any) => ({
+        minQty: String(t.minQty),
+        price: String(t.price),
+      })),
     });
     setMsg("");
     setOk("");
@@ -120,6 +128,18 @@ export default function Produkte() {
 
   const num = (v: string) => Number((v || "").replace(",", "."));
 
+  const setTier = (idx: number, key: keyof Tier) => (v: string) => {
+    setForm((f) => ({
+      ...f,
+      discountTiers: f.discountTiers.map((t, i) => (i === idx ? { ...t, [key]: v } : t)),
+    }));
+    if (ok) setOk("");
+  };
+  const addTier = () =>
+    setForm((f) => ({ ...f, discountTiers: [...f.discountTiers, { minQty: "", price: "" }] }));
+  const removeTier = (idx: number) =>
+    setForm((f) => ({ ...f, discountTiers: f.discountTiers.filter((_, i) => i !== idx) }));
+
   const save = useMutation({
     mutationFn: () => {
       const body = {
@@ -132,6 +152,10 @@ export default function Produkte() {
         cost: num(form.cost),
         description: form.description,
         imageUrl: form.imageUrl,
+        discountTiers: form.discountTiers
+          .map((t) => ({ minQty: num(t.minQty), price: num(t.price) }))
+          .filter((t) => t.minQty > 0 && t.price > 0)
+          .sort((a, b) => a.minQty - b.minQty),
         active: true,
       };
       return editingId ? apiPut(`/products/${editingId}`, body) : apiPost("/products", body);
@@ -255,6 +279,39 @@ export default function Produkte() {
                   <Input testID="p-absfloor" value={form.absoluteFloor} onChangeText={set("absoluteFloor")} keyboardType="decimal-pad" />
                 </View>
               </View>
+
+              <Text style={styles.label}>Mengenrabatt-Staffeln (optional)</Text>
+              <Muted>Ab welcher Menge gilt welcher Stückpreis? Greift automatisch in Angeboten & Nachbestellungen.</Muted>
+              {form.discountTiers.map((t, idx) => (
+                <View key={idx} style={styles.tierRow} testID={`tier-row-${idx}`}>
+                  <View style={{ flex: 1 }}>
+                    <Input
+                      testID={`tier-qty-${idx}`}
+                      value={t.minQty}
+                      onChangeText={setTier(idx, "minQty")}
+                      keyboardType="numeric"
+                      placeholder={`ab Menge (${form.unit})`}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Input
+                      testID={`tier-price-${idx}`}
+                      value={t.price}
+                      onChangeText={setTier(idx, "price")}
+                      keyboardType="decimal-pad"
+                      placeholder="Preis €"
+                    />
+                  </View>
+                  <Pressable testID={`tier-remove-${idx}`} onPress={() => removeTier(idx)} style={styles.tierRemove} hitSlop={8}>
+                    <X size={16} color={colors.onError} weight="bold" />
+                  </Pressable>
+                </View>
+              ))}
+              <Pressable testID="add-tier" style={styles.addTierBtn} onPress={addTier}>
+                <Plus size={16} color={colors.brandPrimary} weight="bold" />
+                <Text style={styles.addTierText}>Staffel hinzufügen</Text>
+              </Pressable>
+
               {msg ? <Text style={styles.err}>{msg}</Text> : null}
               {ok ? <Text testID="product-saved-msg" style={styles.ok}>{ok}</Text> : null}
               <View style={styles.row}>
@@ -297,6 +354,11 @@ export default function Produkte() {
                       Standard {euro(p.standardPrice)} · Limit {euro(p.salesFloor)} · Grenze {euro(p.absoluteFloor)} · EK{" "}
                       {euro(p.cost)}
                     </Muted>
+                    {p.discountTiers?.length ? (
+                      <Muted>
+                        Staffel: {p.discountTiers.map((t: any) => `ab ${t.minQty} → ${euro(t.price)}`).join(" · ")}
+                      </Muted>
+                    ) : null}
                   </View>
                 </View>
               </Card>
@@ -362,4 +424,26 @@ const useStyles = makeStyles((c) => ({
   imgPickerText: { color: c.brandPrimary, fontWeight: "700", fontSize: 14 },
   changeImg: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 8 },
   changeImgText: { color: c.brandPrimary, fontWeight: "700", fontSize: 14 },
+  tierRow: { flexDirection: "row", gap: 8, alignItems: "center", marginTop: 8 },
+  tierRemove: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: c.error,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  addTierBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    marginTop: 10,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: c.brandPrimary,
+    borderStyle: "dashed",
+  },
+  addTierText: { color: c.brandPrimary, fontWeight: "700", fontSize: 14 },
 }));

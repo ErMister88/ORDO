@@ -11,7 +11,13 @@ import logging
 import jwt
 import bcrypt
 import uuid
+import re
+import ipaddress
 import requests
+import httpx
+from html import escape
+from html.parser import HTMLParser
+from urllib.parse import urlparse
 from pathlib import Path
 from pydantic import BaseModel
 from typing import List, Optional, Literal, Annotated
@@ -83,6 +89,144 @@ def get_object(path: str):
 
 
 # --------------------------------------------------------------------------
+# Emergent Managed Email (Resend) — transactional notifications
+# --------------------------------------------------------------------------
+EMAIL_BASE_URL = "https://integrations.emergentagent.com"
+EMAIL_KEY = os.environ.get("EMERGENT_EMAIL_KEY", "")
+EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "ORDO Connect by S&S")
+EMAIL_REPLY_TO = os.environ.get("EMAIL_REPLY_TO")
+
+_SHORTENERS = ("bit.ly", "tinyurl.com", "t.co", "is.gd", "cutt.ly", "goo.gl", "rebrand.ly")
+_CRED_ASK = ("reply with your password", "reply with the code", "send your password", "cvv",
+             "send us your password", "enter your password below", "confirm your card number",
+             "your full card number", "seed phrase", "recovery phrase", "verify your card",
+             "social security number", "confirm your bank details")
+_HOSTISH = re.compile(r"\b(?:https?://)?((?:[a-z0-9-]+\.)+[a-z]{2,})", re.I)
+
+
+def _host_ok(host: str) -> bool:
+    if not host or "xn--" in host:
+        return False
+    try:
+        ipaddress.ip_address(host)
+        return False
+    except ValueError:
+        pass
+    return not any(host == s or host.endswith("." + s) for s in _SHORTENERS)
+
+
+def _same_site(shown: str, real: str) -> bool:
+    return shown == real or real.endswith("." + shown) or shown.endswith("." + real)
+
+
+class _EmailScan(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.tags, self.urls, self.anchors = set(), [], []
+        self._href, self._text = None, []
+
+    def handle_starttag(self, tag, attrs):
+        self.tags.add(tag.lower())
+        self.urls += [v for k, v in attrs if k.lower() in ("href", "src") and v]
+        if tag.lower() == "a":
+            self._href = dict((k.lower(), v) for k, v in attrs).get("href")
+            self._text = []
+
+    def handle_data(self, data):
+        if self._href is not None:
+            self._text.append(data)
+
+    def handle_endtag(self, tag):
+        if tag.lower() == "a" and self._href is not None:
+            self.anchors.append((self._href, "".join(self._text)))
+            self._href, self._text = None, []
+
+
+def _assert_safe_email(subject: str, html: str) -> None:
+    scan = _EmailScan()
+    scan.feed(html)
+    if scan.tags & {"form", "input", "textarea", "select"}:
+        raise ValueError("No forms or input fields in email (G2)")
+    body = f"{subject}\n{html}".lower()
+    for p in _CRED_ASK:
+        if p in body:
+            raise ValueError(f"Email asks the recipient for credentials: {p!r} (G2)")
+    for url in scan.urls:
+        low = url.strip().lower()
+        if low.startswith(("mailto:", "tel:", "cid:", "#")):
+            continue
+        if not low.startswith("https://"):
+            raise ValueError(f"Email links/assets must be absolute https: {url!r} (G3)")
+        host = urlparse(low).hostname or ""
+        if not _host_ok(host) or urlparse(low).username is not None:
+            raise ValueError(f"Shortened, numeric-host or credential-bearing URL: {url!r} (G3)")
+    for href, text in scan.anchors:
+        real = urlparse(href.strip().lower()).hostname or ""
+        if not real:
+            continue
+        for m in _HOSTISH.finditer(text):
+            if not _same_site(m.group(1).lower(), real):
+                raise ValueError(f"Anchor text {m.group(1)!r} != real link host {real!r} (G3)")
+
+
+async def send_email(*, to: str, subject: str, html: str) -> Optional[str]:
+    _assert_safe_email(subject, html)
+    payload = {"to": [to], "subject": subject, "html": html, "from_name": EMAIL_FROM_NAME}
+    if EMAIL_REPLY_TO:
+        payload["contact_email"] = EMAIL_REPLY_TO
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            f"{EMAIL_BASE_URL}/api/v1/email/send",
+            headers={"X-Email-Key": EMAIL_KEY},
+            json=payload,
+        )
+    resp.raise_for_status()
+    return resp.json().get("id")
+
+
+async def _company_recipient(company_id: str):
+    c = await db.companies.find_one({"id": company_id})
+    if not c:
+        return None, ""
+    return c.get("email"), c.get("name", "")
+
+
+async def _items_html(items: list) -> str:
+    rows = ""
+    for it in items:
+        p = await db.products.find_one({"id": it["productId"]})
+        label = f"{p['brand']} {p['name']}" if p else it["productId"]
+        unit = (p or {}).get("unit", "kg")
+        rows += (
+            "<tr>"
+            f"<td style='padding:6px 8px;border-bottom:1px solid #E6E8EF'>{escape(label)}</td>"
+            f"<td style='padding:6px 8px;border-bottom:1px solid #E6E8EF;text-align:right'>{it['qty']:g} {escape(unit)}</td>"
+            f"<td style='padding:6px 8px;border-bottom:1px solid #E6E8EF;text-align:right'>{it['price']:.2f} &euro;</td>"
+            "</tr>"
+        )
+    return rows
+
+
+def _email_shell(heading: str, intro: str, body_inner: str) -> str:
+    return (
+        "<table role='presentation' width='100%' cellpadding='0' cellspacing='0' style='background:#F4F6FB'>"
+        "<tr><td align='center' style='padding:24px'>"
+        "<table role='presentation' width='100%' cellpadding='0' cellspacing='0' "
+        "style='max-width:560px;background:#FFFFFF;border-radius:16px;overflow:hidden;font-family:Arial,Helvetica,sans-serif'>"
+        "<tr><td style='background:#0B1B3D;padding:20px 24px'>"
+        f"<span style='color:#FFFFFF;font-size:18px;font-weight:bold'>{escape(EMAIL_FROM_NAME)}</span></td></tr>"
+        "<tr><td style='padding:24px'>"
+        f"<h2 style='margin:0 0 8px;color:#0B1B3D;font-size:20px'>{escape(heading)}</h2>"
+        f"<p style='margin:0 0 16px;color:#3A4256;font-size:15px;line-height:1.5'>{intro}</p>"
+        f"{body_inner}"
+        "<p style='margin:20px 0 0;font-size:12px;color:#8A90A2;line-height:1.5'>"
+        f"Gesendet von {escape(EMAIL_FROM_NAME)}. Wir fragen Sie niemals per E-Mail nach Passwort oder Zahlungsdaten."
+        "</p>"
+        "</td></tr></table></td></tr></table>"
+    )
+
+
+# --------------------------------------------------------------------------
 # Password helpers (bcrypt directly)
 # --------------------------------------------------------------------------
 def hash_pw(pw: str) -> str:
@@ -150,6 +294,11 @@ class DecisionIn(BaseModel):
     note: Optional[str] = ""
 
 
+class DiscountTier(BaseModel):
+    minQty: float
+    price: float
+
+
 class ProductIn(BaseModel):
     brand: str
     name: str
@@ -160,6 +309,7 @@ class ProductIn(BaseModel):
     cost: float
     description: str = ""
     imageUrl: str = ""
+    discountTiers: List[DiscountTier] = []
     active: bool = True
 
 
@@ -469,7 +619,55 @@ async def approve_offer(offer_id: str, body: DecisionIn, user: Annotated[dict, D
     if not o:
         raise HTTPException(status_code=404, detail="Angebot nicht gefunden")
     await db.offers.update_one({"id": offer_id}, {"$set": {"status": "Freigegeben", "decisionNote": body.note}})
+    try:
+        email, cname = await _company_recipient(o["companyId"])
+        if email:
+            rows = await _items_html(o["items"])
+            total = sum(it["price"] * it["qty"] for it in o["items"])
+            inner = (
+                f"<p style='margin:0 0 12px;color:#3A4256;font-size:15px'>Hallo {escape(cname)},<br>"
+                f"Ihr Angebot <strong>{escape(o['id'])}</strong> wurde freigegeben. Sie k&ouml;nnen es jetzt "
+                f"direkt in der App in eine Bestellung umwandeln.</p>"
+                "<table role='presentation' width='100%' cellpadding='0' cellspacing='0' style='font-size:14px;color:#3A4256'>"
+                f"{rows}"
+                f"<tr><td style='padding:8px 8px 0;font-weight:bold' colspan='2'>Gesamt netto</td>"
+                f"<td style='padding:8px 8px 0;text-align:right;font-weight:bold'>{total:.2f} &euro;</td></tr>"
+                "</table>"
+            )
+            html = _email_shell("Angebot freigegeben", "Gute Neuigkeiten!", inner)
+            await send_email(to=email, subject=f"Angebot {o['id']} freigegeben", html=html)
+    except Exception as e:
+        logger.warning(f"E-Mail (Angebot freigegeben) fehlgeschlagen: {e}")
     return {"ok": True, "status": "Freigegeben"}
+
+
+@api_router.post("/offers/{offer_id}/accept")
+async def accept_offer(offer_id: str, user: Annotated[dict, Depends(current_user)]):
+    o = await db.offers.find_one({"id": offer_id})
+    if not o:
+        raise HTTPException(status_code=404, detail="Angebot nicht gefunden")
+    ids = await visible_company_ids(user)
+    if o["companyId"] not in ids:
+        raise HTTPException(status_code=403, detail="Keine Berechtigung")
+    if o["status"] != "Freigegeben":
+        raise HTTPException(status_code=400, detail="Nur freigegebene Angebote können angenommen werden.")
+    if o.get("orderId"):
+        raise HTTPException(status_code=400, detail="Angebot wurde bereits in eine Bestellung umgewandelt.")
+    now = datetime.now(timezone.utc)
+    seq = await next_seq("order")
+    order_no = f"B-{now.year}-{seq:05d}"
+    order = {
+        "id": order_no,
+        "companyId": o["companyId"],
+        "createdBy": user["id"],
+        "status": "Neu",
+        "items": o["items"],
+        "fromOffer": offer_id,
+        "createdAt": now.isoformat(),
+    }
+    await db.orders.insert_one(order)
+    await db.offers.update_one({"id": offer_id}, {"$set": {"status": "Angenommen", "orderId": order_no}})
+    return strip_id(order)
 
 
 @api_router.post("/offers/{offer_id}/reject")
@@ -541,6 +739,30 @@ async def set_order_status(order_id: str, body: OrderStatusIn, user: Annotated[d
         update["shippedAt"] = now.isoformat()
         update["estimatedDelivery"] = eta.date().isoformat()
     await db.orders.update_one({"id": order_id}, {"$set": update})
+    if body.status == "Versendet":
+        try:
+            email, cname = await _company_recipient(o["companyId"])
+            if email:
+                tracking = update.get("trackingNumber") or o.get("trackingNumber") or "-"
+                eta = update.get("estimatedDelivery") or o.get("estimatedDelivery")
+                eta_row = (
+                    f"<tr><td style='padding:6px 8px;color:#8A90A2'>Voraussichtliche Lieferung</td>"
+                    f"<td style='padding:6px 8px;text-align:right;font-weight:bold'>{escape(str(eta))}</td></tr>"
+                    if eta else ""
+                )
+                inner = (
+                    f"<p style='margin:0 0 12px;color:#3A4256;font-size:15px'>Hallo {escape(cname)},<br>"
+                    f"Ihre Bestellung <strong>{escape(o['id'])}</strong> wurde versendet und ist unterwegs.</p>"
+                    "<table role='presentation' width='100%' cellpadding='0' cellspacing='0' style='font-size:14px;color:#3A4256'>"
+                    f"<tr><td style='padding:6px 8px;color:#8A90A2'>Sendungsnummer</td>"
+                    f"<td style='padding:6px 8px;text-align:right;font-weight:bold'>{escape(str(tracking))}</td></tr>"
+                    f"{eta_row}"
+                    "</table>"
+                )
+                html = _email_shell("Bestellung versendet", "Ihre Lieferung ist auf dem Weg.", inner)
+                await send_email(to=email, subject=f"Bestellung {o['id']} ist unterwegs", html=html)
+        except Exception as e:
+            logger.warning(f"E-Mail (Bestellung versendet) fehlgeschlagen: {e}")
     return {"ok": True, "status": body.status}
 
 
@@ -770,9 +992,11 @@ async def seed():
     if await db.products.count_documents({}) == 0:
         products = [
             {"id": "p1", "name": "Espresso Bar", "brand": "Gambilongo", "unit": "kg", "standardPrice": 16.90,
-             "salesFloor": 15.90, "absoluteFloor": 14.90, "cost": 11.50, "active": True},
+             "salesFloor": 15.90, "absoluteFloor": 14.90, "cost": 11.50, "active": True,
+             "discountTiers": [{"minQty": 50, "price": 16.20}, {"minQty": 100, "price": 15.50}]},
             {"id": "p2", "name": "Strong", "brand": "Caffè Aiello", "unit": "kg", "standardPrice": 18.90,
-             "salesFloor": 17.90, "absoluteFloor": 16.90, "cost": 15.35, "active": True},
+             "salesFloor": 17.90, "absoluteFloor": 16.90, "cost": 15.35, "active": True,
+             "discountTiers": [{"minQty": 50, "price": 18.20}, {"minQty": 100, "price": 17.50}]},
             {"id": "p3", "name": "Crema Mousse", "brand": "S&S", "unit": "Stk.", "standardPrice": 12.90,
              "salesFloor": 11.90, "absoluteFloor": 10.90, "cost": 7.40, "active": True},
             {"id": "p4", "name": "Decaf Gold", "brand": "Caffè Aiello", "unit": "kg", "standardPrice": 21.50,

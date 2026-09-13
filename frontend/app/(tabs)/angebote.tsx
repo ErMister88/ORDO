@@ -1,13 +1,14 @@
 import { useMemo, useState } from "react";
 import { View, Text, ScrollView, Pressable, KeyboardAvoidingView, Platform } from "react-native";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useLocalSearchParams } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { CaretDown, Export, Plus } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
 import { apiGet, apiPost } from "@/src/api/client";
 import { euro, num } from "@/src/lib/format";
+import { applicableTier } from "@/src/lib/pricing";
 import { shareOfferPdf } from "@/src/lib/pdf";
 import { ScreenHeader } from "@/src/components/screen-header";
 import { Card, Input, Button, StatusBadge, SectionTitle, EmptyState, Muted } from "@/src/components/ui";
@@ -17,6 +18,7 @@ export default function Angebote() {
   const { colors } = useTheme();
   const { user } = useAuth();
   const qc = useQueryClient();
+  const router = useRouter();
   const params = useLocalSearchParams<{ companyId?: string }>();
   const isStaff = user?.role === "admin" || user?.role === "sales";
   const isAdmin = user?.role === "admin";
@@ -38,6 +40,15 @@ export default function Angebote() {
     mutationFn: ({ id, action, note }: { id: string; action: string; note: string }) =>
       apiPost(`/offers/${id}/${action}`, { note }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["offers"] }),
+  });
+
+  const accept = useMutation({
+    mutationFn: (id: string) => apiPost(`/offers/${id}/accept`, {}),
+    onSuccess: (order: any) => {
+      qc.invalidateQueries({ queryKey: ["offers"] });
+      qc.invalidateQueries({ queryKey: ["orders"] });
+      router.push(`/bestellung/${order.id}`);
+    },
   });
 
   return (
@@ -96,6 +107,26 @@ export default function Angebote() {
                     >
                       <Export size={16} color={colors.brandPrimary} weight="bold" />
                       <Text style={styles.shareText}>Als PDF teilen</Text>
+                    </Pressable>
+                  )}
+
+                  {!isStaff && o.status === "Freigegeben" && (
+                    <Button
+                      testID={`accept-offer-${o.id}`}
+                      title="Angebot annehmen & bestellen"
+                      kind="success"
+                      loading={accept.isPending && accept.variables === o.id}
+                      onPress={() => accept.mutate(o.id)}
+                      style={{ marginTop: 8 }}
+                    />
+                  )}
+                  {!isStaff && o.status === "Angenommen" && o.orderId && (
+                    <Pressable
+                      testID={`view-order-${o.id}`}
+                      style={styles.shareBtn}
+                      onPress={() => router.push(`/bestellung/${o.orderId}`)}
+                    >
+                      <Text style={styles.shareText}>Zur Bestellung {o.orderId}</Text>
                     </Pressable>
                   )}
 
@@ -177,6 +208,7 @@ function CreateOffer({
   }, [product, parsed]);
 
   const db = product && parsed ? (parsed - product.cost) * q : 0;
+  const tier = applicableTier(product?.discountTiers, q);
 
   const addItem = () => {
     if (!product || !parsed || !q) return;
@@ -309,6 +341,27 @@ function CreateOffer({
         Standard {euro(product.standardPrice)} · Vertriebslimit {euro(product.salesFloor)} · Grenze{" "}
         {euro(product.absoluteFloor)}
       </Muted>
+
+      {product.discountTiers?.length ? (
+        <View style={styles.tierBox} testID="tier-box">
+          <Text style={styles.tierTitle}>Mengenrabatt-Staffeln</Text>
+          {product.discountTiers.map((t: any, i: number) => (
+            <Text
+              key={i}
+              style={[styles.tierRow, tier?.minQty === t.minQty && styles.tierRowActive]}
+            >
+              ab {num(t.minQty)} {product.unit} · {euro(t.price)}/{product.unit}
+              {tier?.minQty === t.minQty ? "  ✓" : ""}
+            </Text>
+          ))}
+          {tier ? (
+            <Pressable testID="apply-tier" style={styles.applyTierBtn} onPress={() => onPrice(String(tier.price))}>
+              <Text style={styles.applyTierTxt}>Staffelpreis {euro(tier.price)} übernehmen</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
+
       {parsed && isAdmin ? (
         <Muted>
           DB/Monat: {euro(db)} · DB/kg: {euro(parsed - product.cost)}
@@ -423,4 +476,22 @@ const useStyles = makeStyles((c) => ({
     borderStyle: "dashed",
   },
   addLineTxt: { color: c.brandPrimary, fontWeight: "700", fontSize: 14 },
+  tierBox: {
+    marginTop: 8,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: c.surfaceTertiary,
+    gap: 4,
+  },
+  tierTitle: { fontSize: 13, fontWeight: "800", color: c.onSurfaceSecondary, marginBottom: 2 },
+  tierRow: { fontSize: 13, color: c.muted, fontWeight: "600" },
+  tierRowActive: { color: c.success, fontWeight: "800" },
+  applyTierBtn: {
+    marginTop: 6,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: c.brandTertiary,
+    alignItems: "center",
+  },
+  applyTierTxt: { color: c.brandPrimary, fontWeight: "700", fontSize: 13 },
 }));

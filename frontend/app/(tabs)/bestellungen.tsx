@@ -8,6 +8,7 @@ import { makeStyles, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
 import { apiGet, apiPost } from "@/src/api/client";
 import { euro, num, dateDE } from "@/src/lib/format";
+import { applicableTier } from "@/src/lib/pricing";
 import { ScreenHeader } from "@/src/components/screen-header";
 import { Card, Button, StatusBadge, SectionTitle, EmptyState, Muted } from "@/src/components/ui";
 
@@ -35,16 +36,18 @@ export default function Bestellungen() {
   const mainProduct = (products.data ?? [])[0];
   const [qty, setQty] = useState(18);
 
+  const basePrice = mainProduct ? priceOf(mainProduct.id) : 0;
+  const tier = applicableTier(mainProduct?.discountTiers, qty);
+  const unitPrice = tier && tier.price < basePrice ? tier.price : basePrice;
+
   const create = useMutation({
     mutationFn: () =>
       apiPost("/orders", {
         companyId,
-        items: [{ productId: mainProduct.id, qty, price: priceOf(mainProduct.id) }],
+        items: [{ productId: mainProduct.id, qty, price: unitPrice }],
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["orders"] }),
   });
-
-  const unitPrice = mainProduct ? priceOf(mainProduct.id) : 0;
 
   return (
     <View style={styles.root}>
@@ -58,6 +61,13 @@ export default function Bestellungen() {
                 {mainProduct.brand} {mainProduct.name}
               </Text>
               <Muted>Ihr Preis: {euro(unitPrice)}/kg</Muted>
+              {tier && tier.price < basePrice ? (
+                <Text testID="tier-active" style={styles.tierActive}>
+                  Mengenrabatt aktiv · ab {num(tier.minQty)} kg statt {euro(basePrice)}
+                </Text>
+              ) : mainProduct.discountTiers?.length ? (
+                <Muted>Mengenrabatt ab {num(mainProduct.discountTiers[0].minQty)} kg</Muted>
+              ) : null}
 
               <View style={styles.stepper}>
                 <Pressable
@@ -151,4 +161,5 @@ const useStyles = makeStyles((c) => ({
   totalLabel: { fontSize: 15, color: c.muted, fontWeight: "600" },
   totalValue: { fontSize: 20, fontWeight: "800", color: c.onSurface },
   orderTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  tierActive: { fontSize: 13, fontWeight: "800", color: c.success, marginTop: 2 },
 }));

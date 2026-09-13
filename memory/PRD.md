@@ -46,6 +46,13 @@
 - Dark premium theme (near-black canvas #0B0C11, elevated cards, gold accent #E7B24C), rounder cards/buttons, more spacing, bold KPI hero. All tokens in src/theme.ts.
 - Branding: in-app "ORDO Connect by S&S" (login), app store / build name "Ordo Connect" (app.json name).
 
+## Implemented (2026-06-13, Iteration 6)
+- **Angebot → Bestellung 1-Tap**: `POST /api/offers/{id}/accept` (customer) wandelt ein freigegebenes Angebot in eine Bestellung um (offer→Angenommen + orderId, order.fromOffer). UI-Button in Angebote-Tab + Sprung zur Bestellung.
+- **Mengenrabatt-Staffeln**: Produkt-Feld `discountTiers:[{minQty,price}]`; Admin-Editor in /produkte; automatische Staffelpreise in Angebotserstellung (apply-tier) und Kunden-Nachbestellung (tier-active). Seed p1/p2 mit Staffeln.
+- **E-Mail-Benachrichtigungen (Resend, Emergent-managed)**: Mail an Firmen-E-Mail bei Angebot-Freigabe (`/approve`) und Bestell-Versand (`status=Versendet`). Nicht-blockierend (try/except), Absender `EMAIL_FROM_NAME` = "ORDO Connect by S&S". Guardrail-Gate `_assert_safe_email` auf jedem Send.
+
+## Design (theme)
+
 ## Next Tasks
 - Optional light-mode toggle if ever requested.
 - Show product images across offer/order line items.
