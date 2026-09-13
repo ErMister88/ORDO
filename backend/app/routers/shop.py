@@ -11,7 +11,7 @@ from starlette.concurrency import run_in_threadpool
 from ..core import (api_router, db, strip_id, next_seq, logger, audit,
                     JWT_SECRET, JWT_ALGORITHM, create_token, hash_pw, verify_pw)
 from ..deps import require_roles, current_user
-from ..models import ShopSettingsIn, ShopOrderIn, ShopRegisterIn, ShopLoginIn
+from ..models import ShopSettingsIn, ShopOrderIn, ShopRegisterIn, ShopLoginIn, ShopStatusIn
 from ..emailer import send_email, email_shell
 from html import escape
 
@@ -221,6 +221,57 @@ async def shop_payment_status(order_id: str):
 async def list_shop_orders(user: Annotated[dict, Depends(require_roles("admin", "sales"))]):
     rows = await db.shop_orders.find({}).sort("createdAt", -1).to_list(1000)
     return [strip_id(r) for r in rows]
+
+
+SHOP_STATUSES = ["Neu", "Bestätigt", "In Bearbeitung", "Versendet", "Abgeschlossen", "Storniert"]
+
+_STATUS_MAIL = {
+    "Bestätigt": ("Bestellung bestätigt",
+                  "wir haben Ihre Bestellung <strong>{oid}</strong> bestätigt und bereiten sie vor."),
+    "In Bearbeitung": ("Bestellung in Bearbeitung",
+                       "Ihre Bestellung <strong>{oid}</strong> wird gerade bearbeitet."),
+    "Versendet": ("Ihre Bestellung ist unterwegs",
+                  "gute Nachrichten! Ihre Bestellung <strong>{oid}</strong> wurde versendet und ist unterwegs zu Ihnen."),
+    "Abgeschlossen": ("Bestellung abgeschlossen",
+                      "Ihre Bestellung <strong>{oid}</strong> ist abgeschlossen. Vielen Dank für Ihren Einkauf!"),
+    "Storniert": ("Bestellung storniert",
+                  "Ihre Bestellung <strong>{oid}</strong> wurde storniert. Bei Fragen erreichen Sie uns jederzeit."),
+}
+
+
+@api_router.put("/shop/orders/{order_id}/status")
+async def update_shop_order_status(
+    order_id: str,
+    body: ShopStatusIn,
+    user: Annotated[dict, Depends(require_roles("admin", "sales"))],
+):
+    if body.status not in SHOP_STATUSES:
+        raise HTTPException(status_code=400, detail="Ungültiger Status")
+    o = await db.shop_orders.find_one({"id": order_id})
+    if not o:
+        raise HTTPException(status_code=404, detail="Bestellung nicht gefunden")
+    await db.shop_orders.update_one({"id": order_id}, {"$set": {"status": body.status}})
+    await audit(user, "shop_order_status", order_id, {"status": body.status})
+
+    mail = _STATUS_MAIL.get(body.status)
+    email = (o.get("customer") or {}).get("email")
+    if mail and email:
+        subject, line = mail
+        name = escape((o.get("customer") or {}).get("name", "").split(" ")[0] or "")
+        greet = f"Hallo {name}," if name else "Hallo,"
+        inner = (
+            f"<p style='margin:0 0 12px;color:#3A4256;font-size:15px'>{greet}</p>"
+            f"<p style='margin:0 0 12px;color:#3A4256;font-size:15px'>{line.format(oid=escape(order_id))}</p>"
+            f"<p style='margin:0;color:#8A90A2;font-size:13px'>Aktueller Status: <strong>{escape(body.status)}</strong></p>"
+        )
+        try:
+            await send_email(to=email, subject=f"{subject} – {order_id}",
+                             html=email_shell(subject, "Statusaktualisierung Ihrer Bestellung", inner))
+        except Exception as e:
+            logger.warning(f"Status-E-Mail fehlgeschlagen: {e}")
+
+    updated = await db.shop_orders.find_one({"id": order_id})
+    return strip_id(updated)
 
 
 def _shop_user_public(u: dict) -> dict:

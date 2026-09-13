@@ -126,6 +126,10 @@ class PushBroadcastIn(BaseModel):
     actionUrl: Optional[str] = None
 
 
+class ShopStatusIn(BaseModel):
+    status: str
+
+
 class ShopRegisterIn(BaseModel):
     name: str
     email: str

@@ -126,3 +126,10 @@ Backend split into a package: `backend/app/` with `core.py` (config/db/security)
 - **Newsletter abbestellen**: `unsubToken` je Abonnent, Abmeldelink in Willkommensmail, `GET /api/newsletter/unsubscribe?token=` löscht Abonnent (gestylte HTML-Seite).
 - **Bestelldetails immer sichtbar**: `/shop/konto` „Meine Bestellungen" zeigt Positionen (Name, Menge, Preis), Rabatt, Versand, MwSt, Gesamt und Lieferstatus je Bestellung.
 - Backend 11/11 pytest (`tests/test_iteration13.py`), Frontend verifiziert.
+
+## Implemented (2026-06-13, Iteration 14) — Zahlung/Status/Adresse/B2B-Recht
+- **„Jetzt bezahlen"**: Kunden können offene Bestellungen im Konto nachträglich per Stripe bezahlen (`payNow` in `shop/konto.tsx`, nutzt bestehende `/shop/orders/{id}/checkout` + payment-status).
+- **Lieferadresse im Konto**: Adressblock (Name, Straße, PLZ/Ort, Tel.) auf jeder Bestellkarte.
+- **Bestellstatus-Updates**: `PUT /api/shop/orders/{id}/status` (admin/sales), Status-Chips in Shop-Verwaltung (Neu → Bestätigt → In Bearbeitung → Versendet → Abgeschlossen/Storniert); Kunde erhält Status-E-Mail.
+- **B2B-Rechtsseiten**: „Rechtliches"-Sektion im „Mehr"-Tab mit Impressum/Datenschutz/AGB/Widerruf.
+- Backend 13/13 pytest (`tests/test_iteration14.py`), Frontend verifiziert. Hinweis: Alert bei Zahlungsfehler ist auf Web ein No-op (nativ ok).

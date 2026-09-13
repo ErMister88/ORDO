@@ -1,0 +1,45 @@
+{
+  "summary": "Iteration 14 — Tested 4 new features: (1) B2B 'Rechtliches' section in Mehr tab with tappable Impressum/Datenschutz/AGB/Widerruf links — all 4 navigate correctly to /legal/<slug>. (2) Customer /shop/konto — order card shows Lieferadresse (name, street, ZIP+city, phone) and 'Jetzt bezahlen' button for unpaid orders (paymentStatus='Offen'). Tapping the button calls the checkout endpoint (returns 502 with placeholder Stripe key as expected in preview). (3) Admin /shop-admin Lieferstatus chips (testID status-<oid>-<Status>) render for every order and tapping a chip updates the order (verified visually — Versendet chip highlighted after tap). (4) Backend PUT /api/shop/orders/{id}/status: all 6 valid statuses accepted, invalid=400, unknown order=404, shopuser=403, no-auth=401, admin+sales both authorized. Regression: POST /shop/orders/{id}/checkout returns 200(url) or 502(placeholder key, acceptable), GET payment-status returns 200 for known / 404 for unknown, GET /shop/my-orders returns customer/status/paymentStatus fields. 13/13 pytest cases pass. Frontend all critical flows pass.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "shop/konto.tsx payNow error handler",
+        "issue": "When checkout fails with 502 (placeholder Stripe key in preview), the 'Zahlung nicht möglich' Alert.alert() does not visibly render on the Expo web build — click makes the /checkout call, console logs the 502, but no dialog appears (React Native Web Alert.alert is a no-op on some setups). Non-blocking, since native builds will show the alert; consider using a cross-platform Toast/Modal fallback for web.",
+        "testID": "pay-now-<orderId>",
+        "priority": "LOW"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration14.py",
+    "/app/test_reports/pytest/pytest_iter14.xml"
+  ],
+  "action_items": [
+    "OPTIONAL (LOW): Improve payNow() error UX on web — Alert.alert is silent on web; use a Toast or inline error component so users see 'Zahlung nicht möglich' feedback in the web preview. Native iOS/Android is unaffected."
+  ],
+  "critical_code_review_comments": [
+    "shop.py: SHOP_STATUSES/notify-status logic is clean, uses require_roles('admin','sales') and validates status against the whitelist — no issues.",
+    "shop.py update_shop_order_status returns strip_id(updated) — Mongo _id correctly excluded.",
+    "Status-email failures are swallowed via try/except with a warning log — matches best-effort email guidance.",
+    "shop/konto.tsx renders Lieferadresse conditionally on customer.street presence and 'Jetzt bezahlen' only when paymentStatus !== 'Bezahlt' — matches spec."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration14.py (new)"
+  ],
+  "success_rate": {
+    "backend": "100% (13/13)",
+    "frontend": "95% (4 legal links OK, address + pay-now visible OK, status chips OK; minor: silent Alert on web when checkout 502)"
+  },
+  "seed_data_creation": "Created transient shop users (email prefix test_konto_/statustest_) and orders during tests; all cleaned up post-run (8 users + 22 orders deleted from MongoDB).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend Stripe key is 'sk_test_emergent' (placeholder) — /shop/orders/{id}/checkout returns 502 (Cloudflare wraps FastAPI's 502 into an HTML page; body will NOT be JSON — do not assert JSON detail on 502). Emergent email API returns 422 for all attempts in preview — email dispatch is best-effort, do NOT flag as bug. When testing shop customer flow via Playwright, prefer creating the order via in-browser fetch (page.evaluate + fetch to /api/*) rather than Python urllib, which hits the ingress from outside and can 403. Login testIDs on /login are login-email-input, login-password-input, login-submit-button (NOT login-email/password/submit). Shop products testIDs: shop-add-<productId>. Status chip testIDs on /shop-admin: status-<orderId>-<Status>.",
+  "rca_of_issue": "N/A — no bugs found. Only one minor UX gap: Alert.alert() from react-native is silently ignored on react-native-web in this Expo config, so users of the web preview will not see the 'Zahlung nicht möglich' feedback if checkout returns 502. This does not affect native iOS/Android builds."
+}

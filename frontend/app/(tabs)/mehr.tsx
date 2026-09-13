@@ -1,7 +1,7 @@
 import { View, Text, ScrollView, Pressable } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
-import { SignOut, FileText, Receipt, Export, Package, UsersThree, Lock, CaretRight, ArrowsClockwise, ClockCounterClockwise, Storefront } from "phosphor-react-native";
+import { SignOut, FileText, Receipt, Export, Package, UsersThree, Lock, CaretRight, ArrowsClockwise, ClockCounterClockwise, Storefront, Scales, ShieldCheck } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
@@ -153,6 +153,47 @@ export default function Mehr() {
             <View style={styles.linkRow}>
               <Lock size={20} color={colors.brandPrimary} weight="bold" />
               <Text style={styles.linkText}>Passwort ändern</Text>
+              <CaretRight size={18} color={colors.muted} />
+            </View>
+          </Card>
+        </Pressable>
+
+        <View style={[styles.sectionHead, { marginTop: 8 }]}>
+          <Scales size={18} color={colors.brandPrimary} weight="fill" />
+          <SectionTitle>Rechtliches</SectionTitle>
+        </View>
+        <Pressable testID="link-impressum" onPress={() => router.push("/legal/impressum")}>
+          <Card>
+            <View style={styles.linkRow}>
+              <FileText size={20} color={colors.brandPrimary} weight="bold" />
+              <Text style={styles.linkText}>Impressum</Text>
+              <CaretRight size={18} color={colors.muted} />
+            </View>
+          </Card>
+        </Pressable>
+        <Pressable testID="link-datenschutz" onPress={() => router.push("/legal/datenschutz")}>
+          <Card>
+            <View style={styles.linkRow}>
+              <ShieldCheck size={20} color={colors.brandPrimary} weight="bold" />
+              <Text style={styles.linkText}>Datenschutz</Text>
+              <CaretRight size={18} color={colors.muted} />
+            </View>
+          </Card>
+        </Pressable>
+        <Pressable testID="link-agb" onPress={() => router.push("/legal/agb")}>
+          <Card>
+            <View style={styles.linkRow}>
+              <FileText size={20} color={colors.brandPrimary} weight="bold" />
+              <Text style={styles.linkText}>AGB</Text>
+              <CaretRight size={18} color={colors.muted} />
+            </View>
+          </Card>
+        </Pressable>
+        <Pressable testID="link-widerruf" onPress={() => router.push("/legal/widerruf")}>
+          <Card>
+            <View style={styles.linkRow}>
+              <FileText size={20} color={colors.brandPrimary} weight="bold" />
+              <Text style={styles.linkText}>Widerrufsbelehrung</Text>
               <CaretRight size={18} color={colors.muted} />
             </View>
           </Card>

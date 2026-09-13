@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
-import { View, Text, ScrollView, Pressable, KeyboardAvoidingView, Platform } from "react-native";
+import { View, Text, ScrollView, Pressable, KeyboardAvoidingView, Platform, Alert } from "react-native";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArrowLeft, SignOut } from "phosphor-react-native";
+import * as WebBrowser from "expo-web-browser";
+import { ArrowLeft, SignOut, MapPin } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
+import { apiGet, apiPost } from "@/src/api/client";
 import { euro, dateDE } from "@/src/lib/format";
 import { shopApi, shopSetToken, shopLogout, shopToken } from "@/src/shop/auth";
 import { Card, Input, Button, SectionTitle, Muted, EmptyState, InfoRow, StatusBadge } from "@/src/components/ui";
@@ -60,6 +62,30 @@ export default function ShopKonto() {
   const onLogout = async () => {
     await shopLogout();
     setUser(null); setOrders([]);
+  };
+
+  const [payingId, setPayingId] = useState<string | null>(null);
+  const payNow = async (orderId: string) => {
+    setPayingId(orderId);
+    try {
+      const res = await apiPost(`/shop/orders/${orderId}/checkout`, {});
+      if (res?.url) {
+        await WebBrowser.openBrowserAsync(res.url);
+        for (let i = 0; i < 8; i++) {
+          await new Promise((r) => setTimeout(r, 1500));
+          const st = await apiGet(`/shop/orders/${orderId}/payment-status`);
+          if (st.status === "Bezahlt") break;
+        }
+        setOrders(await shopApi.myOrders());
+      }
+    } catch (e: any) {
+      Alert.alert(
+        "Zahlung nicht möglich",
+        e.message || "Die Kartenzahlung ist erst nach Veröffentlichung der App aktiv.",
+      );
+    } finally {
+      setPayingId(null);
+    }
   };
 
   return (
@@ -119,6 +145,29 @@ export default function ShopKonto() {
                       <Text style={styles.deliveryLabel}>Lieferstatus</Text>
                       <Text style={styles.deliveryVal}>{o.status || "Neu"}</Text>
                     </View>
+
+                    {o.customer?.street ? (
+                      <View style={styles.addrBox}>
+                        <View style={styles.addrHead}>
+                          <MapPin size={15} color={colors.brandPrimary} weight="fill" />
+                          <Text style={styles.addrTitle}>Lieferadresse</Text>
+                        </View>
+                        <Text style={styles.addrText}>{o.customer.name}</Text>
+                        <Text style={styles.addrText}>{o.customer.street}</Text>
+                        <Text style={styles.addrText}>{o.customer.zip} {o.customer.city}</Text>
+                        {o.customer.phone ? <Text style={styles.addrText}>Tel. {o.customer.phone}</Text> : null}
+                      </View>
+                    ) : null}
+
+                    {o.paymentStatus !== "Bezahlt" ? (
+                      <Button
+                        testID={`pay-now-${o.id}`}
+                        title="Jetzt bezahlen"
+                        loading={payingId === o.id}
+                        onPress={() => payNow(o.id)}
+                        style={{ marginTop: 12 }}
+                      />
+                    ) : null}
                   </Card>
                 ))
               )}
@@ -184,4 +233,8 @@ const useStyles = makeStyles((c) => ({
   deliveryRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 8 },
   deliveryLabel: { fontSize: 13, fontWeight: "700", color: c.onSurfaceSecondary },
   deliveryVal: { fontSize: 13, fontWeight: "800", color: c.onSurface },
+  addrBox: { marginTop: 10, padding: 10, borderRadius: 10, backgroundColor: c.surfaceTertiary },
+  addrHead: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 4 },
+  addrTitle: { fontSize: 13, fontWeight: "800", color: c.onSurface },
+  addrText: { fontSize: 13, color: c.onSurfaceSecondary, lineHeight: 19 },
 }));

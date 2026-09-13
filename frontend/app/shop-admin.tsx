@@ -57,6 +57,16 @@ export default function ShopAdmin() {
     onError: (e: any) => Alert.alert("Hinweis", e.message || "Push konnte nicht gesendet werden."),
   });
 
+  const SHOP_STATUSES = ["Neu", "Bestätigt", "In Bearbeitung", "Versendet", "Abgeschlossen"];
+  const updateStatus = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: string }) => apiPut(`/shop/orders/${id}/status`, { status }),
+    onSuccess: (_res, vars) => {
+      qc.invalidateQueries({ queryKey: ["shop-orders"] });
+      Alert.alert("Status aktualisiert", `Bestellung auf „${vars.status}" gesetzt. Der Kunde wurde per E-Mail informiert.`);
+    },
+    onError: (e: any) => Alert.alert("Fehler", e.message || "Status konnte nicht geändert werden."),
+  });
+
   return (
     <View style={styles.root}>
       <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
@@ -144,6 +154,23 @@ export default function ShopAdmin() {
                     {o.customer.street}, {o.customer.zip} {o.customer.city}
                   </Muted>
                 ) : null}
+                <Text style={styles.statusLabel}>Lieferstatus</Text>
+                <View style={styles.chips}>
+                  {SHOP_STATUSES.map((st) => {
+                    const active = (o.status || "Neu") === st;
+                    return (
+                      <Pressable
+                        key={st}
+                        testID={`status-${o.id}-${st}`}
+                        disabled={active || updateStatus.isPending}
+                        onPress={() => updateStatus.mutate({ id: o.id, status: st })}
+                        style={[styles.chip, active && styles.chipActive]}
+                      >
+                        <Text style={[styles.chipTxt, active && styles.chipTxtActive]}>{st}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
               </Card>
             ))
           )}
@@ -165,4 +192,10 @@ const useStyles = makeStyles((c) => ({
   switchRow: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 4 },
   rowTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 4 },
   oId: { fontSize: 16, fontWeight: "800", color: c.onSurface },
+  statusLabel: { fontSize: 12, fontWeight: "700", color: c.onSurfaceSecondary, marginTop: 10, marginBottom: 6 },
+  chips: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  chip: { paddingVertical: 6, paddingHorizontal: 10, borderRadius: 999, backgroundColor: c.surfaceTertiary, borderWidth: 1, borderColor: c.border },
+  chipActive: { backgroundColor: c.brandPrimary, borderColor: c.brandPrimary },
+  chipTxt: { fontSize: 12, fontWeight: "700", color: c.onSurfaceSecondary },
+  chipTxtActive: { color: c.onBrandPrimary },
 }));
