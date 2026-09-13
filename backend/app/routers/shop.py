@@ -1,16 +1,29 @@
 """B2C shop: public catalog, settings, guest orders, Stripe checkout."""
 import os
+import secrets
+import jwt
 import stripe
-from fastapi import Depends, HTTPException
-from typing import Annotated
+from fastapi import Depends, HTTPException, Header
+from typing import Annotated, Optional
 from datetime import datetime, timezone
 from starlette.concurrency import run_in_threadpool
 
-from ..core import api_router, db, strip_id, next_seq, logger, audit
-from ..deps import require_roles
-from ..models import ShopSettingsIn, ShopOrderIn
+from ..core import (api_router, db, strip_id, next_seq, logger, audit,
+                    JWT_SECRET, JWT_ALGORITHM, create_token, hash_pw, verify_pw)
+from ..deps import require_roles, current_user
+from ..models import ShopSettingsIn, ShopOrderIn, ShopRegisterIn, ShopLoginIn
 from ..emailer import send_email, email_shell
 from html import escape
+
+
+async def _optional_uid(authorization: Optional[str] = Header(None)) -> Optional[str]:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        return None
+    try:
+        payload = jwt.decode(authorization.split(" ", 1)[1], JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return payload.get("sub")
+    except Exception:
+        return None
 
 stripe.api_key = os.environ.get("STRIPE_API_KEY", "")
 APP_URL = os.environ.get("APP_URL", "https://ordo-connect.app")
@@ -51,7 +64,7 @@ async def shop_settings_put(body: ShopSettingsIn, user: Annotated[dict, Depends(
 
 
 @api_router.post("/shop/orders")
-async def create_shop_order(body: ShopOrderIn):
+async def create_shop_order(body: ShopOrderIn, uid: Annotated[Optional[str], Depends(_optional_uid)] = None):
     if not body.items:
         raise HTTPException(status_code=400, detail="Warenkorb ist leer")
     if not body.customer.name.strip() or "@" not in body.customer.email:
@@ -87,7 +100,7 @@ async def create_shop_order(body: ShopOrderIn):
         "id": oid, "items": lines, "customer": body.customer.model_dump(),
         "subtotal": subtotal, "shipping": shipping, "total": total,
         "taxBreakdown": tax_map, "taxTotal": tax_total,
-        "status": "Neu", "paymentStatus": "Offen", "createdAt": now.isoformat(),
+        "status": "Neu", "paymentStatus": "Offen", "userId": uid, "createdAt": now.isoformat(),
     }
     await db.shop_orders.insert_one(doc)
     try:
@@ -170,6 +183,18 @@ async def shop_payment_status(order_id: str):
             sess = await run_in_threadpool(lambda: stripe.checkout.Session.retrieve(sid))
             if sess.get("payment_status") == "paid":
                 await db.shop_orders.update_one({"id": order_id}, {"$set": {"paymentStatus": "Bezahlt", "status": "Bezahlt"}})
+                try:
+                    email = (o.get("customer") or {}).get("email")
+                    if email:
+                        inner = (
+                            f"<p style='margin:0 0 12px;color:#3A4256;font-size:15px'>Vielen Dank! Wir haben Ihre Zahlung "
+                            f"f&uuml;r die Bestellung <strong>{order_id}</strong> &uuml;ber {o['total']:.2f} &euro; erhalten. "
+                            "Ihre Bestellung wird jetzt bearbeitet.</p>"
+                        )
+                        await send_email(to=email, subject=f"Zahlung erhalten – {order_id}",
+                                         html=email_shell("Zahlung erhalten", "Ihre Zahlung war erfolgreich.", inner))
+                except Exception as e:
+                    logger.warning(f"E-Mail (Zahlung erhalten) fehlgeschlagen: {e}")
                 return {"status": "Bezahlt"}
         except Exception as e:
             logger.warning(f"Shop payment-status: {e}")
@@ -179,4 +204,45 @@ async def shop_payment_status(order_id: str):
 @api_router.get("/shop/orders")
 async def list_shop_orders(user: Annotated[dict, Depends(require_roles("admin", "sales"))]):
     rows = await db.shop_orders.find({}).sort("createdAt", -1).to_list(1000)
+    return [strip_id(r) for r in rows]
+
+
+def _shop_user_public(u: dict) -> dict:
+    return {"id": u["id"], "name": u.get("name", ""), "email": u["email"]}
+
+
+@api_router.post("/shop/register")
+async def shop_register(body: ShopRegisterIn):
+    email = body.email.strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Ungültige E-Mail-Adresse")
+    if len(body.password) < 8:
+        raise HTTPException(status_code=400, detail="Passwort muss mindestens 8 Zeichen haben")
+    if await db.users.find_one({"email": email}):
+        raise HTTPException(status_code=409, detail="E-Mail ist bereits registriert")
+    uid = "sc-" + secrets.token_hex(5)
+    doc = {"id": uid, "name": body.name.strip() or email, "email": email, "role": "shopuser",
+           "hashed_password": hash_pw(body.password), "companyId": None, "salesRepId": None,
+           "createdAt": datetime.now(timezone.utc).isoformat()}
+    await db.users.insert_one(doc)
+    return {"access_token": create_token(doc), "user": _shop_user_public(doc)}
+
+
+@api_router.post("/shop/login")
+async def shop_login(body: ShopLoginIn):
+    email = body.email.strip().lower()
+    u = await db.users.find_one({"email": email})
+    if not u or not verify_pw(body.password, u["hashed_password"]):
+        raise HTTPException(status_code=401, detail="E-Mail oder Passwort falsch")
+    return {"access_token": create_token(u), "user": _shop_user_public(u)}
+
+
+@api_router.get("/shop/me")
+async def shop_me(user: Annotated[dict, Depends(current_user)]):
+    return _shop_user_public(user)
+
+
+@api_router.get("/shop/my-orders")
+async def shop_my_orders(user: Annotated[dict, Depends(current_user)]):
+    rows = await db.shop_orders.find({"userId": user["id"]}).sort("createdAt", -1).to_list(1000)
     return [strip_id(r) for r in rows]

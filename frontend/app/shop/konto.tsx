@@ -1,0 +1,152 @@
+import { useEffect, useState } from "react";
+import { View, Text, ScrollView, Pressable, KeyboardAvoidingView, Platform } from "react-native";
+import { useRouter } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { ArrowLeft, SignOut } from "phosphor-react-native";
+
+import { makeStyles, useTheme } from "@/src/theme";
+import { euro, dateDE } from "@/src/lib/format";
+import { shopApi, shopSetToken, shopLogout, shopToken } from "@/src/shop/auth";
+import { Card, Input, Button, SectionTitle, Muted, EmptyState } from "@/src/components/ui";
+
+export default function ShopKonto() {
+  const styles = useStyles();
+  const { colors } = useTheme();
+  const router = useRouter();
+  const insets = useSafeAreaInsets();
+
+  const [ready, setReady] = useState(false);
+  const [user, setUser] = useState<any>(null);
+  const [orders, setOrders] = useState<any[]>([]);
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [msg, setMsg] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const loadAccount = async () => {
+    try {
+      const t = await shopToken();
+      if (!t) { setReady(true); return; }
+      const me = await shopApi.me();
+      setUser(me);
+      setOrders(await shopApi.myOrders());
+    } catch {
+      await shopLogout();
+    } finally {
+      setReady(true);
+    }
+  };
+  useEffect(() => { loadAccount(); }, []);
+
+  const submit = async () => {
+    setMsg(""); setLoading(true);
+    try {
+      const res = mode === "register"
+        ? await shopApi.register({ name, email, password })
+        : await shopApi.login({ email, password });
+      await shopSetToken(res.access_token);
+      setUser(res.user);
+      setPassword("");
+      setOrders(await shopApi.myOrders());
+    } catch (e: any) {
+      setMsg(e.message || "Fehler");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const onLogout = async () => {
+    await shopLogout();
+    setUser(null); setOrders([]);
+  };
+
+  return (
+    <View style={[styles.container, { paddingTop: insets.top }]}>
+      <View style={styles.header}>
+        <Pressable onPress={() => router.back()} style={styles.backBtn} testID="back-button" hitSlop={8}>
+          <ArrowLeft size={20} color={colors.onSurfaceSecondary} weight="bold" />
+        </Pressable>
+        <Text style={styles.title}>Mein Konto</Text>
+      </View>
+
+      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+          {!ready ? null : user ? (
+            <>
+              <Card>
+                <Text style={styles.hi}>Hallo {user.name} 👋</Text>
+                <Muted>{user.email}</Muted>
+                <Pressable testID="shop-logout" style={styles.logout} onPress={onLogout}>
+                  <SignOut size={16} color={colors.error} weight="bold" />
+                  <Text style={styles.logoutTxt}>Abmelden</Text>
+                </Pressable>
+              </Card>
+
+              <SectionTitle style={{ marginTop: 4 }}>Meine Bestellungen</SectionTitle>
+              {orders.length === 0 ? (
+                <EmptyState title="Noch keine Bestellungen" subtitle="Deine Shop-Bestellungen erscheinen hier" />
+              ) : (
+                orders.map((o) => (
+                  <Card key={o.id} testID={`myorder-${o.id}`}>
+                    <View style={styles.row}>
+                      <Text style={styles.oId}>{o.id}</Text>
+                      <Text style={styles.oStatus}>{o.paymentStatus === "Bezahlt" ? "Bezahlt" : "Offen"}</Text>
+                    </View>
+                    <Muted>{dateDE(o.createdAt)} · {o.items.length} Position(en) · {euro(o.total)}</Muted>
+                  </Card>
+                ))
+              )}
+            </>
+          ) : (
+            <Card>
+              <View style={styles.tabs}>
+                <Pressable testID="tab-login" style={[styles.tab, mode === "login" && styles.tabActive]} onPress={() => setMode("login")}>
+                  <Text style={[styles.tabTxt, mode === "login" && styles.tabTxtActive]}>Anmelden</Text>
+                </Pressable>
+                <Pressable testID="tab-register" style={[styles.tab, mode === "register" && styles.tabActive]} onPress={() => setMode("register")}>
+                  <Text style={[styles.tabTxt, mode === "register" && styles.tabTxtActive]}>Registrieren</Text>
+                </Pressable>
+              </View>
+              {mode === "register" && (
+                <>
+                  <Text style={styles.label}>Name</Text>
+                  <Input testID="acc-name" value={name} onChangeText={setName} placeholder="Vor- und Nachname" />
+                </>
+              )}
+              <Text style={styles.label}>E-Mail</Text>
+              <Input testID="acc-email" value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" placeholder="name@email.de" />
+              <Text style={styles.label}>Passwort</Text>
+              <Input testID="acc-password" value={password} onChangeText={setPassword} secureTextEntry placeholder="mind. 8 Zeichen" />
+              {msg ? <Text style={styles.err}>{msg}</Text> : null}
+              <Button testID="acc-submit" title={mode === "register" ? "Konto erstellen" : "Anmelden"} loading={loading} onPress={submit} style={{ marginTop: 10 }} />
+              <Muted style={{ marginTop: 10 }}>Mit Konto siehst du deinen Bestellverlauf. Ein Kauf ist auch ohne Konto (als Gast) möglich.</Muted>
+            </Card>
+          )}
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </View>
+  );
+}
+
+const useStyles = makeStyles((c) => ({
+  container: { flex: 1, backgroundColor: c.background },
+  header: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingVertical: 12 },
+  backBtn: { width: 40, height: 40, borderRadius: 12, backgroundColor: c.surface, alignItems: "center", justifyContent: "center" },
+  title: { fontSize: 20, fontWeight: "800", color: c.onBackground },
+  content: { padding: 16, gap: 12, paddingBottom: 40 },
+  hi: { fontSize: 17, fontWeight: "800", color: c.onSurface },
+  logout: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 12, paddingVertical: 10, borderRadius: 10, backgroundColor: c.surfaceTertiary },
+  logoutTxt: { color: c.error, fontWeight: "700", fontSize: 14 },
+  tabs: { flexDirection: "row", gap: 8, marginBottom: 8 },
+  tab: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: "center", backgroundColor: c.surfaceTertiary },
+  tabActive: { backgroundColor: c.brandPrimary },
+  tabTxt: { fontSize: 14, fontWeight: "700", color: c.onSurfaceSecondary },
+  tabTxtActive: { color: c.onBrandPrimary },
+  label: { fontSize: 13, fontWeight: "700", color: c.onSurfaceSecondary, marginTop: 8, marginBottom: 4 },
+  err: { color: c.error, fontSize: 14, fontWeight: "600", marginTop: 8 },
+  row: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  oId: { fontSize: 16, fontWeight: "800", color: c.onSurface },
+  oStatus: { fontSize: 13, fontWeight: "700", color: c.brandPrimary },
+}));

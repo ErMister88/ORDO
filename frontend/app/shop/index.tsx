@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Image } from "expo-image";
-import { ArrowLeft, ShoppingCart, ImageSquare, Plus } from "phosphor-react-native";
+import { ArrowLeft, ShoppingCart, ImageSquare, Plus, UserCircle } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
 import { apiGet, fileUrl } from "@/src/api/client";
@@ -30,6 +30,9 @@ export default function Shop() {
           <Text style={styles.title}>S&S Kaffee-Shop</Text>
           <Text style={styles.subtitle}>Premium-Kaffee für zuhause</Text>
         </View>
+        <Pressable onPress={() => router.push("/shop/konto")} style={styles.iconBtn} testID="shop-account-button" hitSlop={8}>
+          <UserCircle size={22} color={colors.onSurfaceSecondary} weight="bold" />
+        </Pressable>
         <Pressable onPress={() => router.push("/shop/warenkorb")} style={styles.cartBtn} testID="shop-cart-button" hitSlop={8}>
           <ShoppingCart size={20} color={colors.onBrandPrimary} weight="bold" />
           {cart.count > 0 && (

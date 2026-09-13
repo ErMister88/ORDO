@@ -107,6 +107,17 @@ class ShopOrderIn(BaseModel):
     customer: ShopCustomerIn
 
 
+class ShopRegisterIn(BaseModel):
+    name: str
+    email: str
+    password: str
+
+
+class ShopLoginIn(BaseModel):
+    email: str
+    password: str
+
+
 class NewCompanyIn(BaseModel):
     name: str
     city: str = ""

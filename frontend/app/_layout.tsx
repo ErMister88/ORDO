@@ -34,6 +34,7 @@ export default function RootLayout() {
                   <Stack.Screen name="shop-admin" options={{ presentation: "card" }} />
                   <Stack.Screen name="shop/index" options={{ presentation: "card" }} />
                   <Stack.Screen name="shop/warenkorb" options={{ presentation: "card" }} />
+                  <Stack.Screen name="shop/konto" options={{ presentation: "card" }} />
                   <Stack.Screen name="passwort-vergessen" options={{ presentation: "card" }} />
                   <Stack.Screen name="passwort-aendern" options={{ presentation: "card" }} />
                 </Stack>

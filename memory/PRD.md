@@ -54,6 +54,10 @@
 - **B2C MwSt & Bestätigung**: MwSt-Aufschlüsselung (7% Kaffee / 19% Maschine) in Katalog/Warenkorb/Bestellung; Bestellbestätigung per E-Mail (Resend) mit MwSt-Ausweis bei Shop-Bestellung. Demo-Maschine `m1` (19%) angelegt.
 - **Noch offen**: B2C-Konten (Registrierung/Login mit Bestellverlauf) – aktuell nur Gast-Checkout.
 
+## Implemented (2026-06-13, Iteration 11) — B2C-Konten & Shop-Mails
+- **B2C-Konten**: `POST /api/shop/register`, `/shop/login`, `GET /shop/me`, `/shop/my-orders` (Rolle `shopuser`, eigenes Token via `src/shop/auth.ts`, Screen `/shop/konto`, „Konto"-Button im Shop-Header). Bestellungen eingeloggter Nutzer werden per `userId` verknüpft; Gast-Checkout bleibt möglich.
+- **Shop-E-Mails**: Bestellbestätigung bei Bestellung + „Zahlung erhalten" bei bezahlter Zahlung (Resend, mit MwSt-Ausweis).
+
 ## Implemented (2026-06-13, Iteration 10) — B2C-Shop
 - **Öffentlicher Shop** (ohne Login, erreichbar über Login → „Zum Kaffee-Shop"): `GET /api/shop/products` (public, kein cost-Leak), Katalog `/shop`, Warenkorb `/shop/warenkorb` (Cart-Context `src/shop/cart.tsx`).
 - **Gast-Checkout**: `POST /api/shop/orders` (serverseitige Preisberechnung aus `b2cPrice`), Versand gratis ab Schwelle, sonst Pauschale; Bestellnr. `S-YYYY-#####`.

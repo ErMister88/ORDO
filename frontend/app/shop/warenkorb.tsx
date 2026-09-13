@@ -10,6 +10,7 @@ import { makeStyles, useTheme } from "@/src/theme";
 import { apiGet, apiPost } from "@/src/api/client";
 import { euro } from "@/src/lib/format";
 import { useCart } from "@/src/shop/cart";
+import { shopApi } from "@/src/shop/auth";
 import { Card, Input, Button, SectionTitle, Muted } from "@/src/components/ui";
 
 export default function Warenkorb() {
@@ -53,7 +54,7 @@ export default function Warenkorb() {
     }
     setBusy(true);
     try {
-      const order = await apiPost("/shop/orders", {
+      const order = await shopApi.createOrder({
         items: cart.items.map((i) => ({ productId: i.productId, qty: i.qty })),
         customer: form,
       });
