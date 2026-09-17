@@ -1,5 +1,6 @@
 import { storage } from "@/src/utils/storage";
 import { API_BASE } from "@/src/api/client";
+import { queryClient } from "@/src/query-client";
 
 const KEY = "shop_token";
 
@@ -7,10 +8,14 @@ export async function shopToken(): Promise<string> {
   return (await storage.secureGet(KEY, "")) as string;
 }
 export async function shopSetToken(t: string) {
+  await queryClient.cancelQueries();
+  queryClient.clear();
   await storage.secureSet(KEY, t);
 }
 export async function shopLogout() {
+  await queryClient.cancelQueries();
   await storage.secureRemove(KEY);
+  queryClient.clear();
 }
 
 async function req(path: string, method: string, body?: any, auth = false): Promise<any> {

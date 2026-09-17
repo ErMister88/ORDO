@@ -158,7 +158,7 @@ export default function Maschinen() {
                 />
               </View>
 
-              {panel?.id === m.id ? (
+              {panel && panel.id === m.id ? (
                 <View style={styles.panel}>
                   <View style={styles.panelHead}>
                     {panel.type === "leasing" ? <Coffee size={18} color={colors.brandPrimary} weight="fill" /> : <CurrencyEur size={18} color={colors.brandPrimary} weight="fill" />}
@@ -255,7 +255,7 @@ export default function Maschinen() {
                       style={{ flex: 1 }}
                     />
                   </View>
-                  {q?.id === r.id ? (
+                  {q && q.id === r.id ? (
                     <View style={{ marginTop: 8 }}>
                       <Input
                         testID={`question-input-${r.id}`}
@@ -303,7 +303,7 @@ export default function Maschinen() {
 }
 
 const useStyles = makeStyles((c) => ({
-  root: { flex: 1, backgroundColor: c.background },
+  root: { flex: 1, backgroundColor: c.surfaceSecondary },
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingBottom: 12, backgroundColor: c.surface, borderBottomWidth: 1, borderBottomColor: c.border },
   headerTitle: { fontSize: 18, fontWeight: "800", color: c.onSurface },
   mRow: { flexDirection: "row", gap: 12 },

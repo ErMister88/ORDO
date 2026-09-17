@@ -272,10 +272,10 @@ export default function ShopKonto() {
 }
 
 const useStyles = makeStyles((c) => ({
-  container: { flex: 1, backgroundColor: c.background },
+  container: { flex: 1, backgroundColor: c.surfaceSecondary },
   header: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingVertical: 12 },
   backBtn: { width: 40, height: 40, borderRadius: 12, backgroundColor: c.surface, alignItems: "center", justifyContent: "center" },
-  title: { fontSize: 20, fontWeight: "800", color: c.onBackground },
+  title: { fontSize: 20, fontWeight: "800", color: c.onSurface },
   content: { padding: 16, gap: 12, paddingBottom: 40 },
   hi: { fontSize: 17, fontWeight: "800", color: c.onSurface },
   logout: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 12, paddingVertical: 10, borderRadius: 10, backgroundColor: c.surfaceTertiary },

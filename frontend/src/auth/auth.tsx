@@ -1,6 +1,12 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
 import { storage } from "@/src/utils/storage";
 import { loginRequest, fetchMe, TOKEN_KEY, User } from "@/src/api/client";
+import { queryClient } from "@/src/query-client";
+
+async function clearUserCache() {
+  await queryClient.cancelQueries();
+  queryClient.clear();
+}
 
 type AuthContextValue = {
   user: User | null;
@@ -25,6 +31,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setUser(me);
         } catch {
           await storage.secureRemove(TOKEN_KEY);
+          await clearUserCache();
         }
       }
       setLoading(false);
@@ -33,6 +40,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signIn = useCallback(async (email: string, password: string) => {
     const data = await loginRequest(email.trim(), password);
+    await clearUserCache();
     await storage.secureSet(TOKEN_KEY, data.access_token);
     setUser(data.user);
     return data.user;
@@ -48,7 +56,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
+    await queryClient.cancelQueries();
     await storage.secureRemove(TOKEN_KEY);
+    queryClient.clear();
     setUser(null);
   }, []);
 

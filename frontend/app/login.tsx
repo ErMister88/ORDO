@@ -21,12 +21,6 @@ import { Button, Input } from "@/src/components/ui";
 const HERO =
   "https://images.unsplash.com/photo-1653668168018-0ee2c5756bca?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200";
 
-const DEMO = [
-  { label: "Admin", email: "admin@ss-coffee.de", password: "Admin#2026" },
-  { label: "Vertrieb", email: "vertrieb@ss-coffee.de", password: "Sales#2026" },
-  { label: "Kunde", email: "kunde@ss-coffee.de", password: "Kunde#2026" },
-];
-
 export default function Login() {
   const styles = useStyles();
   const { colors } = useTheme();
@@ -55,12 +49,6 @@ export default function Login() {
     } finally {
       setLoading(false);
     }
-  };
-
-  const fillDemo = (d: (typeof DEMO)[number]) => {
-    setEmail(d.email);
-    setPassword(d.password);
-    setError("");
   };
 
   return (
@@ -144,20 +132,6 @@ export default function Login() {
               <Text style={styles.shopLinkText}>🛒  Zum Kaffee-Shop (ohne Login)</Text>
             </Pressable>
           </View>
-
-          <Text style={styles.demoTitle}>Demo-Konten</Text>
-          <View style={styles.demoRow}>
-            {DEMO.map((d) => (
-              <Pressable
-                key={d.email}
-                testID={`demo-chip-${d.label.toLowerCase()}`}
-                style={styles.demoChip}
-                onPress={() => fillDemo(d)}
-              >
-                <Text style={styles.demoChipText}>{d.label}</Text>
-              </Pressable>
-            ))}
-          </View>
         </ScrollView>
       </KeyboardAvoidingView>
     </View>
@@ -192,16 +166,6 @@ const useStyles = makeStyles((c) => ({
   shopLink: { alignSelf: "center", marginTop: 16, paddingVertical: 12, paddingHorizontal: 18, borderRadius: 12, backgroundColor: c.brandTertiary },
   shopLinkText: { color: c.brandPrimary, fontWeight: "800", fontSize: 15 },
   error: { color: c.error, fontSize: 14, fontWeight: "600", marginTop: 4 },
-  demoTitle: { fontSize: 13, fontWeight: "700", color: c.muted, marginTop: 24, marginBottom: 10 },
-  demoRow: { flexDirection: "row", gap: 10 },
-  demoChip: {
-    flex: 1,
-    backgroundColor: c.brandTertiary,
-    borderRadius: 14,
-    paddingVertical: 13,
-    alignItems: "center",
-  },
-  demoChipText: { color: c.onBrandTertiary, fontWeight: "700", fontSize: 14 },
 }));
 
 function StyleSheetAbsolute() {

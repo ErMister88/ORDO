@@ -1,6 +1,11 @@
 import { storage } from "@/src/utils/storage";
 
 const API = process.env.EXPO_PUBLIC_BACKEND_URL;
+if (!API) {
+  throw new Error(
+    "EXPO_PUBLIC_BACKEND_URL fehlt. Bitte die öffentliche Backend-Adresse ohne /api konfigurieren.",
+  );
+}
 export const TOKEN_KEY = "ss_auth_token";
 
 export type Role = "admin" | "sales" | "customer";

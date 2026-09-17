@@ -66,14 +66,26 @@ export default function Dashboard() {
         ) : data.role === "customer" ? (
           <CustomerDash data={data} />
         ) : (
-          <StaffDash data={data} onCustomer={(id: string) => router.push(`/kunde/${id}`)} />
+          <StaffDash
+            data={data}
+            onCustomer={(id: string) => router.push(`/kunde/${id}`)}
+            onApprovals={() => router.push("/(tabs)/angebote")}
+          />
         )}
       </ScrollView>
     </View>
   );
 }
 
-function StaffDash({ data, onCustomer }: { data: any; onCustomer: (id: string) => void }) {
+function StaffDash({
+  data,
+  onCustomer,
+  onApprovals,
+}: {
+  data: any;
+  onCustomer: (id: string) => void;
+  onApprovals: () => void;
+}) {
   const styles = useStyles();
   const { colors } = useTheme();
   return (
@@ -98,7 +110,7 @@ function StaffDash({ data, onCustomer }: { data: any; onCustomer: (id: string) =
       </View>
 
       {data.pendingApprovals > 0 && (
-        <Pressable onPress={() => {}} testID="approval-alert">
+        <Pressable onPress={onApprovals} testID="approval-alert">
           <View style={[styles.alert, { borderColor: colors.warning }]}>
             <View style={[styles.alertIcon, { backgroundColor: colors.warning }]}>
               <Warning size={18} color={colors.onWarning} weight="fill" />

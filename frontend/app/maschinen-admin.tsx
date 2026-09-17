@@ -294,7 +294,7 @@ function RequestCard({ r, products, onDone }: { r: any; products: any[]; onDone:
 }
 
 const useStyles = makeStyles((c) => ({
-  root: { flex: 1, backgroundColor: c.background },
+  root: { flex: 1, backgroundColor: c.surfaceSecondary },
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingBottom: 12, backgroundColor: c.surface, borderBottomWidth: 1, borderBottomColor: c.border },
   headerTitle: { fontSize: 18, fontWeight: "800", color: c.onSurface },
   label: { fontSize: 13, fontWeight: "700", color: c.onSurfaceSecondary, marginTop: 10, marginBottom: 4 },
@@ -321,7 +321,7 @@ const useStyles = makeStyles((c) => ({
   coffeeChipActive: { backgroundColor: c.brandPrimary, borderColor: c.brandPrimary },
   coffeeChipTxt: { fontSize: 12, fontWeight: "700", color: c.onSurfaceSecondary },
   coffeeChipTxtActive: { color: c.onBrandPrimary },
-  qBox: { marginTop: 8, padding: 10, borderRadius: 10, backgroundColor: c.warningContainer ?? c.surfaceTertiary },
+  qBox: { marginTop: 8, padding: 10, borderRadius: 10, backgroundColor: c.surfaceTertiary },
   qHead: { fontSize: 12, fontWeight: "800", color: c.onSurfaceSecondary, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 },
   qText: { fontSize: 13, color: c.onSurface, lineHeight: 19 },
 }));

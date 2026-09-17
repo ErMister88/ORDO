@@ -1,5 +1,13 @@
 import React from "react";
-import { View, Text, Pressable, ActivityIndicator, TextInput } from "react-native";
+import {
+  View,
+  Text,
+  Pressable,
+  ActivityIndicator,
+  TextInput,
+  type TextInputProps,
+  type TextProps,
+} from "react-native";
 import { makeStyles, useTheme } from "@/src/theme";
 
 // ---------------------------------------------------------------------------
@@ -146,7 +154,7 @@ export function Button({
 // ---------------------------------------------------------------------------
 // Input
 // ---------------------------------------------------------------------------
-export const Input = React.forwardRef<TextInput, any>(function Input({ style, ...props }, ref) {
+export const Input = React.forwardRef<TextInput, TextInputProps>(function Input({ style, ...props }, ref) {
   const styles = useStyles();
   const { colors } = useTheme();
   return (
@@ -172,9 +180,9 @@ export function InfoRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function Muted({ children, style, testID }: { children: React.ReactNode; style?: any; testID?: string }) {
+export function Muted({ style, ...props }: TextProps) {
   const styles = useStyles();
-  return <Text testID={testID} style={[styles.muted, style]}>{children}</Text>;
+  return <Text {...props} style={[styles.muted, style]} />;
 }
 
 export function EmptyState({ title, subtitle }: { title: string; subtitle?: string }) {

@@ -37,7 +37,7 @@ export default function TabsLayout() {
         name="index"
         options={{
           title: "Übersicht",
-          tabBarIcon: ({ color, size }) => <House size={size} color={color} weight="fill" />,
+          tabBarIcon: ({ color, size }) => <House size={size} color={String(color)} weight="fill" />,
         }}
       />
       <Tabs.Screen
@@ -45,14 +45,14 @@ export default function TabsLayout() {
         options={{
           title: "Kunden",
           href: isStaff ? "/(tabs)/kunden" : null,
-          tabBarIcon: ({ color, size }) => <Users size={size} color={color} weight="fill" />,
+          tabBarIcon: ({ color, size }) => <Users size={size} color={String(color)} weight="fill" />,
         }}
       />
       <Tabs.Screen
         name="angebote"
         options={{
           title: "Angebote",
-          tabBarIcon: ({ color, size }) => <Tag size={size} color={color} weight="fill" />,
+          tabBarIcon: ({ color, size }) => <Tag size={size} color={String(color)} weight="fill" />,
         }}
       />
       <Tabs.Screen
@@ -60,7 +60,7 @@ export default function TabsLayout() {
         options={{
           title: "Auswertungen",
           href: isStaff ? "/(tabs)/auswertungen" : null,
-          tabBarIcon: ({ color, size }) => <ChartBar size={size} color={color} weight="fill" />,
+          tabBarIcon: ({ color, size }) => <ChartBar size={size} color={String(color)} weight="fill" />,
         }}
       />
       <Tabs.Screen
@@ -68,15 +68,15 @@ export default function TabsLayout() {
         options={{
           title: "Bestellungen",
           href: !isStaff ? "/(tabs)/bestellungen" : null,
-          tabBarIcon: ({ color, size }) => <ShoppingCart size={size} color={color} weight="fill" />,
+          tabBarIcon: ({ color, size }) => <ShoppingCart size={size} color={String(color)} weight="fill" />,
         }}
       />
       <Tabs.Screen
         name="mehr"
         options={{
           title: "Mehr",
-          href: !isStaff ? "/(tabs)/mehr" : null,
-          tabBarIcon: ({ color, size }) => <DotsThreeCircle size={size} color={color} weight="fill" />,
+          href: role === "admin" || role === "customer" ? "/(tabs)/mehr" : null,
+          tabBarIcon: ({ color, size }) => <DotsThreeCircle size={size} color={String(color)} weight="fill" />,
         }}
       />
     </Tabs>
