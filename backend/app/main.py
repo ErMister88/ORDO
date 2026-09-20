@@ -3,8 +3,8 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
 
 from .core import app, api_router, db, client, logger
+from .database_setup import ensure_required_indexes
 from .storage import init_storage
-from .seed import seed
 
 # Import routers so their @api_router routes register before we include it.
 from .routers import (  # noqa: F401,E402
@@ -31,7 +31,7 @@ app.add_middleware(
 @app.on_event("startup")
 async def on_startup():
     await db.command("ping")
-    await seed()
+    await ensure_required_indexes(db)
     try:
         await run_in_threadpool(init_storage)
         logger.info("Object storage initialised")

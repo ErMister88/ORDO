@@ -19,32 +19,9 @@ APP_URL = (os.environ.get("APP_URL") or "https://ordo-connect.preview.emergentag
 
 TYPE_LABEL = {"kauf": "Kauf", "finanzierung": "Finanzierung", "leasing": "Leasing (Kaffeebindung)"}
 
-DEMO_MACHINES = [
-    {"name": "Espressomaschine La Marzocco Linea Mini", "price": 5900.0,
-     "description": "Zweikreiser-Siebträger für höchste Ansprüche. Ideal für Büros und Gastronomie.",
-     "imageUrl": ""},
-    {"name": "Vollautomat WMF 1500 S+", "price": 8900.0,
-     "description": "Kaffeevollautomat für hohe Volumen, bis zu 250 Tassen/Tag.",
-     "imageUrl": ""},
-    {"name": "Siebträger ECM Synchronika", "price": 3200.0,
-     "description": "Dualboiler-Siebträger, Edelstahl, perfekt für kleine Teams.",
-     "imageUrl": ""},
-]
-
-
-async def _ensure_seed():
-    if await db.machines.count_documents({}) == 0:
-        now = datetime.now(timezone.utc).isoformat()
-        await db.machines.insert_many([
-            {"id": str(uuid.uuid4()), "taxRate": 19, "active": True, "createdAt": now, **m}
-            for m in DEMO_MACHINES
-        ])
-
-
 # ---------------- Catalog ----------------
 @api_router.get("/machines")
 async def list_machines(user: Annotated[dict, Depends(current_user)]):
-    await _ensure_seed()
     q = {} if user["role"] in ("admin", "sales") else {"active": True}
     rows = await db.machines.find(q).sort("price", 1).to_list(500)
     return [strip_id(r) for r in rows]
