@@ -196,12 +196,16 @@ async def set_machine_terms(
 
 
 @api_router.post("/machine-requests/{req_id}/accept")
-async def accept_machine_offer(req_id: str, user: Annotated[dict, Depends(current_user)]):
+async def accept_machine_offer(
+    req_id: str,
+    user: Annotated[dict, Depends(current_user)],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
     r = await db.machine_requests.find_one({"id": req_id})
     if not r:
         raise HTTPException(status_code=404, detail="Anfrage nicht gefunden")
     if user["role"] != "admin":
-        ids = await visible_company_ids(user)
+        ids = await visible_company_ids(user, access)
         if not _owns(r, user, ids):
             raise HTTPException(status_code=403, detail="Keine Berechtigung")
     if r.get("status") != "Angebot":
@@ -212,13 +216,22 @@ async def accept_machine_offer(req_id: str, user: Annotated[dict, Depends(curren
     contract_id = r.get("contractId")
     if r.get("type") == "leasing" and not contract_id and r["customer"].get("companyId"):
         t = r.get("terms") or {}
+        company_id = r["customer"].get("companyId")
+        product_id = t.get("productId")
+        if (
+            not isinstance(company_id, str)
+            or not await access.companies.find_one({"id": company_id})
+            or not isinstance(product_id, str)
+            or not await access.products.find_one({"id": product_id})
+        ):
+            raise HTTPException(status_code=404, detail="Anfrage nicht gefunden")
         now = datetime.now(timezone.utc)
         seq = await next_seq("contract")
         contract_id = f"S&S-{now.year}-M{seq:04d}"
-        await db.contracts.insert_one({
+        await access.contracts.insert_one({
             "id": contract_id,
-            "companyId": r["customer"]["companyId"],
-            "productId": t.get("productId"),
+            "companyId": company_id,
+            "productId": product_id,
             "start": now.date().isoformat(),
             "termMonths": t.get("termMonths") or r.get("termMonths") or 48,
             "minQtyMonth": t.get("minCoffeeKgMonth") or 0,
@@ -283,9 +296,9 @@ async def leasing_contracts(
 ):
     q = {"source": "machine_leasing"}
     if user["role"] != "admin":
-        ids = await visible_company_ids(user)
+        ids = await visible_company_ids(user, access)
         q["companyId"] = {"$in": ids}
-    rows = await db.contracts.find(q).sort("start", -1).to_list(1000)
+    rows = await access.contracts.find(q).sort("start", -1).to_list(1000)
     out = []
     for c in rows:
         company = (

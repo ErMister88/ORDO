@@ -3,7 +3,7 @@ from fastapi import Depends
 from typing import Annotated
 from datetime import datetime, timezone
 
-from ..core import api_router, db
+from ..core import api_router
 from ..deps import require_roles, tenant_business_access, visible_company_ids
 from ..tenant_access import TenantBusinessAccess
 
@@ -15,7 +15,7 @@ async def analytics(
     months: int = 6,
 ):
     ids = await visible_company_ids(user, access)
-    orders = await db.orders.find({"companyId": {"$in": ids}}).to_list(10000)
+    orders = await access.orders.find({"companyId": {"$in": ids}}).to_list(10000)
     products = await access.products.find().to_list(1000)
     cost_map = {p["id"]: p["cost"] for p in products}
 

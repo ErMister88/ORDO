@@ -3,9 +3,11 @@ from fastapi import Depends, HTTPException
 from typing import Annotated
 from datetime import datetime, timezone
 
-from ..core import api_router, db, strip_id, next_seq
+from ..core import api_router, strip_id, next_seq
 from ..deps import require_roles, tenant_business_access, visible_company_ids
 from ..tenant_access import TenantBusinessAccess
+from .invoices import invoice_references_visible
+from .orders import order_references_visible
 
 
 async def _build_lines(access: TenantBusinessAccess, items):
@@ -40,8 +42,8 @@ async def create_invoice_for_order(
     user: Annotated[dict, Depends(require_roles("admin", "sales"))],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
 ):
-    o = await db.orders.find_one({"id": order_id})
-    if not o:
+    o = await access.orders.find_one({"id": order_id})
+    if not o or not await order_references_visible(access, o):
         raise HTTPException(status_code=404, detail="Bestellung nicht gefunden")
     ids = await visible_company_ids(user, access)
     if o["companyId"] not in ids:
@@ -65,8 +67,10 @@ async def create_invoice_for_order(
         "status": "Offen",
         "createdAt": now.isoformat(),
     }
-    await db.invoices.insert_one(invoice)
-    await db.orders.update_one({"id": order_id}, {"$set": {"invoiceId": inv_no}})
+    if not await invoice_references_visible(access, invoice):
+        raise HTTPException(status_code=404, detail="Bestellung nicht gefunden")
+    await access.invoices.insert_one(invoice)
+    await access.orders.update_one({"id": order_id}, {"$set": {"invoiceId": inv_no}})
     return strip_id(invoice)
 
 
@@ -80,10 +84,12 @@ async def collective_invoice(company_id: str, year: int, month: int,
     ids = await visible_company_ids(user, access)
     if company_id not in ids:
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
-    orders = await db.orders.find({"companyId": company_id}).to_list(5000)
+    orders = await access.orders.find({"companyId": company_id}).to_list(5000)
     picked = []
     all_items = []
     for o in orders:
+        if not await order_references_visible(access, o):
+            continue
         if o.get("status") == "Storniert":
             continue
         dt = datetime.fromisoformat(o["createdAt"])

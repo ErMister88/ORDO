@@ -5,8 +5,10 @@ from fastapi import Depends, HTTPException
 from starlette.concurrency import run_in_threadpool
 from typing import Annotated
 
-from ..core import api_router, db, logger
-from ..deps import current_user, visible_company_ids
+from ..core import api_router, logger
+from ..deps import current_user, tenant_business_access, visible_company_ids
+from ..tenant_access import TenantBusinessAccess
+from .invoices import invoice_references_visible
 
 stripe.api_key = os.environ.get("STRIPE_API_KEY", "")
 APP_URL = (os.environ.get("APP_URL") or "https://ordo-connect.preview.emergentagent.com").rstrip("/")
@@ -15,11 +17,15 @@ CANCEL_URL = f"{APP_URL}/?payment=cancelled"
 
 
 @api_router.post("/invoices/{invoice_id}/checkout")
-async def create_checkout(invoice_id: str, user: Annotated[dict, Depends(current_user)]):
-    inv = await db.invoices.find_one({"id": invoice_id})
-    if not inv:
+async def create_checkout(
+    invoice_id: str,
+    user: Annotated[dict, Depends(current_user)],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    inv = await access.invoices.find_one({"id": invoice_id})
+    if not inv or not await invoice_references_visible(access, inv):
         raise HTTPException(status_code=404, detail="Rechnung nicht gefunden")
-    ids = await visible_company_ids(user)
+    ids = await visible_company_ids(user, access)
     if inv["companyId"] not in ids:
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
     if inv.get("status") == "Bezahlt":
@@ -52,16 +58,20 @@ async def create_checkout(invoice_id: str, user: Annotated[dict, Depends(current
     except Exception as e:
         logger.warning(f"Stripe Checkout fehlgeschlagen: {e}")
         raise HTTPException(status_code=502, detail="Zahlung konnte nicht gestartet werden")
-    await db.invoices.update_one({"id": invoice_id}, {"$set": {"stripeSessionId": session.id}})
+    await access.invoices.update_one({"id": invoice_id}, {"$set": {"stripeSessionId": session.id}})
     return {"url": session.url, "sessionId": session.id}
 
 
 @api_router.get("/invoices/{invoice_id}/payment-status")
-async def payment_status(invoice_id: str, user: Annotated[dict, Depends(current_user)]):
-    inv = await db.invoices.find_one({"id": invoice_id})
-    if not inv:
+async def payment_status(
+    invoice_id: str,
+    user: Annotated[dict, Depends(current_user)],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    inv = await access.invoices.find_one({"id": invoice_id})
+    if not inv or not await invoice_references_visible(access, inv):
         raise HTTPException(status_code=404, detail="Rechnung nicht gefunden")
-    ids = await visible_company_ids(user)
+    ids = await visible_company_ids(user, access)
     if inv["companyId"] not in ids:
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
     if inv.get("status") == "Bezahlt":
@@ -75,7 +85,7 @@ async def payment_status(invoice_id: str, user: Annotated[dict, Depends(current_
             session = None
         if session and session.get("payment_status") in ("paid", "no_payment_required"):
             from datetime import datetime, timezone
-            await db.invoices.update_one(
+            await access.invoices.update_one(
                 {"id": invoice_id, "status": {"$ne": "Bezahlt"}},
                 {"$set": {"status": "Bezahlt", "paidAt": datetime.now(timezone.utc).isoformat()}},
             )

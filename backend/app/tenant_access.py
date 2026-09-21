@@ -1,4 +1,4 @@
-"""Small explicit tenant-scoped persistence boundary for work package 3.4."""
+"""Small explicit tenant-scoped persistence boundary for business data."""
 
 from __future__ import annotations
 
@@ -10,9 +10,14 @@ from .tenancy import TenantContext
 
 TENANT_SCOPED_BUSINESS_COLLECTIONS = frozenset({
     "companies",
+    "contracts",
     "customer_prices",
+    "invoices",
+    "offers",
+    "orders",
     "price_history",
     "products",
+    "subscriptions",
     "uploads",
 })
 
@@ -115,7 +120,12 @@ class TenantBusinessAccess:
     def __init__(self, database, context: TenantContext) -> None:
         self.context = context
         self.companies = TenantScopedCollection(database, "companies", context)
+        self.contracts = TenantScopedCollection(database, "contracts", context)
         self.products = TenantScopedCollection(database, "products", context)
         self.customer_prices = TenantScopedCollection(database, "customer_prices", context)
+        self.invoices = TenantScopedCollection(database, "invoices", context)
+        self.offers = TenantScopedCollection(database, "offers", context)
+        self.orders = TenantScopedCollection(database, "orders", context)
         self.price_history = TenantScopedCollection(database, "price_history", context)
+        self.subscriptions = TenantScopedCollection(database, "subscriptions", context)
         self.uploads = TenantScopedCollection(database, "uploads", context)

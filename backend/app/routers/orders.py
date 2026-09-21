@@ -4,17 +4,43 @@ from fastapi import Depends, HTTPException
 from typing import Annotated
 from datetime import datetime, timedelta, timezone
 
-from ..core import api_router, db, strip_id, next_seq, logger, ORDER_STATUS_FLOW, audit
+from ..core import api_router, strip_id, next_seq, logger, ORDER_STATUS_FLOW, audit
 from ..deps import current_user, require_roles, tenant_business_access, visible_company_ids
 from ..models import OrderCreate, OrderStatusIn, OrderItemIn  # noqa: F401
 from ..emailer import send_email, email_shell, company_recipient
 from ..tenant_access import TenantBusinessAccess
 
 
+async def order_references_visible(access: TenantBusinessAccess, order: dict) -> bool:
+    company_id = order.get("companyId")
+    if not isinstance(company_id, str) or not await access.companies.find_one({"id": company_id}):
+        return False
+    for item in order.get("items", []):
+        product_id = item.get("productId")
+        if not isinstance(product_id, str) or not await access.products.find_one({"id": product_id}):
+            return False
+    for field, collection in (
+        ("fromOffer", access.offers),
+        ("fromSubscription", access.subscriptions),
+    ):
+        reference_id = order.get(field)
+        if reference_id is None:
+            continue
+        if not isinstance(reference_id, str):
+            return False
+        source = await collection.find_one({"id": reference_id})
+        if not source or source.get("companyId") != company_id:
+            return False
+    return True
+
+
 @api_router.get("/orders")
-async def get_orders(user: Annotated[dict, Depends(current_user)]):
-    ids = await visible_company_ids(user)
-    orders = await db.orders.find({"companyId": {"$in": ids}}).sort("createdAt", -1).to_list(2000)
+async def get_orders(
+    user: Annotated[dict, Depends(current_user)],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    ids = await visible_company_ids(user, access)
+    orders = await access.orders.find({"companyId": {"$in": ids}}).sort("createdAt", -1).to_list(2000)
     return [strip_id(o) for o in orders]
 
 
@@ -30,8 +56,7 @@ async def _resolve_unit_price(
     )
     if cp and cp.get("price") is not None:
         return round(float(cp["price"]), 2)
-    ct = await db.contracts.find_one({
-        "tenantId": access.context.tenant_id,
+    ct = await access.contracts.find_one({
         "companyId": company_id,
         "productId": product["id"],
     })
@@ -75,16 +100,20 @@ async def create_order(
         "items": items,
         "createdAt": now.isoformat(),
     }
-    await db.orders.insert_one(order)
+    await access.orders.insert_one(order)
     return strip_id(order)
 
 
 @api_router.get("/orders/{order_id}")
-async def get_order(order_id: str, user: Annotated[dict, Depends(current_user)]):
-    o = await db.orders.find_one({"id": order_id})
-    if not o:
+async def get_order(
+    order_id: str,
+    user: Annotated[dict, Depends(current_user)],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    o = await access.orders.find_one({"id": order_id})
+    if not o or not await order_references_visible(access, o):
         raise HTTPException(status_code=404, detail="Bestellung nicht gefunden")
-    ids = await visible_company_ids(user)
+    ids = await visible_company_ids(user, access)
     if o["companyId"] not in ids:
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
     return strip_id(o)
@@ -99,8 +128,8 @@ async def set_order_status(
 ):
     if body.status not in ORDER_STATUS_FLOW:
         raise HTTPException(status_code=400, detail="Ungültiger Status")
-    o = await db.orders.find_one({"id": order_id})
-    if not o:
+    o = await access.orders.find_one({"id": order_id})
+    if not o or not await order_references_visible(access, o):
         raise HTTPException(status_code=404, detail="Bestellung nicht gefunden")
     ids = await visible_company_ids(user, access)
     if o["companyId"] not in ids:
@@ -112,7 +141,7 @@ async def set_order_status(
         update["trackingNumber"] = f"SS{now.strftime('%y%m%d')}{o['id'].split('-')[-1]}"
         update["shippedAt"] = now.isoformat()
         update["estimatedDelivery"] = eta.date().isoformat()
-    await db.orders.update_one({"id": order_id}, {"$set": update})
+    await access.orders.update_one({"id": order_id}, {"$set": update})
     await audit(user, "order.status", order_id, {"status": body.status})
     if body.status == "Versendet":
         try:
@@ -142,11 +171,15 @@ async def set_order_status(
 
 
 @api_router.put("/orders/{order_id}/cancel")
-async def cancel_order(order_id: str, user: Annotated[dict, Depends(current_user)]):
-    o = await db.orders.find_one({"id": order_id})
-    if not o:
+async def cancel_order(
+    order_id: str,
+    user: Annotated[dict, Depends(current_user)],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    o = await access.orders.find_one({"id": order_id})
+    if not o or not await order_references_visible(access, o):
         raise HTTPException(status_code=404, detail="Bestellung nicht gefunden")
-    ids = await visible_company_ids(user)
+    ids = await visible_company_ids(user, access)
     if o["companyId"] not in ids:
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
     if o["status"] != "Neu":
@@ -154,7 +187,7 @@ async def cancel_order(order_id: str, user: Annotated[dict, Depends(current_user
             status_code=400,
             detail="Bestellung wird bereits bearbeitet und kann nicht mehr storniert werden.",
         )
-    await db.orders.update_one(
+    await access.orders.update_one(
         {"id": order_id},
         {"$set": {"status": "Storniert", "cancelledAt": datetime.now(timezone.utc).isoformat(), "cancelledBy": user["id"]}},
     )

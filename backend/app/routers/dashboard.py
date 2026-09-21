@@ -3,7 +3,7 @@ from fastapi import Depends
 from typing import Annotated
 from datetime import datetime, timezone
 
-from ..core import api_router, db, strip_id
+from ..core import api_router, strip_id
 from ..deps import current_user, tenant_business_access, visible_company_ids
 from ..tenant_access import TenantBusinessAccess
 
@@ -15,9 +15,9 @@ async def dashboard(
 ):
     ids = await visible_company_ids(user, access)
     companies = await access.companies.find({"id": {"$in": ids}}).to_list(1000)
-    orders = await db.orders.find({"companyId": {"$in": ids}}).to_list(5000)
-    offers = await db.offers.find({"companyId": {"$in": ids}}).to_list(1000)
-    invoices = await db.invoices.find({"companyId": {"$in": ids}}).to_list(1000)
+    orders = await access.orders.find({"companyId": {"$in": ids}}).to_list(5000)
+    offers = await access.offers.find({"companyId": {"$in": ids}}).to_list(1000)
+    invoices = await access.invoices.find({"companyId": {"$in": ids}}).to_list(1000)
 
     def order_total(o):
         return sum(i["price"] * i["qty"] for i in o["items"])
@@ -34,7 +34,7 @@ async def dashboard(
 
     followups = []
     for c in companies:
-        last = await db.orders.find({"companyId": c["id"]}).sort("createdAt", -1).to_list(1)
+        last = await access.orders.find({"companyId": c["id"]}).sort("createdAt", -1).to_list(1)
         if last:
             last_dt = datetime.fromisoformat(last[0]["createdAt"]).replace(tzinfo=timezone.utc)
             days = (now - last_dt).days
@@ -45,7 +45,7 @@ async def dashboard(
 
     if user["role"] == "customer":
         c = companies[0] if companies else None
-        contract = await db.contracts.find_one({"companyId": user.get("companyId")})
+        contract = await access.contracts.find_one({"companyId": c["id"]}) if c else None
         return {
             "role": "customer",
             "companyName": c["name"] if c else "",

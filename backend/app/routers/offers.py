@@ -4,17 +4,31 @@ from fastapi import Depends, HTTPException
 from typing import Annotated
 from datetime import datetime, timezone
 
-from ..core import api_router, db, strip_id, next_seq, logger, audit
+from ..core import api_router, strip_id, next_seq, logger, audit
 from ..deps import current_user, require_roles, tenant_business_access, visible_company_ids
 from ..models import OfferCreate, DecisionIn, AcceptOfferIn
 from ..emailer import send_email, email_shell, company_recipient, items_html
 from ..tenant_access import TenantBusinessAccess
 
 
+async def offer_references_visible(access: TenantBusinessAccess, offer: dict) -> bool:
+    company_id = offer.get("companyId")
+    if not isinstance(company_id, str) or not await access.companies.find_one({"id": company_id}):
+        return False
+    for item in offer.get("items", []):
+        product_id = item.get("productId")
+        if not isinstance(product_id, str) or not await access.products.find_one({"id": product_id}):
+            return False
+    return True
+
+
 @api_router.get("/offers")
-async def get_offers(user: Annotated[dict, Depends(current_user)]):
-    ids = await visible_company_ids(user)
-    offers = await db.offers.find({"companyId": {"$in": ids}}).sort("createdAt", -1).to_list(1000)
+async def get_offers(
+    user: Annotated[dict, Depends(current_user)],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    ids = await visible_company_ids(user, access)
+    offers = await access.offers.find({"companyId": {"$in": ids}}).sort("createdAt", -1).to_list(1000)
     return [strip_id(o) for o in offers]
 
 
@@ -49,7 +63,7 @@ async def create_offer(
         "termMonths": body.termMonths,
         "createdAt": now.isoformat(),
     }
-    await db.offers.insert_one(offer)
+    await access.offers.insert_one(offer)
     return strip_id(offer)
 
 
@@ -60,10 +74,10 @@ async def approve_offer(
     user: Annotated[dict, Depends(require_roles("admin"))],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
 ):
-    o = await db.offers.find_one({"id": offer_id})
-    if not o:
+    o = await access.offers.find_one({"id": offer_id})
+    if not o or not await offer_references_visible(access, o):
         raise HTTPException(status_code=404, detail="Angebot nicht gefunden")
-    await db.offers.update_one({"id": offer_id}, {"$set": {"status": "Freigegeben", "decisionNote": body.note}})
+    await access.offers.update_one({"id": offer_id}, {"$set": {"status": "Freigegeben", "decisionNote": body.note}})
     try:
         email, cname = await company_recipient(access, o["companyId"])
         if email:
@@ -88,11 +102,16 @@ async def approve_offer(
 
 
 @api_router.post("/offers/{offer_id}/accept")
-async def accept_offer(offer_id: str, body: AcceptOfferIn, user: Annotated[dict, Depends(current_user)]):
-    o = await db.offers.find_one({"id": offer_id})
-    if not o:
+async def accept_offer(
+    offer_id: str,
+    body: AcceptOfferIn,
+    user: Annotated[dict, Depends(current_user)],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    o = await access.offers.find_one({"id": offer_id})
+    if not o or not await offer_references_visible(access, o):
         raise HTTPException(status_code=404, detail="Angebot nicht gefunden")
-    ids = await visible_company_ids(user)
+    ids = await visible_company_ids(user, access)
     if o["companyId"] not in ids:
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
     if o["status"] != "Freigegeben":
@@ -112,16 +131,21 @@ async def accept_offer(offer_id: str, body: AcceptOfferIn, user: Annotated[dict,
         "customerNote": (body.note or "").strip(),
         "createdAt": now.isoformat(),
     }
-    await db.orders.insert_one(order)
-    await db.offers.update_one({"id": offer_id}, {"$set": {"status": "Angenommen", "orderId": order_no}})
+    await access.orders.insert_one(order)
+    await access.offers.update_one({"id": offer_id}, {"$set": {"status": "Angenommen", "orderId": order_no}})
     await audit(user, "offer.accept", offer_id, {"orderId": order_no})
     return strip_id(order)
 
 
 @api_router.post("/offers/{offer_id}/reject")
-async def reject_offer(offer_id: str, body: DecisionIn, user: Annotated[dict, Depends(require_roles("admin"))]):
-    o = await db.offers.find_one({"id": offer_id})
-    if not o:
+async def reject_offer(
+    offer_id: str,
+    body: DecisionIn,
+    user: Annotated[dict, Depends(require_roles("admin"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    o = await access.offers.find_one({"id": offer_id})
+    if not o or not await offer_references_visible(access, o):
         raise HTTPException(status_code=404, detail="Angebot nicht gefunden")
-    await db.offers.update_one({"id": offer_id}, {"$set": {"status": "Abgelehnt", "decisionNote": body.note}})
+    await access.offers.update_one({"id": offer_id}, {"$set": {"status": "Abgelehnt", "decisionNote": body.note}})
     return {"ok": True, "status": "Abgelehnt"}

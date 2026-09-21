@@ -19,8 +19,29 @@ os.environ["JWT_SECRET"] = "test-only"
 os.environ["APP_ENV"] = "test"
 
 from app import deps
-from app.models import CustomerPriceIn, MachineTermsIn, ProductIn
-from app.routers import companies, machines, orders, pricing, products
+from app.models import (
+    AcceptOfferIn,
+    CustomerPriceIn,
+    MachineTermsIn,
+    OfferCreate,
+    OfferItemIn,
+    OrderCreate,
+    OrderItemIn,
+    OrderStatusIn,
+    ProductIn,
+    SubscriptionIn,
+)
+from app.routers import (
+    billing,
+    companies,
+    invoices,
+    machines,
+    offers,
+    orders,
+    pricing,
+    products,
+    subscriptions,
+)
 from app.tenant_access import (
     TENANT_SCOPED_BUSINESS_COLLECTIONS,
     TenantBusinessAccess,
@@ -113,11 +134,18 @@ def unscoped_collection_accesses(source: str, filename: str = "<source>") -> lis
     while changed:
         changed = False
         for node in ast.walk(tree):
-            if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Name):
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
                 continue
-            if node.value.id not in database_names:
+            value = node.value
+            if not (
+                isinstance(value, ast.Name)
+                and value.id in database_names
+                or isinstance(value, ast.Attribute)
+                and value.attr == "db"
+            ):
                 continue
-            for target in node.targets:
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
                 if isinstance(target, ast.Name) and target.id not in database_names:
                     database_names.add(target.id)
                     changed = True
@@ -158,6 +186,20 @@ def unscoped_collection_accesses(source: str, filename: str = "<source>") -> lis
             elif collection_arg.value in TENANT_SCOPED_BUSINESS_COLLECTIONS:
                 violations.append(
                     f"{filename}:{node.lineno}:getattr:{collection_arg.value}"
+                )
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get_collection"
+            and is_database_expression(node.func.value)
+            and node.args
+        ):
+            collection_arg = node.args[0]
+            if not isinstance(collection_arg, ast.Constant):
+                violations.append(f"{filename}:{node.lineno}:dynamic-get-collection")
+            elif collection_arg.value in TENANT_SCOPED_BUSINESS_COLLECTIONS:
+                violations.append(
+                    f"{filename}:{node.lineno}:get-collection:{collection_arg.value}"
                 )
     return violations
 
@@ -427,7 +469,7 @@ def test_valid_customer_price_and_history_receive_the_same_tenant(monkeypatch):
     assert database.raw.price_history.find_one({})["tenantId"] == TENANT_A
 
 
-def test_fixed_customer_price_still_precedes_quantity_tiers(monkeypatch):
+def test_fixed_customer_price_still_precedes_quantity_tiers():
     database = AsyncDatabase("tenant_access_pricing_regression")
     tenant_a = access(database, TENANT_A)
     run(tenant_a.customer_prices.insert_one({
@@ -435,7 +477,6 @@ def test_fixed_customer_price_still_precedes_quantity_tiers(monkeypatch):
         "productId": "p1",
         "price": 15.9,
     }))
-    monkeypatch.setattr(orders, "db", database)
     product = {
         "id": "p1",
         "standardPrice": 16.9,
@@ -445,10 +486,9 @@ def test_fixed_customer_price_still_precedes_quantity_tiers(monkeypatch):
     assert run(orders._resolve_unit_price(tenant_a, "c1", product, 100)) == 15.9
 
 
-def test_contract_price_lookup_is_fail_closed_to_resolved_tenant(monkeypatch):
+def test_contract_price_lookup_is_fail_closed_to_resolved_tenant():
     database = AsyncDatabase("tenant_access_contract_price_edge")
     tenant_a = access(database, TENANT_A)
-    monkeypatch.setattr(orders, "db", database)
     product = {
         "id": "p1",
         "standardPrice": 16.9,
@@ -656,6 +696,493 @@ def test_application_has_no_direct_unscoped_access_to_converted_collections():
     "collection_name = 'uploads'\ndb[collection_name].find_one({})",
     "raw = db\nraw.customer_prices.update_many({}, {'$set': {'price': 1}})",
     "import app.core as core\ncore.db.price_history.aggregate([])",
+    "import app.core as core\nraw = core.db\nraw.orders.find({})",
+    "from app import core\nraw: object = core.db\nraw.offers.find({})",
 ])
 def test_static_guard_detects_direct_access_bypass_shapes(source):
+    assert unscoped_collection_accesses(source)
+
+
+@pytest.mark.parametrize(
+    "collection_name",
+    ["orders", "offers", "invoices", "contracts", "subscriptions"],
+)
+def test_commercial_collections_separate_same_id_and_hide_legacy_documents(collection_name):
+    database = AsyncDatabase(f"tenant_access_commercial_{collection_name}")
+    tenant_a = access(database, TENANT_A)
+    tenant_b = access(database, TENANT_B)
+    run(getattr(tenant_a, collection_name).insert_one({"id": "same-id", "marker": "a"}))
+    run(getattr(tenant_b, collection_name).insert_one({"id": "same-id", "marker": "b"}))
+    database.raw[collection_name].insert_one({"id": "legacy", "marker": "legacy"})
+
+    assert run(getattr(tenant_a, collection_name).find_one({"id": "same-id"}))["marker"] == "a"
+    assert run(getattr(tenant_b, collection_name).find_one({"id": "same-id"}))["marker"] == "b"
+    assert run(getattr(tenant_a, collection_name).find_one({"id": "legacy"})) is None
+    assert run(getattr(tenant_b, collection_name).find_one({"id": "legacy"})) is None
+
+
+def test_order_create_sets_server_tenant_and_ignores_client_tenant(monkeypatch):
+    database = AsyncDatabase("tenant_access_order_create")
+    tenant_a = access(database, TENANT_A)
+    run(tenant_a.companies.insert_one({"id": "c1", "name": "Company", "active": True}))
+    run(tenant_a.products.insert_one({
+        "id": "p1",
+        "standardPrice": 12.5,
+        "discountTiers": [],
+        "active": True,
+    }))
+
+    async def fixed_sequence(_name):
+        return 7
+
+    monkeypatch.setattr(orders, "next_seq", fixed_sequence)
+    body = OrderCreate.model_validate({
+        "companyId": "c1",
+        "items": [{"productId": "p1", "qty": 2}],
+        "tenantId": TENANT_B,
+    })
+    response = run(orders.create_order(body, {"id": "u1", "role": "admin"}, tenant_a))
+
+    assert "tenantId" not in body.model_dump()
+    assert "tenantId" not in response
+    assert database.raw.orders.find_one({"id": response["id"]})["tenantId"] == TENANT_A
+
+
+@pytest.mark.parametrize("foreign_reference", ["company", "product"])
+def test_order_create_rejects_cross_tenant_references(monkeypatch, foreign_reference):
+    database = AsyncDatabase(f"tenant_access_order_reference_{foreign_reference}")
+    tenant_a = access(database, TENANT_A)
+    tenant_b = access(database, TENANT_B)
+    company_access = tenant_b if foreign_reference == "company" else tenant_a
+    product_access = tenant_b if foreign_reference == "product" else tenant_a
+    run(company_access.companies.insert_one({"id": "c1", "active": True}))
+    run(product_access.products.insert_one({
+        "id": "p1",
+        "standardPrice": 10.0,
+        "discountTiers": [],
+        "active": True,
+    }))
+
+    async def sequence_must_not_run(_name):
+        raise AssertionError("counter advanced before reference validation")
+
+    monkeypatch.setattr(orders, "next_seq", sequence_must_not_run)
+    with pytest.raises(HTTPException) as exc:
+        run(orders.create_order(
+            OrderCreate(companyId="c1", items=[OrderItemIn(productId="p1", qty=1)]),
+            {"id": "u1", "role": "admin"},
+            tenant_a,
+        ))
+
+    expected = 403 if foreign_reference == "company" else 400
+    assert exc.value.status_code == expected
+    assert database.raw.orders.count_documents({}) == 0
+
+
+def test_foreign_and_missing_order_have_identical_status_response():
+    database = AsyncDatabase("tenant_access_order_status_not_found")
+    tenant_a = access(database, TENANT_A)
+    tenant_b = access(database, TENANT_B)
+    run(tenant_b.orders.insert_one({
+        "id": "foreign",
+        "companyId": "c-b",
+        "status": "Neu",
+        "items": [],
+    }))
+
+    for order_id in ("foreign", "missing"):
+        with pytest.raises(HTTPException) as exc:
+            run(orders.set_order_status(
+                order_id,
+                OrderStatusIn(status="Bestätigt"),
+                {"id": "u1", "role": "admin"},
+                tenant_a,
+            ))
+        assert (exc.value.status_code, exc.value.detail) == (404, "Bestellung nicht gefunden")
+    assert database.raw.orders.find_one({"id": "foreign"})["status"] == "Neu"
+
+
+def test_offer_create_is_tenant_scoped_and_rejects_foreign_product(monkeypatch):
+    database = AsyncDatabase("tenant_access_offer_create")
+    tenant_a = access(database, TENANT_A)
+    tenant_b = access(database, TENANT_B)
+    run(tenant_a.companies.insert_one({"id": "c1", "active": True}))
+    run(tenant_b.products.insert_one({
+        "id": "p1",
+        "absoluteFloor": 5.0,
+        "salesFloor": 8.0,
+    }))
+
+    async def sequence_must_not_run(_name):
+        raise AssertionError("counter advanced before reference validation")
+
+    monkeypatch.setattr(offers, "next_seq", sequence_must_not_run)
+    body = OfferCreate(companyId="c1", items=[OfferItemIn(productId="p1", qty=1, price=10)])
+    with pytest.raises(HTTPException) as exc:
+        run(offers.create_offer(body, {"id": "u1", "role": "admin"}, tenant_a))
+
+    assert (exc.value.status_code, exc.value.detail) == (400, "Produkt unbekannt")
+    assert database.raw.offers.count_documents({}) == 0
+
+
+def test_offer_create_sets_server_tenant(monkeypatch):
+    database = AsyncDatabase("tenant_access_offer_valid_create")
+    tenant_a = access(database, TENANT_A)
+    run(tenant_a.companies.insert_one({"id": "c1", "active": True}))
+    run(tenant_a.products.insert_one({
+        "id": "p1",
+        "absoluteFloor": 5.0,
+        "salesFloor": 8.0,
+    }))
+
+    async def fixed_sequence(_name):
+        return 3
+
+    monkeypatch.setattr(offers, "next_seq", fixed_sequence)
+    response = run(offers.create_offer(
+        OfferCreate(
+            companyId="c1",
+            items=[OfferItemIn(productId="p1", qty=1, price=10)],
+        ),
+        {"id": "u1", "role": "admin"},
+        tenant_a,
+    ))
+
+    stored = database.raw.offers.find_one({"id": response["id"]})
+    assert stored["tenantId"] == TENANT_A
+    assert "tenantId" not in response
+
+
+def test_accept_offer_revalidates_product_tenant_before_order(monkeypatch):
+    database = AsyncDatabase("tenant_access_offer_accept_reference")
+    tenant_a = access(database, TENANT_A)
+    tenant_b = access(database, TENANT_B)
+    run(tenant_a.companies.insert_one({"id": "c1", "active": True}))
+    run(tenant_b.products.insert_one({"id": "p1"}))
+    run(tenant_a.offers.insert_one({
+        "id": "offer-1",
+        "companyId": "c1",
+        "status": "Freigegeben",
+        "items": [{"productId": "p1", "qty": 1, "price": 10.0}],
+    }))
+
+    async def sequence_must_not_run(_name):
+        raise AssertionError("counter advanced before reference validation")
+
+    monkeypatch.setattr(offers, "next_seq", sequence_must_not_run)
+    with pytest.raises(HTTPException) as exc:
+        run(offers.accept_offer(
+            "offer-1",
+            AcceptOfferIn(),
+            {"id": "u1", "role": "admin"},
+            tenant_a,
+        ))
+
+    assert (exc.value.status_code, exc.value.detail) == (404, "Angebot nicht gefunden")
+    assert database.raw.orders.count_documents({}) == 0
+
+
+def test_invoice_creation_is_scoped_to_order_and_company_tenant(monkeypatch):
+    database = AsyncDatabase("tenant_access_invoice_references")
+    tenant_a = access(database, TENANT_A)
+    tenant_b = access(database, TENANT_B)
+    run(tenant_a.companies.insert_one({"id": "c-a", "active": True}))
+    run(tenant_a.products.insert_one({
+        "id": "p-a",
+        "brand": "Brand",
+        "name": "Product",
+        "unit": "kg",
+        "taxRate": 7,
+    }))
+    run(tenant_b.orders.insert_one({
+        "id": "foreign",
+        "companyId": "c-a",
+        "items": [{"productId": "p-a", "qty": 1, "price": 10.0}],
+    }))
+    run(tenant_a.orders.insert_one({
+        "id": "own-with-foreign-company",
+        "companyId": "c-b",
+        "items": [{"productId": "p-a", "qty": 1, "price": 10.0}],
+    }))
+
+    async def sequence_must_not_run(_name):
+        raise AssertionError("counter advanced before reference validation")
+
+    monkeypatch.setattr(billing, "next_seq", sequence_must_not_run)
+    user = {"id": "u1", "role": "admin"}
+    for order_id in ("foreign", "own-with-foreign-company"):
+        with pytest.raises(HTTPException) as exc:
+            run(billing.create_invoice_for_order(order_id, user, tenant_a))
+        assert (exc.value.status_code, exc.value.detail) == (404, "Bestellung nicht gefunden")
+    assert database.raw.invoices.count_documents({}) == 0
+
+
+def test_invoice_creation_sets_tenant_and_keeps_order_reference_local(monkeypatch):
+    database = AsyncDatabase("tenant_access_invoice_valid_create")
+    tenant_a = access(database, TENANT_A)
+    run(tenant_a.companies.insert_one({"id": "c1", "active": True}))
+    run(tenant_a.products.insert_one({
+        "id": "p1",
+        "brand": "Brand",
+        "name": "Product",
+        "unit": "kg",
+        "taxRate": 7,
+    }))
+    run(tenant_a.orders.insert_one({
+        "id": "order-1",
+        "companyId": "c1",
+        "items": [{"productId": "p1", "qty": 1, "price": 10.0}],
+    }))
+
+    async def fixed_sequence(_name):
+        return 4
+
+    monkeypatch.setattr(billing, "next_seq", fixed_sequence)
+    response = run(billing.create_invoice_for_order(
+        "order-1",
+        {"id": "u1", "role": "admin"},
+        tenant_a,
+    ))
+
+    stored = database.raw.invoices.find_one({"id": response["id"]})
+    assert stored["tenantId"] == TENANT_A
+    assert stored["orderId"] == "order-1"
+    assert database.raw.orders.find_one({"id": "order-1"})["invoiceId"] == response["id"]
+    assert "tenantId" not in response
+
+
+def test_foreign_and_missing_invoice_have_identical_pay_response():
+    database = AsyncDatabase("tenant_access_invoice_not_found")
+    tenant_a = access(database, TENANT_A)
+    tenant_b = access(database, TENANT_B)
+    run(tenant_b.invoices.insert_one({"id": "foreign", "companyId": "c-b", "status": "Offen"}))
+
+    for invoice_id in ("foreign", "missing"):
+        with pytest.raises(HTTPException) as exc:
+            run(invoices.mark_invoice_paid(
+                invoice_id,
+                {"id": "u1", "role": "admin"},
+                tenant_a,
+            ))
+        assert (exc.value.status_code, exc.value.detail) == (404, "Rechnung nicht gefunden")
+    assert database.raw.invoices.find_one({"id": "foreign"})["status"] == "Offen"
+
+
+def test_invoice_with_foreign_order_reference_is_fail_closed():
+    database = AsyncDatabase("tenant_access_invoice_foreign_order")
+    tenant_a = access(database, TENANT_A)
+    tenant_b = access(database, TENANT_B)
+    run(tenant_a.companies.insert_one({"id": "c1", "active": True}))
+    run(tenant_b.orders.insert_one({"id": "order-b", "companyId": "c1"}))
+    run(tenant_a.invoices.insert_one({
+        "id": "invoice-a",
+        "companyId": "c1",
+        "orderId": "order-b",
+        "status": "Offen",
+    }))
+
+    with pytest.raises(HTTPException) as exc:
+        run(invoices.mark_invoice_paid(
+            "invoice-a",
+            {"id": "u1", "role": "admin"},
+            tenant_a,
+        ))
+
+    assert (exc.value.status_code, exc.value.detail) == (404, "Rechnung nicht gefunden")
+    assert database.raw.invoices.find_one({"id": "invoice-a"})["status"] == "Offen"
+
+
+def test_invoice_list_hides_cross_tenant_order_reference():
+    database = AsyncDatabase("tenant_access_invoice_list_reference")
+    tenant_a = access(database, TENANT_A)
+    tenant_b = access(database, TENANT_B)
+    run(tenant_a.companies.insert_one({"id": "c1", "active": True}))
+    run(tenant_b.orders.insert_one({"id": "order-b", "companyId": "c1"}))
+    run(tenant_a.invoices.insert_one({
+        "id": "invoice-a",
+        "companyId": "c1",
+        "orderId": "order-b",
+        "date": "2026-01-01",
+    }))
+
+    response = run(invoices.get_invoices(
+        {"id": "u1", "role": "admin"},
+        tenant_a,
+    ))
+
+    assert response == []
+
+
+def test_contract_list_hides_cross_tenant_product_reference():
+    database = AsyncDatabase("tenant_access_contract_list_reference")
+    tenant_a = access(database, TENANT_A)
+    tenant_b = access(database, TENANT_B)
+    run(tenant_a.companies.insert_one({"id": "c1", "active": True}))
+    run(tenant_b.products.insert_one({"id": "p1"}))
+    run(tenant_a.contracts.insert_one({
+        "id": "contract-a",
+        "companyId": "c1",
+        "productId": "p1",
+    }))
+
+    response = run(invoices.get_contracts(
+        {"id": "u1", "role": "admin"},
+        tenant_a,
+    ))
+
+    assert response == []
+
+
+def test_subscription_create_rejects_foreign_product_reference():
+    database = AsyncDatabase("tenant_access_subscription_reference")
+    tenant_a = access(database, TENANT_A)
+    tenant_b = access(database, TENANT_B)
+    run(tenant_a.companies.insert_one({"id": "c1", "active": True}))
+    run(tenant_b.products.insert_one({"id": "p1"}))
+
+    with pytest.raises(HTTPException) as exc:
+        run(subscriptions.create_subscription(
+            SubscriptionIn(
+                companyId="c1",
+                items=[OfferItemIn(productId="p1", qty=1, price=10)],
+            ),
+            {"id": "u1", "role": "admin"},
+            tenant_a,
+        ))
+
+    assert (exc.value.status_code, exc.value.detail) == (404, "Abo-Referenz nicht gefunden")
+    assert database.raw.subscriptions.count_documents({}) == 0
+
+
+def test_subscription_create_sets_server_tenant():
+    database = AsyncDatabase("tenant_access_subscription_valid_create")
+    tenant_a = access(database, TENANT_A)
+    run(tenant_a.companies.insert_one({"id": "c1", "active": True}))
+    run(tenant_a.products.insert_one({"id": "p1"}))
+
+    response = run(subscriptions.create_subscription(
+        SubscriptionIn(
+            companyId="c1",
+            items=[OfferItemIn(productId="p1", qty=1, price=10)],
+        ),
+        {"id": "u1", "role": "admin"},
+        tenant_a,
+    ))
+
+    stored = database.raw.subscriptions.find_one({"id": response["id"]})
+    assert stored["tenantId"] == TENANT_A
+    assert "tenantId" not in response
+
+
+def test_subscription_run_processes_only_resolved_tenant(monkeypatch):
+    database = AsyncDatabase("tenant_access_subscription_run")
+    tenant_a = access(database, TENANT_A)
+    tenant_b = access(database, TENANT_B)
+    for scoped_access, marker in ((tenant_a, "a"), (tenant_b, "b")):
+        run(scoped_access.companies.insert_one({"id": f"c-{marker}", "active": True}))
+        run(scoped_access.products.insert_one({"id": f"p-{marker}"}))
+        run(scoped_access.subscriptions.insert_one({
+            "id": f"sub-{marker}",
+            "companyId": f"c-{marker}",
+            "items": [{"productId": f"p-{marker}", "qty": 1, "price": 10.0}],
+            "intervalDays": 28,
+            "active": True,
+            "nextRun": "2020-01-01",
+        }))
+
+    async def fixed_sequence(_name):
+        return 9
+
+    monkeypatch.setattr(subscriptions, "next_seq", fixed_sequence)
+    response = run(subscriptions.run_due_subscriptions(
+        {"id": "u1", "role": "admin"},
+        tenant_a,
+    ))
+
+    assert response["count"] == 1
+    created = database.raw.orders.find_one({"id": response["created"][0]})
+    assert created["tenantId"] == TENANT_A
+    assert created["fromSubscription"] == "sub-a"
+    foreign_subscription = database.raw.subscriptions.find_one({"id": "sub-b"})
+    assert foreign_subscription.get("lastRun") is None
+
+
+def test_machine_contract_write_rejects_cross_tenant_references(monkeypatch):
+    database = AsyncDatabase("tenant_access_machine_contract_reference")
+    tenant_a = access(database, TENANT_A)
+    tenant_b = access(database, TENANT_B)
+    run(tenant_a.companies.insert_one({"id": "c1", "active": True}))
+    run(tenant_b.products.insert_one({"id": "p1"}))
+    database.raw.machine_requests.insert_one({
+        "id": "mr-1",
+        "type": "leasing",
+        "status": "Angebot",
+        "machineName": "Machine",
+        "customer": {"companyId": "c1"},
+        "terms": {"productId": "p1", "coffeePricePerKg": 10.0},
+    })
+    monkeypatch.setattr(machines, "db", database)
+
+    async def sequence_must_not_run(_name):
+        raise AssertionError("counter advanced before reference validation")
+
+    monkeypatch.setattr(machines, "next_seq", sequence_must_not_run)
+    with pytest.raises(HTTPException) as exc:
+        run(machines.accept_machine_offer(
+            "mr-1",
+            {"id": "u1", "role": "admin"},
+            tenant_a,
+        ))
+
+    assert (exc.value.status_code, exc.value.detail) == (404, "Anfrage nicht gefunden")
+    assert database.raw.contracts.count_documents({}) == 0
+    assert database.raw.machine_requests.find_one({"id": "mr-1"})["status"] == "Angebot"
+
+
+def test_machine_contract_write_sets_server_tenant(monkeypatch):
+    database = AsyncDatabase("tenant_access_machine_contract_valid")
+    tenant_a = access(database, TENANT_A)
+    run(tenant_a.companies.insert_one({"id": "c1", "active": True}))
+    run(tenant_a.products.insert_one({"id": "p1"}))
+    database.raw.machine_requests.insert_one({
+        "id": "mr-1",
+        "type": "leasing",
+        "status": "Angebot",
+        "machineName": "Machine",
+        "termMonths": 48,
+        "customer": {"companyId": "c1"},
+        "terms": {"productId": "p1", "coffeePricePerKg": 10.0},
+    })
+    monkeypatch.setattr(machines, "db", database)
+
+    async def fixed_sequence(_name):
+        return 5
+
+    async def no_audit(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(machines, "next_seq", fixed_sequence)
+    monkeypatch.setattr(machines, "audit", no_audit)
+    run(machines.accept_machine_offer(
+        "mr-1",
+        {"id": "u1", "role": "admin"},
+        tenant_a,
+    ))
+
+    stored = database.raw.contracts.find_one({"machineRequestId": "mr-1"})
+    assert stored["tenantId"] == TENANT_A
+    assert stored["companyId"] == "c1"
+    assert stored["productId"] == "p1"
+
+
+@pytest.mark.parametrize("source", [
+    "db.orders.find({})",
+    "db['offers'].update_many({}, {'$set': {'status': 'x'}})",
+    "getattr(db, 'invoices').find_one_and_update({}, {})",
+    "database.contracts.aggregate([{'$lookup': {'from': 'companies'}}])",
+    "raw = db\nraw.subscriptions.delete_many({})",
+    "db.get_collection('orders').replace_one({}, {})",
+    "name = 'offers'\ndb.get_collection(name).find({})",
+])
+def test_static_guard_covers_commercial_collection_bypasses(source):
     assert unscoped_collection_accesses(source)
