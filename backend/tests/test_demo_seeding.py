@@ -24,12 +24,19 @@ from app import main as app_main  # noqa: E402
 from app.demo_seed import (  # noqa: E402
     DEMO_FINGERPRINT_FIELD,
     DEMO_SEED_VERSION,
+    GLOBAL_SEED_COLLECTIONS,
+    TENANT_SCOPED_COLLECTIONS,
     DemoSeedConfigurationError,
     DemoSeedConflictError,
+    _document_fingerprint,
+    _validate_manifest,
     build_demo_manifest,
     seed_demo,
 )
+from app.migrations.registry import get_migrations  # noqa: E402
+from app.migrations.runner import MIGRATION_COLLECTION, MigrationRunner  # noqa: E402
 from app.routers import machines as machines_router  # noqa: E402
+from app.tenancy import SS_TENANT_ID  # noqa: E402
 from scripts import seed_demo as seed_cli  # noqa: E402
 
 
@@ -113,7 +120,19 @@ def run(coroutine):
     return asyncio.run(coroutine)
 
 
+def prepare_tenant(database):
+    if database.raw.tenants.count_documents({"id": SS_TENANT_ID}) == 0:
+        MigrationRunner(
+            database.raw,
+            app_env="test",
+            application_version="tenant-aware-seed-test",
+            migrations=get_migrations(),
+            lease_seconds=3,
+        ).run()
+
+
 def seed_test_database(database, *, passwords=PASSWORDS):
+    prepare_tenant(database)
     return seed_demo(
         database,
         app_env="test",
@@ -124,9 +143,11 @@ def seed_test_database(database, *, passwords=PASSWORDS):
 
 
 def all_documents(database):
+    manifest_collections = set(build_demo_manifest(FIXED_NOW))
     return {
         name: list(database.raw[name].find({}).sort("_id", 1))
-        for name in sorted(database.raw.list_collection_names())
+        for name in sorted(manifest_collections)
+        if database.raw[name].count_documents({})
     }
 
 
@@ -247,10 +268,111 @@ def test_explicit_demo_seed_populates_all_declared_documents():
         for document in database.raw[collection].find({})
     )
     assert database.raw.machines.count_documents({"_demoSeed": DEMO_SEED_VERSION}) == 3
+    assert database.raw[MIGRATION_COLLECTION].find_one({"version": 2})["status"] == "completed"
+
+
+def test_all_business_demo_documents_are_tenant_scoped_and_global_documents_are_not():
+    database = AsyncDatabase("ordo_test_seed_tenant_scope")
+
+    run(seed_test_database(database))
+
+    assert TENANT_SCOPED_COLLECTIONS == {
+        "companies",
+        "contracts",
+        "customer_prices",
+        "invoices",
+        "machines",
+        "offers",
+        "orders",
+        "products",
+    }
+    for collection in TENANT_SCOPED_COLLECTIONS:
+        documents = list(database.raw[collection].find({}))
+        assert documents
+        assert all(document.get("tenantId") == SS_TENANT_ID for document in documents)
+    assert GLOBAL_SEED_COLLECTIONS == {"users", "counters"}
+    for collection in GLOBAL_SEED_COLLECTIONS:
+        assert not any("tenantId" in document for document in database.raw[collection].find({}))
+
+
+def test_default_manifest_is_deterministic_across_builds():
+    assert build_demo_manifest() == build_demo_manifest()
+
+
+@pytest.mark.parametrize(
+    "mutation, message",
+    [
+        (
+            lambda manifest: manifest["products"][0].pop("tenantId"),
+            "invalid tenantId",
+        ),
+        (
+            lambda manifest: manifest["users"][0].update({"tenantId": SS_TENANT_ID}),
+            "must not contain tenantId",
+        ),
+        (
+            lambda manifest: manifest["orders"][0]["items"][0].update(
+                {"productId": "foreign-product"}
+            ),
+            "points outside",
+        ),
+    ],
+)
+def test_manifest_validation_rejects_tenant_scope_and_reference_regressions(
+    mutation,
+    message,
+):
+    manifest = build_demo_manifest(FIXED_NOW)
+    mutation(manifest)
+
+    with pytest.raises(DemoSeedConfigurationError, match=message):
+        _validate_manifest(manifest)
+
+
+def test_seed_requires_existing_tenant_and_does_not_run_migration_automatically():
+    database = AsyncDatabase("ordo_test_seed_missing_tenant")
+
+    with pytest.raises(DemoSeedConflictError, match="migration 2"):
+        run(seed_demo(
+            database,
+            app_env="test",
+            target_confirmation=f"test:{database.name}",
+            passwords=PASSWORDS,
+            now=FIXED_NOW,
+        ))
+
+    assert database.raw.list_collection_names() == []
+    assert database.raw[MIGRATION_COLLECTION].count_documents({}) == 0
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"$set": {"status": "inactive"}},
+        {"$set": {"displayName": "Manipulated tenant"}},
+        {"$unset": {"timezone": ""}},
+    ],
+)
+def test_seed_rejects_inactive_manipulated_or_incomplete_tenant(mutation):
+    database = AsyncDatabase("ordo_test_seed_invalid_tenant")
+    prepare_tenant(database)
+    database.raw.tenants.update_one({"id": SS_TENANT_ID}, mutation)
+
+    with pytest.raises(DemoSeedConflictError, match="canonical S&S tenant"):
+        run(seed_demo(
+            database,
+            app_env="test",
+            target_confirmation=f"test:{database.name}",
+            passwords=PASSWORDS,
+            now=FIXED_NOW,
+        ))
+
+    assert all_documents(database) == {}
 
 
 def test_repeated_demo_seed_is_idempotent_and_does_not_rehash_passwords():
     database = AsyncDatabase("ordo_test_idempotent")
+    prepare_tenant(database)
     hash_calls = []
 
     def recording_hasher(password):
@@ -302,6 +424,97 @@ def test_modified_or_incomplete_marked_demo_document_fails_safe(mutation):
         run(seed_test_database(database))
 
     assert all_documents(database) == before
+
+
+def test_refingerprinted_tenant_aware_document_still_conflicts_with_manifest():
+    database = AsyncDatabase("ordo_test_refingerprinted_demo")
+    run(seed_test_database(database))
+    product = database.raw.products.find_one({"id": "p1"})
+    product["name"] = "Manipulated and refingerprinted"
+    product[DEMO_FINGERPRINT_FIELD] = _document_fingerprint(product)
+    database.raw.products.replace_one({"_id": product["_id"]}, product)
+    before = all_documents(database)
+
+    with pytest.raises(DemoSeedConflictError, match="differs from the manifest"):
+        run(seed_test_database(database))
+
+    assert all_documents(database) == before
+
+
+def test_refingerprinted_demo_user_with_another_password_still_conflicts():
+    database = AsyncDatabase("ordo_test_refingerprinted_demo_user")
+    run(seed_test_database(database))
+    user = database.raw.users.find_one({"id": "u-admin"})
+    user["hashed_password"] = bcrypt.hashpw(
+        b"another-password",
+        bcrypt.gensalt(),
+    ).decode("utf-8")
+    user[DEMO_FINGERPRINT_FIELD] = _document_fingerprint(user)
+    database.raw.users.replace_one({"_id": user["_id"]}, user)
+    before = all_documents(database)
+
+    with pytest.raises(DemoSeedConflictError, match="differs from the manifest") as exc:
+        run(seed_test_database(database))
+
+    assert all(password not in str(exc.value) for password in PASSWORDS.values())
+    assert all_documents(database) == before
+
+
+def test_legacy_demo_document_without_tenant_id_requires_explicit_upgrade():
+    database = AsyncDatabase("ordo_test_legacy_demo_conflict")
+    prepare_tenant(database)
+    legacy = deepcopy(build_demo_manifest(FIXED_NOW)["products"][0])
+    legacy.pop("tenantId")
+    legacy["_id"] = "ordo-demo-v1:products:p1"
+    legacy["_demoSeed"] = "ordo-demo-v1"
+    legacy[DEMO_FINGERPRINT_FIELD] = _document_fingerprint(legacy)
+    database.raw.products.insert_one(legacy)
+
+    with pytest.raises(DemoSeedConflictError, match="explicit upgrade"):
+        run(seed_demo(
+            database,
+            app_env="test",
+            target_confirmation=f"test:{database.name}",
+            passwords=PASSWORDS,
+            now=FIXED_NOW,
+        ))
+
+    assert database.raw.products.find_one({"_id": legacy["_id"]}) == legacy
+
+
+def test_existing_demo_document_with_wrong_tenant_id_is_rejected():
+    database = AsyncDatabase("ordo_test_wrong_demo_tenant")
+    prepare_tenant(database)
+    product = deepcopy(build_demo_manifest(FIXED_NOW)["products"][0])
+    product["tenantId"] = "tnt_other_0001"
+    product[DEMO_FINGERPRINT_FIELD] = _document_fingerprint(product)
+    database.raw.products.insert_one(product)
+
+    with pytest.raises(DemoSeedConflictError, match="differs from the manifest"):
+        run(seed_test_database(database))
+
+
+def test_cross_tenant_reference_identity_conflict_aborts_before_seed_writes():
+    database = AsyncDatabase("ordo_test_cross_tenant_reference")
+    prepare_tenant(database)
+    foreign_product = {
+        "_id": "foreign-product",
+        "tenantId": "tnt_other_0001",
+        "id": "p1",
+        "name": "Other tenant product",
+    }
+    database.raw.products.insert_one(deepcopy(foreign_product))
+
+    with pytest.raises(DemoSeedConflictError, match="existing business document"):
+        run(seed_demo(
+            database,
+            app_env="test",
+            target_confirmation=f"test:{database.name}",
+            passwords=PASSWORDS,
+            now=FIXED_NOW,
+        ))
+
+    assert all_documents(database) == {"products": [foreign_product]}
 
 
 def test_concurrent_identical_insert_is_treated_as_unchanged():
@@ -395,9 +608,12 @@ def test_missing_demo_passwords_fail_before_writes():
     database = AsyncDatabase("ordo_test_missing_password")
 
     with pytest.raises(DemoSeedConfigurationError, match="customer"):
-        run(seed_test_database(
+        run(seed_demo(
             database,
+            app_env="test",
+            target_confirmation=f"test:{database.name}",
             passwords={key: value for key, value in PASSWORDS.items() if key != "customer"},
+            now=FIXED_NOW,
         ))
 
     assert database.raw.list_collection_names() == []

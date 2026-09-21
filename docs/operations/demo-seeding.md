@@ -39,10 +39,15 @@ Die benötigten übrigen Variablen müssen dabei bereits sicher in der lokalen U
 
 ## Verhalten bei vorhandenen Daten
 
-Jedes erzeugte Dokument besitzt eine technische Demo-Markierung, eine deterministische MongoDB-`_id` und einen kanonischen SHA-256-Integritätsfingerabdruck.
+Vor jedem Lauf muss Migration 2 bereits den aktiven, unveränderten S&S-Tenant `tnt_ss_0001` angelegt haben. Der Seed führt keine Migration aus und legt keinen Tenant an. Fehlt der Tenant oder weicht sein kanonisches Dokument ab, endet der Lauf vor dem ersten Business-Write.
+
+Jedes erzeugte Dokument besitzt eine technische Demo-Markierung, eine deterministische MongoDB-`_id` und einen kanonischen SHA-256-Integritätsfingerabdruck. Die tenantgebundenen Collections `companies`, `products`, `customer_prices`, `offers`, `orders`, `contracts`, `invoices` und `machines` erhalten `tenantId = tnt_ss_0001`. `users` und `counters` bleiben bewusst global und erhalten kein `tenantId`.
 
 - Eine Wiederholung fügt vorhandene Demo-Dokumente nicht erneut ein.
+- Bei einer Wiederholung müssen die gespeicherten Demo-Benutzer weiterhin zu den ausdrücklich übergebenen `SEED_*_PASSWORD`-Werten passen. Eine Abweichung wird als Konflikt behandelt; der Seed rotiert oder überschreibt Passwörter nicht.
 - Spätere Änderungen, fehlende Felder oder ein beschädigter Fingerabdruck werden als Konflikt erkannt. Das Script setzt solche Dokumente niemals eigenständig zurück.
+- Der gespeicherte Inhalt wird zusätzlich gegen das feste Manifest der Seed-Version geprüft. Ein neu berechneter Fingerabdruck legitimiert deshalb kein verändertes Dokument.
+- Alte `ordo-demo-v1`-Dokumente ohne `tenantId` werden nicht aktualisiert oder neu markiert. Sie blockieren den tenant-aware V2-Seed bis zu einer ausdrücklich freigegebenen Upgrade- oder Bereinigungsstrategie.
 - Nicht kollidierende fremde Dokumente bleiben unverändert.
 - Verwendet ein nicht markiertes Dokument bereits eine reservierte Demo-ID, E-Mail-Adresse oder Kundenpreis-Kombination, bricht der vollständige Preflight vor dem ersten Schreibvorgang ab.
 - Es werden keine Collections geleert, gelöscht oder zurückgesetzt.
@@ -53,6 +58,6 @@ Der Lauf ist für eine dedizierte Demo-/Testdatenbank ohne gleichzeitige fachlic
 
 ## Tests und Staging
 
-Integrationstests, die Demo-Benutzer, Produkte, Bestellungen oder Maschinen voraussetzen, müssen zuerst eine ausdrücklich gewählte isolierte Testdatenbank über dieses Script befüllen. Der normale Backend-Start übernimmt das nicht mehr.
+Integrationstests, die Demo-Benutzer, Produkte, Bestellungen oder Maschinen voraussetzen, müssen zuerst Migration 2 gegen eine ausdrücklich gewählte isolierte Testdatenbank ausführen und danach dieses Script explizit starten. Der normale Backend-Start übernimmt weder Migration noch Seed.
 
 `ordo_staging` wurde in Arbeitspaket 2 weder gelesen noch verändert. Ein späterer Seed-Lauf gegen eine Staging-Datenbank benötigt eine gesonderte ausdrückliche Freigabe und weiterhin die exakte Zielbestätigung. Production bleibt unabhängig von jeder Bestätigung gesperrt.
