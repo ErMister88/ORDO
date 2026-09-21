@@ -10,7 +10,12 @@ from starlette.concurrency import run_in_threadpool
 
 from ..core import (api_router, db, strip_id, next_seq, logger, audit,
                     JWT_SECRET, JWT_ALGORITHM, create_token, hash_pw, verify_pw)
-from ..deps import current_user, public_tenant_business_access, require_roles
+from ..deps import (
+    current_user,
+    public_tenant_business_access,
+    require_roles,
+    tenant_business_access,
+)
 from ..models import ShopSettingsIn, ShopOrderIn, ShopRegisterIn, ShopLoginIn, ShopStatusIn, ShopAddressIn
 from ..emailer import send_email, email_shell
 from ..tenant_access import TenantBusinessAccess
@@ -30,13 +35,18 @@ stripe.api_key = os.environ.get("STRIPE_API_KEY", "")
 APP_URL = os.environ.get("APP_URL", "https://ordo-connect.app")
 
 
-async def _settings():
-    s = await db.settings.find_one({"_id": "shop"})
-    if not s:
-        s = {"_id": "shop", "freeShippingThreshold": 50.0, "shippingFee": 4.90,
-             "newsletterDiscountPercent": 10, "newsletterDiscountEnabled": True}
-        await db.settings.insert_one(s)
-    return s
+SHOP_SETTINGS_KEY = "shop"
+SHOP_SETTINGS_DEFAULTS = {
+    "freeShippingThreshold": 50.0,
+    "shippingFee": 4.90,
+    "newsletterDiscountPercent": 10,
+    "newsletterDiscountEnabled": True,
+}
+
+
+async def _settings(access: TenantBusinessAccess):
+    settings = await access.settings.find_one({"key": SHOP_SETTINGS_KEY})
+    return {**SHOP_SETTINGS_DEFAULTS, **(settings or {})}
 
 
 @api_router.get("/shop/products")
@@ -57,17 +67,27 @@ async def shop_products(
 
 
 @api_router.get("/shop/settings")
-async def shop_settings_get():
-    s = await _settings()
+async def shop_settings_get(
+    access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
+):
+    s = await _settings(access)
     return {"freeShippingThreshold": s["freeShippingThreshold"], "shippingFee": s["shippingFee"],
             "newsletterDiscountPercent": int(s.get("newsletterDiscountPercent", 10)),
             "newsletterDiscountEnabled": bool(s.get("newsletterDiscountEnabled", True))}
 
 
 @api_router.put("/shop/settings")
-async def shop_settings_put(body: ShopSettingsIn, user: Annotated[dict, Depends(require_roles("admin"))]):
-    await db.settings.update_one({"_id": "shop"}, {"$set": body.model_dump()}, upsert=True)
-    await audit(user, "shop.settings", "shop", body.model_dump())
+async def shop_settings_put(
+    body: ShopSettingsIn,
+    user: Annotated[dict, Depends(require_roles("admin"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    await access.settings.update_one(
+        {"key": SHOP_SETTINGS_KEY},
+        {"$set": body.model_dump(), "$setOnInsert": {"key": SHOP_SETTINGS_KEY}},
+        upsert=True,
+    )
+    await audit(user, "shop.settings", "shop", body.model_dump(), tenant_id=access.context.tenant_id)
     return {"ok": True, **body.model_dump()}
 
 
@@ -81,7 +101,7 @@ async def create_shop_order(
         raise HTTPException(status_code=400, detail="Warenkorb ist leer")
     if not body.customer.name.strip() or "@" not in body.customer.email:
         raise HTTPException(status_code=400, detail="Name und gültige E-Mail erforderlich")
-    s = await _settings()
+    s = await _settings(access)
     lines = []
     subtotal = 0.0
     tax_map: dict = {}
@@ -111,7 +131,7 @@ async def create_shop_order(
         if ordering_user and ordering_user.get("role") != "shopuser":
             is_b2c = False
     from .newsletter import resolve_discount
-    percent = await resolve_discount(body.promoCode) if is_b2c else 0
+    percent = await resolve_discount(body.promoCode, access) if is_b2c else 0
     discount = 0.0
     if percent > 0:
         factor = 1 - percent / 100
@@ -135,7 +155,7 @@ async def create_shop_order(
         "statusHistory": [{"status": "Neu", "at": now.isoformat()}],
         "createdAt": now.isoformat(),
     }
-    await db.shop_orders.insert_one(doc)
+    await access.shop_orders.insert_one(doc)
     try:
         email = (body.customer.email or "").strip()
         if email and "@" in email:
@@ -184,9 +204,13 @@ def _authorize_shop_order(o: dict, token: Optional[str], uid: Optional[str]) -> 
 
 
 @api_router.post("/shop/orders/{order_id}/checkout")
-async def shop_checkout(order_id: str, token: Optional[str] = None,
-                        uid: Annotated[Optional[str], Depends(_optional_uid)] = None):
-    o = await db.shop_orders.find_one({"id": order_id})
+async def shop_checkout(
+    order_id: str,
+    access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
+    token: Optional[str] = None,
+    uid: Annotated[Optional[str], Depends(_optional_uid)] = None,
+):
+    o = await access.shop_orders.find_one({"id": order_id})
     if not o:
         raise HTTPException(status_code=404, detail="Bestellung nicht gefunden")
     _authorize_shop_order(o, token, uid)
@@ -212,7 +236,7 @@ async def shop_checkout(order_id: str, token: Optional[str] = None,
                 metadata={"shopOrderId": order_id},
             )
         )
-        await db.shop_orders.update_one({"id": order_id}, {"$set": {"stripeSessionId": session.id}})
+        await access.shop_orders.update_one({"id": order_id}, {"$set": {"stripeSessionId": session.id}})
         return {"url": session.url}
     except Exception as e:
         logger.warning(f"Shop-Checkout fehlgeschlagen: {e}")
@@ -220,9 +244,13 @@ async def shop_checkout(order_id: str, token: Optional[str] = None,
 
 
 @api_router.get("/shop/orders/{order_id}/payment-status")
-async def shop_payment_status(order_id: str, token: Optional[str] = None,
-                              uid: Annotated[Optional[str], Depends(_optional_uid)] = None):
-    o = await db.shop_orders.find_one({"id": order_id})
+async def shop_payment_status(
+    order_id: str,
+    access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
+    token: Optional[str] = None,
+    uid: Annotated[Optional[str], Depends(_optional_uid)] = None,
+):
+    o = await access.shop_orders.find_one({"id": order_id})
     if not o:
         raise HTTPException(status_code=404, detail="Bestellung nicht gefunden")
     _authorize_shop_order(o, token, uid)
@@ -233,7 +261,7 @@ async def shop_payment_status(order_id: str, token: Optional[str] = None,
         try:
             sess = await run_in_threadpool(lambda: stripe.checkout.Session.retrieve(sid))
             if sess.get("payment_status") == "paid":
-                await db.shop_orders.update_one({"id": order_id}, {"$set": {"paymentStatus": "Bezahlt", "status": "Bezahlt"}})
+                await access.shop_orders.update_one({"id": order_id}, {"$set": {"paymentStatus": "Bezahlt", "status": "Bezahlt"}})
                 try:
                     email = (o.get("customer") or {}).get("email")
                     if email:
@@ -253,8 +281,11 @@ async def shop_payment_status(order_id: str, token: Optional[str] = None,
 
 
 @api_router.get("/shop/orders")
-async def list_shop_orders(user: Annotated[dict, Depends(require_roles("admin", "sales"))]):
-    rows = await db.shop_orders.find({}).sort("createdAt", -1).to_list(1000)
+async def list_shop_orders(
+    user: Annotated[dict, Depends(require_roles("admin", "sales"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    rows = await access.shop_orders.find({}).sort("createdAt", -1).to_list(1000)
     return [strip_id(r) for r in rows]
 
 
@@ -290,10 +321,11 @@ async def update_shop_order_status(
     order_id: str,
     body: ShopStatusIn,
     user: Annotated[dict, Depends(require_roles("admin", "sales"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
 ):
     if body.status not in SHOP_STATUSES:
         raise HTTPException(status_code=400, detail="Ungültiger Status")
-    o = await db.shop_orders.find_one({"id": order_id})
+    o = await access.shop_orders.find_one({"id": order_id})
     if not o:
         raise HTTPException(status_code=404, detail="Bestellung nicht gefunden")
     now = datetime.now(timezone.utc)
@@ -302,12 +334,18 @@ async def update_shop_order_status(
     if tracking:
         set_fields["trackingNumber"] = tracking
         set_fields["carrier"] = "GLS"
-    await db.shop_orders.update_one(
+    await access.shop_orders.update_one(
         {"id": order_id},
         {"$set": set_fields,
          "$push": {"statusHistory": {"status": body.status, "at": now.isoformat()}}},
     )
-    await audit(user, "shop_order_status", order_id, {"status": body.status, "tracking": tracking or None})
+    await audit(
+        user,
+        "shop_order_status",
+        order_id,
+        {"status": body.status, "tracking": tracking or None},
+        tenant_id=access.context.tenant_id,
+    )
 
     track_url = _gls_track_url(tracking, (o.get("customer") or {}).get("zip", "")) if tracking else ""
     mail = _STATUS_MAIL.get(body.status)
@@ -336,7 +374,7 @@ async def update_shop_order_status(
         except Exception as e:
             logger.warning(f"Status-E-Mail fehlgeschlagen: {e}")
 
-    updated = await db.shop_orders.find_one({"id": order_id})
+    updated = await access.shop_orders.find_one({"id": order_id})
     return strip_id(updated)
 
 
@@ -384,6 +422,9 @@ async def shop_save_address(body: ShopAddressIn, user: Annotated[dict, Depends(c
 
 
 @api_router.get("/shop/my-orders")
-async def shop_my_orders(user: Annotated[dict, Depends(current_user)]):
-    rows = await db.shop_orders.find({"userId": user["id"]}).sort("createdAt", -1).to_list(1000)
+async def shop_my_orders(
+    user: Annotated[dict, Depends(current_user)],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    rows = await access.shop_orders.find({"userId": user["id"]}).sort("createdAt", -1).to_list(1000)
     return [strip_id(r) for r in rows]

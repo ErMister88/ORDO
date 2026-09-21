@@ -86,10 +86,17 @@ def strip_id(doc: dict) -> dict:
     return doc
 
 
-async def audit(user: dict, action: str, entity: str = "", meta: dict = None) -> None:
+async def audit(
+    user: dict,
+    action: str,
+    entity: str = "",
+    meta: dict = None,
+    *,
+    tenant_id: str | None = None,
+) -> None:
     """Best-effort audit trail of sensitive actions."""
     try:
-        await db.audit_log.insert_one({
+        document = {
             "at": datetime.now(timezone.utc).isoformat(),
             "userId": (user or {}).get("id"),
             "userEmail": (user or {}).get("email"),
@@ -97,7 +104,10 @@ async def audit(user: dict, action: str, entity: str = "", meta: dict = None) ->
             "action": action,
             "entity": entity,
             "meta": meta or {},
-        })
+        }
+        if tenant_id is not None:
+            document["tenantId"] = tenant_id
+        await db.audit_log.insert_one(document)
     except Exception:
         pass
 

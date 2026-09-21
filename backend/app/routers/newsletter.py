@@ -4,12 +4,15 @@ import secrets
 from datetime import datetime, timezone
 from html import escape
 
-from fastapi import HTTPException
+from fastapi import Depends, HTTPException
 from fastapi.responses import HTMLResponse
+from typing import Annotated
 
-from ..core import api_router, db, logger
+from ..core import api_router, logger
+from ..deps import public_tenant_business_access
 from ..models import NewsletterIn, ValidateCodeIn
 from ..emailer import send_email, email_shell
+from ..tenant_access import TenantBusinessAccess
 
 APP_URL = os.environ.get("APP_URL", "https://ordo-connect.app")
 
@@ -20,8 +23,8 @@ def _safe_base(base: str | None) -> str:
     return APP_URL.rstrip("/")
 
 
-async def _shop_settings():
-    s = await db.settings.find_one({"_id": "shop"})
+async def _shop_settings(access: TenantBusinessAccess):
+    s = await access.settings.find_one({"key": "shop"})
     return s or {}
 
 
@@ -54,16 +57,19 @@ async def _send_welcome(email: str, code: str, percent: int, unsub_token: str = 
 
 
 @api_router.post("/newsletter/subscribe")
-async def newsletter_subscribe(body: NewsletterIn):
+async def newsletter_subscribe(
+    body: NewsletterIn,
+    access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
+):
     email = (body.email or "").strip().lower()
     if "@" not in email or "." not in email.split("@")[-1]:
         raise HTTPException(status_code=400, detail="Bitte eine gültige E-Mail-Adresse angeben")
 
-    s = await _shop_settings()
+    s = await _shop_settings(access)
     percent = int(s.get("newsletterDiscountPercent", 10))
     enabled = bool(s.get("newsletterDiscountEnabled", True))
 
-    existing = await db.newsletter.find_one({"email": email})
+    existing = await access.newsletter.find_one({"email": email})
 
     # Already confirmed → just re-send the welcome mail with the existing code.
     if existing and existing.get("confirmed"):
@@ -80,10 +86,10 @@ async def newsletter_subscribe(body: NewsletterIn):
     if existing:
         token = existing.get("confirmToken") or secrets.token_urlsafe(24)
         if not existing.get("confirmToken"):
-            await db.newsletter.update_one({"email": email}, {"$set": {"confirmToken": token}})
+            await access.newsletter.update_one({"email": email}, {"$set": {"confirmToken": token}})
     else:
         token = secrets.token_urlsafe(24)
-        await db.newsletter.insert_one({
+        await access.newsletter.insert_one({
             "email": email,
             "name": (body.name or "").strip(),
             "confirmed": False,
@@ -128,17 +134,20 @@ def _confirm_page(body_html: str, status: int = 200) -> HTMLResponse:
 
 
 @api_router.get("/newsletter/confirm")
-async def newsletter_confirm(token: str):
-    sub = await db.newsletter.find_one({"confirmToken": token})
+async def newsletter_confirm(
+    token: str,
+    access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
+):
+    sub = await access.newsletter.find_one({"confirmToken": token})
     if not sub:
         return _confirm_page("<h2 style='color:#0B1B3D'>Link ungültig</h2>"
                              "<p>Dieser Bestätigungslink ist ungültig oder wurde bereits verwendet.</p>", status=404)
-    s = await _shop_settings()
+    s = await _shop_settings(access)
     percent = int(s.get("newsletterDiscountPercent", 10))
     if not sub.get("confirmed"):
         code = _new_code()
         unsub_token = sub.get("unsubToken") or secrets.token_urlsafe(16)
-        await db.newsletter.update_one(
+        await access.newsletter.update_one(
             {"confirmToken": token},
             {"$set": {"confirmed": True, "code": code, "unsubToken": unsub_token,
                       "confirmedAt": datetime.now(timezone.utc).isoformat()}},
@@ -159,12 +168,15 @@ async def newsletter_confirm(token: str):
 
 
 @api_router.get("/newsletter/unsubscribe")
-async def newsletter_unsubscribe(token: str):
-    sub = await db.newsletter.find_one({"unsubToken": token})
+async def newsletter_unsubscribe(
+    token: str,
+    access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
+):
+    sub = await access.newsletter.find_one({"unsubToken": token})
     if not sub:
         return _confirm_page("<h2 style='color:#0B1B3D'>Link ungültig</h2>"
                              "<p>Dieser Abmeldelink ist ungültig oder Sie sind bereits abgemeldet.</p>", status=404)
-    await db.newsletter.delete_one({"unsubToken": token})
+    await access.newsletter.delete_one({"unsubToken": token})
     return _confirm_page(
         "<h2 style='color:#0B1B3D'>Abgemeldet ✓</h2>"
         "<p>Sie wurden erfolgreich vom Newsletter abgemeldet und erhalten keine weiteren E-Mails von uns.</p>"
@@ -172,28 +184,31 @@ async def newsletter_unsubscribe(token: str):
 
 
 @api_router.post("/shop/validate-code")
-async def validate_code(body: ValidateCodeIn):
+async def validate_code(
+    body: ValidateCodeIn,
+    access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
+):
     code = (body.code or "").strip().upper()
     if not code:
         return {"valid": False, "percent": 0}
-    s = await _shop_settings()
+    s = await _shop_settings(access)
     if not bool(s.get("newsletterDiscountEnabled", True)):
         return {"valid": False, "percent": 0, "detail": "Rabatt derzeit nicht aktiv"}
-    sub = await db.newsletter.find_one({"code": code, "confirmed": True})
+    sub = await access.newsletter.find_one({"code": code, "confirmed": True})
     if not sub:
         return {"valid": False, "percent": 0, "detail": "Code ungültig"}
     return {"valid": True, "percent": int(s.get("newsletterDiscountPercent", 10))}
 
 
-async def resolve_discount(code: str | None) -> int:
+async def resolve_discount(code: str | None, access: TenantBusinessAccess) -> int:
     """Return discount percent for a promo code, or 0 if invalid/disabled."""
     if not code:
         return 0
     code = code.strip().upper()
-    s = await _shop_settings()
+    s = await _shop_settings(access)
     if not bool(s.get("newsletterDiscountEnabled", True)):
         return 0
-    sub = await db.newsletter.find_one({"code": code, "confirmed": True})
+    sub = await access.newsletter.find_one({"code": code, "confirmed": True})
     if not sub:
         return 0
     return int(s.get("newsletterDiscountPercent", 10))

@@ -36,7 +36,8 @@ from app.demo_seed import (  # noqa: E402
 from app.migrations.registry import get_migrations  # noqa: E402
 from app.migrations.runner import MIGRATION_COLLECTION, MigrationRunner  # noqa: E402
 from app.routers import machines as machines_router  # noqa: E402
-from app.tenancy import SS_TENANT_ID  # noqa: E402
+from app.tenant_access import TenantBusinessAccess  # noqa: E402
+from app.tenancy import SS_TENANT_ID, TenantContext, TenantResolutionSource  # noqa: E402
 from scripts import seed_demo as seed_cli  # noqa: E402
 
 
@@ -118,6 +119,14 @@ class AsyncDatabase:
 
 def run(coroutine):
     return asyncio.run(coroutine)
+
+
+def tenant_access(database):
+    return TenantBusinessAccess(database, TenantContext(
+        tenant_id=SS_TENANT_ID,
+        actor_user_id="test-user",
+        resolution_source=TenantResolutionSource.SINGLE_TENANT_CONFIGURATION,
+    ))
 
 
 def prepare_tenant(database):
@@ -212,7 +221,7 @@ def test_machine_catalog_read_does_not_implicitly_seed(monkeypatch):
     database = AsyncDatabase("ordo_test_machine_catalog")
     monkeypatch.setattr(machines_router, "db", database)
 
-    assert run(machines_router.list_machines({"role": "admin"})) == []
+    assert run(machines_router.list_machines({"role": "admin"}, tenant_access(database))) == []
     assert database.raw.machines.count_documents({}) == 0
 
 
@@ -224,12 +233,13 @@ def test_machine_catalog_does_not_expose_internal_seed_metadata(monkeypatch):
         "name": "Demo machine",
         "price": 1,
         "active": True,
+        "tenantId": SS_TENANT_ID,
         "_demoSeed": DEMO_SEED_VERSION,
         DEMO_FINGERPRINT_FIELD: "internal",
     })
     monkeypatch.setattr(machines_router, "db", database)
 
-    rows = run(machines_router.list_machines({"role": "admin"}))
+    rows = run(machines_router.list_machines({"role": "admin"}, tenant_access(database)))
 
     assert rows == [{"id": "demo-machine", "name": "Demo machine", "price": 1, "active": True}]
 

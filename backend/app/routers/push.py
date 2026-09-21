@@ -8,9 +8,10 @@ import jwt
 from fastapi import Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from ..core import api_router, db, logger, JWT_SECRET, JWT_ALGORITHM
-from ..deps import require_roles
+from ..core import api_router, logger, JWT_SECRET, JWT_ALGORITHM
+from ..deps import public_tenant_business_access, require_roles, tenant_business_access
 from ..models import PushBroadcastIn
+from ..tenant_access import TenantBusinessAccess
 
 PUSH_BASE_URL = "https://integrations.emergentagent.com"
 PUSH_KEY = os.environ.get("EMERGENT_PUSH_KEY", "placeholder")
@@ -39,20 +40,26 @@ def _caller_id(request: Request) -> Optional[str]:
 
 
 @api_router.post("/register-push", status_code=201)
-async def register_push(body: RegisterPushBody, request: Request):
+async def register_push(
+    body: RegisterPushBody,
+    request: Request,
+    access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
+):
     # Authenticated callers are bound to their own account id (cannot spoof
     # another user's id); anonymous device ids are namespaced so they can never
     # collide with or impersonate a real user account.
     caller = _caller_id(request)
     reg_id = caller if caller else f"anon:{body.user_id}"
-    await db.push_registrations.update_one(
+    provider_user_id = f"{access.context.tenant_id}:{reg_id}"
+    await access.push_registrations.update_one(
         {"userId": reg_id},
         {"$set": {"userId": reg_id, "platform": body.platform,
+                  "providerUserId": provider_user_id,
                   "updatedAt": datetime.now(timezone.utc).isoformat()}},
         upsert=True,
     )
     resp = await _client.post("/api/v1/push/users/register",
-                              json={"user_id": reg_id, "platform": body.platform, "device_token": body.device_token})
+                              json={"user_id": provider_user_id, "platform": body.platform, "device_token": body.device_token})
     if resp.status_code == 401:
         raise HTTPException(500, "EMERGENT_PUSH_KEY missing or invalid")
     if resp.status_code >= 500:
@@ -80,11 +87,15 @@ async def send_push(recipients: list[str], data: dict, idempotency_key: Optional
 
 
 @api_router.post("/push/broadcast")
-async def push_broadcast(body: PushBroadcastIn, user: Annotated[dict, Depends(require_roles("admin"))]):
+async def push_broadcast(
+    body: PushBroadcastIn,
+    user: Annotated[dict, Depends(require_roles("admin"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
     if not body.title.strip() or not body.message.strip():
         raise HTTPException(status_code=400, detail="Titel und Nachricht sind erforderlich")
-    regs = await db.push_registrations.find({}).to_list(10000)
-    recipients = [r["userId"] for r in regs if r.get("userId")]
+    regs = await access.push_registrations.find({}).to_list(10000)
+    recipients = [r["providerUserId"] for r in regs if r.get("providerUserId")]
     data: dict = {"title": body.title.strip(), "message": body.message.strip()}
     if body.actionUrl:
         data["action_url"] = body.actionUrl.strip()
@@ -99,6 +110,9 @@ async def push_broadcast(body: PushBroadcastIn, user: Annotated[dict, Depends(re
 
 
 @api_router.get("/push/stats")
-async def push_stats(user: Annotated[dict, Depends(require_roles("admin"))]):
-    count = await db.push_registrations.count_documents({})
+async def push_stats(
+    user: Annotated[dict, Depends(require_roles("admin"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    count = await access.push_registrations.count_documents({})
     return {"registered": count}

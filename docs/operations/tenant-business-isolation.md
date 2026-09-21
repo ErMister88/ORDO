@@ -1,8 +1,8 @@
-# Tenant-Isolation für Companies, Products, Pricing und Upload-Metadaten
+# Tenant-Isolation der ORDO-Business-Domänen
 
 ## Geltungsbereich
 
-Arbeitspaket 3.4 bindet die Collections `companies`, `products`, `customer_prices`, `price_history` und `uploads` an einen serverseitig aufgelösten `TenantContext`. Die Zugriffsschicht ergänzt bei jedem Read, Update und Delete automatisch `tenantId`. Bei Inserts und Upserts setzt sie `tenantId` serverseitig.
+Arbeitspaket 3.4 bindet die Collections `companies`, `products`, `customer_prices`, `price_history` und `uploads` an einen serverseitig aufgelösten `TenantContext`. Arbeitspaket 3.5 ergänzt `offers`, `orders`, `invoices`, `contracts` und `subscriptions`. Arbeitspaket 3.6 ergänzt `machines`, `machine_requests`, `shop_orders`, `newsletter`, `settings` und `push_registrations`. Die Zugriffsschicht ergänzt bei jedem Read, Update und Delete automatisch `tenantId`. Bei Inserts und Upserts setzt sie `tenantId` serverseitig.
 
 Der aktuelle Übergangsbetrieb benötigt ausdrücklich:
 
@@ -19,7 +19,7 @@ API-Antworten entfernen das interne Feld `tenantId`. Cross-Tenant-Dokumente werd
 
 ## Legacy-Daten
 
-Dokumente ohne `tenantId` werden von den umgestellten Zugriffen nicht gefunden und niemals automatisch `tnt_ss_0001` zugeordnet. Dadurch sind bestehende Legacy-Unternehmen, Produkte, Kundenpreise, Preisverläufe und Upload-Metadaten nach Aktivierung dieser Codepfade nicht verfügbar, bis ein kontrollierter Backfill separat geprüft, freigegeben und ausgeführt wurde.
+Dokumente ohne `tenantId` werden von den umgestellten Zugriffen nicht gefunden und niemals automatisch `tnt_ss_0001` zugeordnet. Dadurch sind bestehende Legacy-Dokumente dieser Collections nach Aktivierung der Codepfade nicht verfügbar, bis ein kontrollierter Backfill separat geprüft, freigegeben und ausgeführt wurde.
 
 Dieses Arbeitspaket enthält keinen Backfill und keine Migration.
 
@@ -62,19 +62,17 @@ Storage-Objekt zurückbleiben. Eine transaktionale oder kompensierende Bereinigu
 gehört zum späteren Storage-Arbeitspaket; sie wird hier nicht durch einen neuen
 Storage-Mechanismus vorgezogen.
 
-## Noch nicht umgestellte Domänen
+## Operative Randdomänen
 
-Orders, Offers, Invoices, Contracts, Machines, Subscriptions und Shop Orders bleiben außerhalb dieses Arbeitspakets. Wo diese Domänen Companies, Products oder Customer Prices nachschlagen, verwenden diese Lookups bereits die tenantgebundene Zugriffsschicht. Die eigenen Dokumente und Abfragen dieser Domänen erhalten in 3.4 jedoch noch keinen vollständigen Tenant-Scope.
+Maschinen und Maschinenanfragen werden einschließlich ihrer tatsächlich vorhandenen Referenzen auf Company, Product und Contract im aktuellen Tenant aufgelöst. Fremde oder fehlende Referenzen werden gleich behandelt. Die Prüfung und ein anschließender Write bilden weiterhin keine MongoDB-Transaktion; die allgemeine Race- und Idempotenzabsicherung folgt in einem späteren Arbeitspaket.
 
-Insbesondere dürfen gleiche Company-IDs in verschiedenen Tenants erst dann systemweit verwendet werden, wenn auch die referenzierenden langlebigen Domänen vollständig tenantgebunden sind. Das ist kein sicherer Zustand für einen echten Multi-Tenant-Produktionsbetrieb und muss in den folgenden Arbeitspaketen geschlossen werden.
+Shop-Bestellungen verwenden für Katalogprodukt, Bestellung, Checkout-Referenz und Statusänderung denselben serverseitigen Tenant-Kontext. Diese Umstellung ändert weder B2C-Preise noch Stripe-Zahlungslogik. Globale Legacy-Shopbestellungen bleiben unsichtbar.
 
-Der Vertragspreis-Lookup beim B2B-Bestellaufbau liest weiterhin direkt aus der
-noch nicht vollständig umgestellten `contracts`-Collection, verlangt an dieser
-einzelnen Zugriffskante aber fail-closed `tenantId` aus dem serverseitigen
-`TenantContext`. Fremde und Legacy-Contracts ohne `tenantId` beeinflussen damit
-keinen Preis. Contract-Writes, weitere Contract-Router und die Preisreihenfolge
-bleiben unverändert; die vollständige Contract-Isolation folgt in einem späteren
-Arbeitspaket.
+Shop-Settings verwenden das Zielmodell `(tenantId, key)` mit dem Schlüssel `shop`. Ein globales Legacy-Dokument mit `_id = shop` wird nicht übernommen oder automatisch S&S zugeordnet. Solange kein tenantgebundenes Dokument geschrieben oder kontrolliert migriert wurde, liefert die Anwendung ausschließlich ihre bestehenden sicheren Laufzeit-Standardwerte und erzeugt beim Lesen kein Dokument.
+
+Newsletter-E-Mail, Bestätigungs-, Abmelde- und Rabattcode-Lookups sind tenantgebunden. Push-Registrierungen speichern zusätzlich eine serverseitig gebildete, tenantpräfixierte Provider-ID. Vorhandene Provider-Registrierungen ohne diese ID müssen sich nach einem kontrollierten Rollout erneut registrieren; es gibt keinen globalen Fallback.
+
+## Noch nicht vollständig umgestellte Bereiche
 
 `users` bleibt entsprechend dem Zielmodell eine globale Identitäts-Collection.
 Tenant-Memberships und tenantbezogene Benutzerlisten folgen erst im dafür
@@ -82,3 +80,21 @@ freigegebenen Arbeitspaket. Ebenso enthalten bestehende Audit-Einträge noch
 keine durchgängige `tenantId`. Benutzerverwaltung und Audit-Auswertung dürfen
 daher vor dieser Erweiterung nicht für mehrere aktive Tenants freigeschaltet
 werden.
+
+Audit-Ereignisse aus den in Arbeitspaket 3.6 geänderten Machine-, Shop- und
+Settings-Pfaden erhalten den serverseitig aufgelösten `tenantId`. Die
+`audit_log`-Abfrage und historische Einträge sind damit noch nicht vollständig
+tenantisoliert; diese Gesamtkorrektur bleibt ein separates Arbeitspaket.
+
+## Verbindliche Sicherheitsregel für spätere KI-Funktionen
+
+Interne kaufmännische Daten wie Einkaufspreise, Deckungsbeiträge, Margen,
+Kunden- oder Maschinenprofitabilität, interne Kosten, Provisionen und sensible
+unternehmensweite Kennzahlen dürfen ausschließlich für eine ausdrücklich dafür
+autorisierte Admin-Rolle freigegeben werden. B2B-Kunden, B2C-Kunden und
+Vertriebspartner dürfen technisch keinen Zugriff auf diese Daten erhalten.
+
+Diese Grenze muss serverseitig vor jeder Übergabe an ein KI-Modell durchgesetzt
+werden. Ein Prompt oder eine Anweisung an das Modell ist keine
+Berechtigungsprüfung. Nicht autorisierte Daten dürfen das Modell gar nicht erst
+erreichen.

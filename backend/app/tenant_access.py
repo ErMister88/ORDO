@@ -13,10 +13,16 @@ TENANT_SCOPED_BUSINESS_COLLECTIONS = frozenset({
     "contracts",
     "customer_prices",
     "invoices",
+    "machine_requests",
+    "machines",
+    "newsletter",
     "offers",
     "orders",
     "price_history",
     "products",
+    "push_registrations",
+    "settings",
+    "shop_orders",
     "subscriptions",
     "uploads",
 })
@@ -113,6 +119,9 @@ class TenantScopedCollection:
     async def delete_one(self, query: Mapping[str, Any], *args, **kwargs):
         return await self._collection.delete_one(self._filter(query), *args, **kwargs)
 
+    async def count_documents(self, query: Mapping[str, Any] | None = None, *args, **kwargs):
+        return await self._collection.count_documents(self._filter(query), *args, **kwargs)
+
 
 class TenantBusinessAccess:
     """Named tenant-scoped collections; deliberately not a generic repository."""
@@ -124,8 +133,14 @@ class TenantBusinessAccess:
         self.products = TenantScopedCollection(database, "products", context)
         self.customer_prices = TenantScopedCollection(database, "customer_prices", context)
         self.invoices = TenantScopedCollection(database, "invoices", context)
+        self.machine_requests = TenantScopedCollection(database, "machine_requests", context)
+        self.machines = TenantScopedCollection(database, "machines", context)
+        self.newsletter = TenantScopedCollection(database, "newsletter", context)
         self.offers = TenantScopedCollection(database, "offers", context)
         self.orders = TenantScopedCollection(database, "orders", context)
         self.price_history = TenantScopedCollection(database, "price_history", context)
+        self.push_registrations = TenantScopedCollection(database, "push_registrations", context)
+        self.settings = TenantScopedCollection(database, "settings", context)
+        self.shop_orders = TenantScopedCollection(database, "shop_orders", context)
         self.subscriptions = TenantScopedCollection(database, "subscriptions", context)
         self.uploads = TenantScopedCollection(database, "uploads", context)

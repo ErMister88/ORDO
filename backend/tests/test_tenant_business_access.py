@@ -10,6 +10,7 @@ from pathlib import Path
 import mongomock
 import pytest
 from fastapi import HTTPException
+from starlette.requests import Request
 
 # Application imports create a lazy Motor client. Pin it to a non-routable
 # test-only target before importing any app module.
@@ -18,11 +19,14 @@ os.environ["DB_NAME"] = "ordo_test_tenant_business_import"
 os.environ["JWT_SECRET"] = "test-only"
 os.environ["APP_ENV"] = "test"
 
-from app import deps
+from app import core, deps
 from app.models import (
     AcceptOfferIn,
     CustomerPriceIn,
     MachineTermsIn,
+    MachineIn,
+    MachineRequestIn,
+    MachineRespondIn,
     OfferCreate,
     OfferItemIn,
     OrderCreate,
@@ -30,6 +34,14 @@ from app.models import (
     OrderStatusIn,
     ProductIn,
     SubscriptionIn,
+    NewsletterIn,
+    PushBroadcastIn,
+    ShopCustomerIn,
+    ShopItemIn,
+    ShopOrderIn,
+    ShopSettingsIn,
+    ShopStatusIn,
+    ValidateCodeIn,
 )
 from app.routers import (
     billing,
@@ -40,6 +52,9 @@ from app.routers import (
     orders,
     pricing,
     products,
+    newsletter,
+    push,
+    shop,
     subscriptions,
 )
 from app.tenant_access import (
@@ -91,6 +106,9 @@ class AsyncCollection:
 
     async def delete_one(self, *args, **kwargs):
         return self._collection.delete_one(*args, **kwargs)
+
+    async def count_documents(self, *args, **kwargs):
+        return self._collection.count_documents(*args, **kwargs)
 
 
 class AsyncDatabase:
@@ -642,19 +660,22 @@ def test_machine_terms_reject_product_from_other_tenant(monkeypatch):
     database = AsyncDatabase("tenant_access_machine_product_reference")
     tenant_a = access(database, TENANT_A)
     tenant_b = access(database, TENANT_B)
+    run(tenant_a.companies.insert_one({"id": "c1", "active": True}))
     run(tenant_b.products.insert_one({
         "id": "p1",
         "brand": "Other",
         "name": "Tenant",
         "absoluteFloor": 8.0,
     }))
-    database.raw.machine_requests.insert_one({
+    run(tenant_a.machines.insert_one({"id": "machine-1", "active": True}))
+    run(tenant_a.machine_requests.insert_one({
         "id": "mr-1",
+        "machineId": "machine-1",
         "type": "purchase",
         "termMonths": 1,
         "machineName": "Machine",
         "customer": {"companyId": "c1", "email": ""},
-    })
+    }))
     monkeypatch.setattr(machines, "db", database)
 
     with pytest.raises(HTTPException) as exc:
@@ -1113,14 +1134,16 @@ def test_machine_contract_write_rejects_cross_tenant_references(monkeypatch):
     tenant_b = access(database, TENANT_B)
     run(tenant_a.companies.insert_one({"id": "c1", "active": True}))
     run(tenant_b.products.insert_one({"id": "p1"}))
-    database.raw.machine_requests.insert_one({
+    run(tenant_a.machines.insert_one({"id": "machine-1", "active": True}))
+    run(tenant_a.machine_requests.insert_one({
         "id": "mr-1",
+        "machineId": "machine-1",
         "type": "leasing",
         "status": "Angebot",
         "machineName": "Machine",
         "customer": {"companyId": "c1"},
         "terms": {"productId": "p1", "coffeePricePerKg": 10.0},
-    })
+    }))
     monkeypatch.setattr(machines, "db", database)
 
     async def sequence_must_not_run(_name):
@@ -1144,15 +1167,17 @@ def test_machine_contract_write_sets_server_tenant(monkeypatch):
     tenant_a = access(database, TENANT_A)
     run(tenant_a.companies.insert_one({"id": "c1", "active": True}))
     run(tenant_a.products.insert_one({"id": "p1"}))
-    database.raw.machine_requests.insert_one({
+    run(tenant_a.machines.insert_one({"id": "machine-1", "active": True}))
+    run(tenant_a.machine_requests.insert_one({
         "id": "mr-1",
+        "machineId": "machine-1",
         "type": "leasing",
         "status": "Angebot",
         "machineName": "Machine",
         "termMonths": 48,
         "customer": {"companyId": "c1"},
         "terms": {"productId": "p1", "coffeePricePerKg": 10.0},
-    })
+    }))
     monkeypatch.setattr(machines, "db", database)
 
     async def fixed_sequence(_name):
@@ -1186,3 +1211,363 @@ def test_machine_contract_write_sets_server_tenant(monkeypatch):
 ])
 def test_static_guard_covers_commercial_collection_bypasses(source):
     assert unscoped_collection_accesses(source)
+
+
+def test_machine_catalog_create_list_update_and_delete_are_tenant_scoped(monkeypatch):
+    database = AsyncDatabase("tenant_edge_machine_catalog")
+    tenant_a = access(database, TENANT_A)
+    tenant_b = access(database, TENANT_B)
+
+    async def no_audit(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(machines, "audit", no_audit)
+    body = MachineIn(name="Machine A", price=1000)
+    created = run(machines.create_machine(body, {"id": "admin-a"}, tenant_a))
+    machine_id = created["id"]
+    run(tenant_b.machines.insert_one({"id": machine_id, "name": "Machine B", "price": 2000}))
+
+    assert "tenantId" not in created
+    assert database.raw.machines.find_one({"tenantId": TENANT_A})["name"] == "Machine A"
+    assert [row["name"] for row in run(machines.list_machines({"role": "admin"}, tenant_a))] == ["Machine A"]
+    run(machines.update_machine(machine_id, MachineIn(name="Machine A2", price=1100), {"id": "admin-a"}, tenant_a))
+    assert database.raw.machines.find_one({"tenantId": TENANT_A})["name"] == "Machine A2"
+    assert database.raw.machines.find_one({"tenantId": TENANT_B})["name"] == "Machine B"
+    run(machines.delete_machine(machine_id, {"id": "admin-a"}, tenant_a))
+    assert database.raw.machines.find_one({"tenantId": TENANT_A})["active"] is False
+    assert database.raw.machines.find_one({"tenantId": TENANT_B}).get("active") is None
+
+
+def test_foreign_and_missing_machine_delete_are_indistinguishable(monkeypatch):
+    database = AsyncDatabase("tenant_edge_machine_delete_missing")
+    tenant_a = access(database, TENANT_A)
+    tenant_b = access(database, TENANT_B)
+    run(tenant_b.machines.insert_one({"id": "machine", "active": True}))
+
+    async def no_audit(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(machines, "audit", no_audit)
+    for machine_id in ("machine", "missing"):
+        with pytest.raises(HTTPException) as exc:
+            run(machines.delete_machine(machine_id, {"id": "admin-a"}, tenant_a))
+        assert (exc.value.status_code, exc.value.detail) == (404, "Maschine nicht gefunden")
+    assert run(tenant_b.machines.find_one({"id": "machine"}))["active"] is True
+
+
+def test_machine_request_create_sets_tenant_and_rejects_foreign_machine(monkeypatch):
+    database = AsyncDatabase("tenant_edge_machine_request_create")
+    tenant_a = access(database, TENANT_A)
+    tenant_b = access(database, TENANT_B)
+    run(tenant_a.machines.insert_one({"id": "own", "name": "Own", "price": 100, "active": True}))
+    run(tenant_b.machines.insert_one({"id": "foreign", "name": "Foreign", "price": 100, "active": True}))
+
+    async def fixed_sequence(_name):
+        return 4
+
+    monkeypatch.setattr(machines, "next_seq", fixed_sequence)
+    user = {"id": "user-a", "role": "customer", "name": "A", "email": "a@example.test"}
+    result = run(machines.create_machine_request(MachineRequestIn(machineId="own", type="kauf"), user, tenant_a))
+    assert database.raw.machine_requests.find_one({"id": result["id"]})["tenantId"] == TENANT_A
+    assert "tenantId" not in result
+
+    with pytest.raises(HTTPException) as exc:
+        run(machines.create_machine_request(MachineRequestIn(machineId="foreign", type="kauf"), user, tenant_a))
+    assert (exc.value.status_code, exc.value.detail) == (404, "Maschine nicht verfügbar")
+    assert database.raw.machine_requests.count_documents({}) == 1
+
+
+def test_machine_request_list_hides_foreign_legacy_and_cross_tenant_references():
+    database = AsyncDatabase("tenant_edge_machine_request_list")
+    tenant_a = access(database, TENANT_A)
+    tenant_b = access(database, TENANT_B)
+    run(tenant_a.machines.insert_one({"id": "machine-a", "price": 100}))
+    run(tenant_b.machines.insert_one({"id": "machine-b", "price": 100}))
+    run(tenant_a.machine_requests.insert_one({
+        "id": "own", "machineId": "machine-a", "customer": {"userId": "user-a"}, "createdAt": "2026-01-01",
+    }))
+    run(tenant_a.machine_requests.insert_one({
+        "id": "bad-ref", "machineId": "machine-b", "customer": {"userId": "user-a"}, "createdAt": "2026-01-02",
+    }))
+    run(tenant_b.machine_requests.insert_one({
+        "id": "foreign", "machineId": "machine-b", "customer": {"userId": "user-a"}, "createdAt": "2026-01-03",
+    }))
+    database.raw.machine_requests.insert_one({
+        "id": "legacy", "machineId": "machine-a", "customer": {"userId": "user-a"}, "createdAt": "2026-01-04",
+    })
+
+    rows = run(machines.list_machine_requests({"id": "admin-a", "role": "admin"}, tenant_a))
+    assert [row["id"] for row in rows] == ["own"]
+
+
+def test_machine_request_with_foreign_contract_is_not_actionable():
+    database = AsyncDatabase("tenant_edge_machine_request_contract")
+    tenant_a = access(database, TENANT_A)
+    tenant_b = access(database, TENANT_B)
+    run(tenant_a.machines.insert_one({"id": "machine", "price": 100}))
+    run(tenant_b.contracts.insert_one({"id": "contract"}))
+    run(tenant_a.machine_requests.insert_one({
+        "id": "request", "machineId": "machine", "contractId": "contract",
+        "status": "Angebot", "type": "finanzierung", "customer": {"userId": "user-a"},
+    }))
+
+    with pytest.raises(HTTPException) as exc:
+        run(machines.respond_machine_offer(
+            "request", MachineRespondIn(action="decline"),
+            {"id": "user-a", "role": "customer"}, tenant_a,
+        ))
+    assert (exc.value.status_code, exc.value.detail) == (404, "Anfrage nicht gefunden")
+    assert run(tenant_a.machine_requests.find_one({"id": "request"}))["status"] == "Angebot"
+
+
+def _shop_order_input(product_id: str = "product") -> ShopOrderIn:
+    return ShopOrderIn(
+        items=[ShopItemIn(productId=product_id, qty=1)],
+        customer=ShopCustomerIn(name="Shop Customer", email="shop@example.test"),
+    )
+
+
+def test_shop_order_create_sets_tenant_and_rejects_foreign_product(monkeypatch):
+    database = AsyncDatabase("tenant_edge_shop_create")
+    tenant_a = access(database, TENANT_A)
+    tenant_b = access(database, TENANT_B)
+    run(tenant_a.products.insert_one({
+        "id": "own", "brand": "A", "name": "Coffee", "active": True,
+        "b2cPrice": 12.0, "taxRate": 7,
+    }))
+    run(tenant_b.products.insert_one({
+        "id": "foreign", "brand": "B", "name": "Coffee", "active": True,
+        "b2cPrice": 1.0, "taxRate": 7,
+    }))
+
+    async def fixed_sequence(_name):
+        return 7
+
+    async def no_email(**_kwargs):
+        return True
+
+    monkeypatch.setattr(shop, "next_seq", fixed_sequence)
+    monkeypatch.setattr(shop, "send_email", no_email)
+    created = run(shop.create_shop_order(_shop_order_input("own"), tenant_a))
+    stored = database.raw.shop_orders.find_one({"id": created["id"]})
+    assert stored["tenantId"] == TENANT_A
+    assert stored["items"][0]["price"] == 12.0
+    assert "tenantId" not in created
+
+    with pytest.raises(HTTPException) as exc:
+        run(shop.create_shop_order(_shop_order_input("foreign"), tenant_a))
+    assert (exc.value.status_code, exc.value.detail) == (400, "Ein Produkt ist nicht mehr verfügbar")
+    assert database.raw.shop_orders.count_documents({}) == 1
+
+
+def test_shop_order_reads_and_status_updates_are_tenant_scoped(monkeypatch):
+    database = AsyncDatabase("tenant_edge_shop_mutations")
+    tenant_a = access(database, TENANT_A)
+    tenant_b = access(database, TENANT_B)
+    base = {"status": "Neu", "createdAt": "2026-01-01", "customer": {"email": ""}, "statusHistory": []}
+    run(tenant_a.shop_orders.insert_one({"id": "own", "userId": "user", **base}))
+    run(tenant_b.shop_orders.insert_one({"id": "foreign", "userId": "user", **base}))
+
+    async def no_audit(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(shop, "audit", no_audit)
+    listed = run(shop.list_shop_orders({"role": "admin"}, tenant_a))
+    mine = run(shop.shop_my_orders({"id": "user", "role": "shopuser"}, tenant_a))
+    assert [row["id"] for row in listed] == ["own"]
+    assert [row["id"] for row in mine] == ["own"]
+
+    for order_id in ("foreign", "missing"):
+        with pytest.raises(HTTPException) as exc:
+            run(shop.update_shop_order_status(
+                order_id, ShopStatusIn(status="Bestätigt"), {"id": "admin", "role": "admin"}, tenant_a,
+            ))
+        assert (exc.value.status_code, exc.value.detail) == (404, "Bestellung nicht gefunden")
+    assert run(tenant_b.shop_orders.find_one({"id": "foreign"}))["status"] == "Neu"
+
+
+def test_shop_settings_ignore_legacy_and_are_separate_per_tenant(monkeypatch):
+    database = AsyncDatabase("tenant_edge_settings")
+    tenant_a = access(database, TENANT_A)
+    tenant_b = access(database, TENANT_B)
+    database.raw.settings.insert_one({"_id": "shop", "shippingFee": 999})
+
+    assert run(shop.shop_settings_get(tenant_a))["shippingFee"] == 4.90
+    assert database.raw.settings.count_documents({}) == 1
+
+    async def no_audit(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(shop, "audit", no_audit)
+    run(shop.shop_settings_put(ShopSettingsIn(shippingFee=4.5), {"id": "admin"}, tenant_a))
+    run(shop.shop_settings_put(ShopSettingsIn(shippingFee=8.5), {"id": "admin"}, tenant_b))
+    assert run(shop.shop_settings_get(tenant_a))["shippingFee"] == 4.5
+    assert run(shop.shop_settings_get(tenant_b))["shippingFee"] == 8.5
+    assert database.raw.settings.count_documents({"tenantId": {"$exists": True}}) == 2
+
+
+def test_newsletter_tokens_and_codes_cannot_cross_tenants(monkeypatch):
+    database = AsyncDatabase("tenant_edge_newsletter")
+    tenant_a = access(database, TENANT_A)
+    tenant_b = access(database, TENANT_B)
+
+    async def no_email(**_kwargs):
+        return True
+
+    monkeypatch.setattr(newsletter, "send_email", no_email)
+    body = NewsletterIn(email="same@example.test")
+    run(newsletter.newsletter_subscribe(body, tenant_a))
+    run(newsletter.newsletter_subscribe(body, tenant_b))
+    a_doc = database.raw.newsletter.find_one({"tenantId": TENANT_A})
+    b_doc = database.raw.newsletter.find_one({"tenantId": TENANT_B})
+    assert a_doc["email"] == b_doc["email"]
+
+    response = run(newsletter.newsletter_unsubscribe(b_doc["unsubToken"], tenant_a))
+    assert response.status_code == 404
+    assert database.raw.newsletter.find_one({"tenantId": TENANT_B}) is not None
+
+    database.raw.newsletter.update_one(
+        {"tenantId": TENANT_B}, {"$set": {"confirmed": True, "code": "SS-CROSS"}},
+    )
+    assert run(newsletter.validate_code(ValidateCodeIn(code="SS-CROSS"), tenant_a))["valid"] is False
+    assert run(newsletter.validate_code(ValidateCodeIn(code="SS-CROSS"), tenant_b))["valid"] is True
+
+
+class _PushResponse:
+    status_code = 200
+
+    def raise_for_status(self):
+        return None
+
+
+class _PushClient:
+    def __init__(self):
+        self.payloads = []
+
+    async def post(self, path, json):
+        self.payloads.append((path, deepcopy(json)))
+        return _PushResponse()
+
+
+def _request(authorization: str | None = None) -> Request:
+    headers = [] if authorization is None else [(b"authorization", authorization.encode())]
+    return Request({"type": "http", "method": "POST", "path": "/", "headers": headers})
+
+
+def test_push_registration_and_broadcast_use_tenant_namespaced_targets(monkeypatch):
+    database = AsyncDatabase("tenant_edge_push")
+    tenant_a = access(database, TENANT_A)
+    tenant_b = access(database, TENANT_B)
+    client = _PushClient()
+    monkeypatch.setattr(push, "_client", client)
+    body = push.RegisterPushBody(user_id="device", platform="ios", device_token="token")
+
+    run(push.register_push(body, _request(), tenant_a))
+    run(push.register_push(body, _request(), tenant_b))
+    a_doc = database.raw.push_registrations.find_one({"tenantId": TENANT_A})
+    b_doc = database.raw.push_registrations.find_one({"tenantId": TENANT_B})
+    assert a_doc["providerUserId"] == f"{TENANT_A}:anon:device"
+    assert b_doc["providerUserId"] == f"{TENANT_B}:anon:device"
+
+    run(push.push_broadcast(PushBroadcastIn(title="A", message="Only A"), {"role": "admin"}, tenant_a))
+    broadcast = client.payloads[-1][1]
+    assert broadcast["recipients"] == [f"{TENANT_A}:anon:device"]
+    assert run(push.push_stats({"role": "admin"}, tenant_a)) == {"registered": 1}
+
+
+def test_tenant_scoped_audit_context_is_persisted_without_response_leak(monkeypatch):
+    database = AsyncDatabase("tenant_edge_audit")
+    monkeypatch.setattr(core, "db", database)
+    run(core.audit(
+        {"id": "admin", "email": "admin@example.test", "role": "admin"},
+        "edge_action",
+        "entity",
+        tenant_id=TENANT_A,
+    ))
+    assert database.raw.audit_log.find_one({"action": "edge_action"})["tenantId"] == TENANT_A
+
+
+@pytest.mark.parametrize("source", [
+    "db.machines.find({})",
+    "db['machine_requests'].update_many({}, {'$set': {'status': 'x'}})",
+    "getattr(db, 'shop_orders').find_one_and_update({}, {})",
+    "database.newsletter.aggregate([{'$lookup': {'from': 'settings'}}])",
+    "raw = db\nraw.push_registrations.delete_many({})",
+    "db.get_collection('settings').replace_one({}, {})",
+    "name = 'machines'\ndb.get_collection(name).bulk_write([])",
+])
+def test_static_guard_covers_edge_domain_bypass_shapes(source):
+    assert unscoped_collection_accesses(source)
+
+
+@pytest.mark.parametrize("collection_name", [
+    "machines",
+    "machine_requests",
+    "shop_orders",
+    "newsletter",
+    "settings",
+    "push_registrations",
+])
+def test_edge_collections_reject_client_tenant_in_filters_writes_and_updates(collection_name):
+    database = AsyncDatabase(f"tenant_edge_injection_{collection_name}")
+    tenant_a = access(database, TENANT_A)
+    collection = getattr(tenant_a, collection_name)
+
+    with pytest.raises(TenantScopeViolation, match="Conflicting tenantId"):
+        run(collection.insert_one({"id": "row", "tenantId": TENANT_B}))
+    with pytest.raises(TenantScopeViolation, match="Conflicting tenantId"):
+        run(collection.find_one({"$or": [{"id": "row"}, {"tenantId": TENANT_B}]}))
+    with pytest.raises(TenantScopeViolation, match="immutable"):
+        run(collection.update_one({"id": "row"}, {"$unset": {"tenantId": ""}}))
+    with pytest.raises(TenantScopeViolation, match="immutable"):
+        run(collection.update_one({"id": "row"}, {"$rename": {"other": "tenantId"}}))
+    assert database.raw[collection_name].count_documents({}) == 0
+
+
+def test_push_count_is_tenant_scoped_and_rejects_conflicting_filter():
+    database = AsyncDatabase("tenant_edge_push_count")
+    tenant_a = access(database, TENANT_A)
+    tenant_b = access(database, TENANT_B)
+    run(tenant_a.push_registrations.insert_one({"userId": "a"}))
+    run(tenant_b.push_registrations.insert_one({"userId": "b"}))
+
+    assert run(tenant_a.push_registrations.count_documents({})) == 1
+    with pytest.raises(TenantScopeViolation, match="Conflicting tenantId"):
+        run(tenant_a.push_registrations.count_documents({"tenantId": TENANT_B}))
+
+
+def test_foreign_shop_payment_lookup_never_calls_stripe(monkeypatch):
+    database = AsyncDatabase("tenant_edge_shop_payment_foreign")
+    tenant_a = access(database, TENANT_A)
+    tenant_b = access(database, TENANT_B)
+    run(tenant_b.shop_orders.insert_one({
+        "id": "foreign", "token": "secret", "paymentStatus": "Offen",
+        "stripeSessionId": "session", "total": 10,
+    }))
+
+    def stripe_must_not_run(*_args, **_kwargs):
+        raise AssertionError("Stripe must not be called for another tenant")
+
+    monkeypatch.setattr(shop.stripe.checkout.Session, "retrieve", stripe_must_not_run)
+    for order_id in ("foreign", "missing"):
+        with pytest.raises(HTTPException) as exc:
+            run(shop.shop_payment_status(order_id, tenant_a, token="secret"))
+        assert (exc.value.status_code, exc.value.detail) == (404, "Bestellung nicht gefunden")
+
+
+def test_newsletter_confirmation_token_cannot_cross_tenants(monkeypatch):
+    database = AsyncDatabase("tenant_edge_newsletter_confirm")
+    tenant_a = access(database, TENANT_A)
+    tenant_b = access(database, TENANT_B)
+    run(tenant_b.newsletter.insert_one({
+        "email": "b@example.test", "confirmed": False,
+        "confirmToken": "foreign-token", "unsubToken": "unsubscribe",
+    }))
+
+    async def no_email(**_kwargs):
+        raise AssertionError("No email may be sent for another tenant")
+
+    monkeypatch.setattr(newsletter, "send_email", no_email)
+    response = run(newsletter.newsletter_confirm("foreign-token", tenant_a))
+    assert response.status_code == 404
+    assert run(tenant_b.newsletter.find_one({"confirmToken": "foreign-token"}))["confirmed"] is False

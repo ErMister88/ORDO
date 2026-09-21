@@ -22,34 +22,52 @@ TYPE_LABEL = {"kauf": "Kauf", "finanzierung": "Finanzierung", "leasing": "Leasin
 
 # ---------------- Catalog ----------------
 @api_router.get("/machines")
-async def list_machines(user: Annotated[dict, Depends(current_user)]):
+async def list_machines(
+    user: Annotated[dict, Depends(current_user)],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
     q = {} if user["role"] in ("admin", "sales") else {"active": True}
-    rows = await db.machines.find(q).sort("price", 1).to_list(500)
+    rows = await access.machines.find(q).sort("price", 1).to_list(500)
     return [strip_id(r) for r in rows]
 
 
 @api_router.post("/machines", status_code=201)
-async def create_machine(body: MachineIn, user: Annotated[dict, Depends(require_roles("admin"))]):
+async def create_machine(
+    body: MachineIn,
+    user: Annotated[dict, Depends(require_roles("admin"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
     doc = {"id": str(uuid.uuid4()), "taxRate": 19,
            "createdAt": datetime.now(timezone.utc).isoformat(), **body.model_dump()}
-    await db.machines.insert_one(doc)
-    await audit(user, "machine_create", doc["id"], {"name": body.name})
+    await access.machines.insert_one(doc)
+    await audit(user, "machine_create", doc["id"], {"name": body.name}, tenant_id=access.context.tenant_id)
     return strip_id(doc)
 
 
 @api_router.put("/machines/{machine_id}")
-async def update_machine(machine_id: str, body: MachineIn, user: Annotated[dict, Depends(require_roles("admin"))]):
-    r = await db.machines.update_one({"id": machine_id}, {"$set": body.model_dump()})
+async def update_machine(
+    machine_id: str,
+    body: MachineIn,
+    user: Annotated[dict, Depends(require_roles("admin"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    r = await access.machines.update_one({"id": machine_id}, {"$set": body.model_dump()})
     if r.matched_count == 0:
         raise HTTPException(status_code=404, detail="Maschine nicht gefunden")
-    await audit(user, "machine_update", machine_id, {"name": body.name})
-    return strip_id(await db.machines.find_one({"id": machine_id}))
+    await audit(user, "machine_update", machine_id, {"name": body.name}, tenant_id=access.context.tenant_id)
+    return strip_id(await access.machines.find_one({"id": machine_id}))
 
 
 @api_router.delete("/machines/{machine_id}")
-async def delete_machine(machine_id: str, user: Annotated[dict, Depends(require_roles("admin"))]):
-    await db.machines.update_one({"id": machine_id}, {"$set": {"active": False}})
-    await audit(user, "machine_delete", machine_id)
+async def delete_machine(
+    machine_id: str,
+    user: Annotated[dict, Depends(require_roles("admin"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    result = await access.machines.update_one({"id": machine_id}, {"$set": {"active": False}})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Maschine nicht gefunden")
+    await audit(user, "machine_delete", machine_id, tenant_id=access.context.tenant_id)
     return {"ok": True}
 
 
@@ -68,6 +86,35 @@ async def _customer_snapshot(user: dict, access: TenantBusinessAccess) -> dict:
             "companyName": company.get("name") if company else ""}
 
 
+async def _machine_request_references_visible(
+    request: dict,
+    access: TenantBusinessAccess,
+) -> bool:
+    machine_id = request.get("machineId")
+    if not isinstance(machine_id, str) or not await access.machines.find_one({"id": machine_id}):
+        return False
+    customer = request.get("customer") or {}
+    company_id = customer.get("companyId")
+    if company_id is not None and (
+        not isinstance(company_id, str)
+        or not await access.companies.find_one({"id": company_id})
+    ):
+        return False
+    product_id = (request.get("terms") or {}).get("productId")
+    if product_id is not None and (
+        not isinstance(product_id, str)
+        or not await access.products.find_one({"id": product_id})
+    ):
+        return False
+    contract_id = request.get("contractId")
+    if contract_id is not None and (
+        not isinstance(contract_id, str)
+        or not await access.contracts.find_one({"id": contract_id})
+    ):
+        return False
+    return True
+
+
 @api_router.post("/machine-requests", status_code=201)
 async def create_machine_request(
     body: MachineRequestIn,
@@ -76,7 +123,7 @@ async def create_machine_request(
 ):
     if body.type not in TYPE_LABEL:
         raise HTTPException(status_code=400, detail="Ungültiger Erwerbstyp")
-    m = await db.machines.find_one({"id": body.machineId})
+    m = await access.machines.find_one({"id": body.machineId})
     if not m or not m.get("active", True):
         raise HTTPException(status_code=404, detail="Maschine nicht verfügbar")
     now = datetime.now(timezone.utc)
@@ -90,7 +137,7 @@ async def create_machine_request(
         "status": status, "paymentStatus": "Offen",
         "terms": None, "createdAt": now.isoformat(),
     }
-    await db.machine_requests.insert_one(doc)
+    await access.machine_requests.insert_one(doc)
 
     # Notify staff about new requests (best-effort).
     if body.type != "kauf":
@@ -108,15 +155,19 @@ async def create_machine_request(
 
 
 @api_router.get("/machine-requests")
-async def list_machine_requests(user: Annotated[dict, Depends(current_user)]):
+async def list_machine_requests(
+    user: Annotated[dict, Depends(current_user)],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
     if user["role"] == "admin":
-        rows = await db.machine_requests.find({}).sort("createdAt", -1).to_list(1000)
+        rows = await access.machine_requests.find({}).sort("createdAt", -1).to_list(1000)
     else:
-        ids = await visible_company_ids(user)
-        rows = await db.machine_requests.find(
+        ids = await visible_company_ids(user, access)
+        rows = await access.machine_requests.find(
             {"$or": [{"customer.companyId": {"$in": ids}}, {"customer.userId": user["id"]}]}
         ).sort("createdAt", -1).to_list(1000)
-    return [strip_id(r) for r in rows]
+    visible = [r for r in rows if await _machine_request_references_visible(r, access)]
+    return [strip_id(r) for r in visible]
 
 
 @api_router.put("/machine-requests/{req_id}")
@@ -126,11 +177,11 @@ async def set_machine_terms(
     user: Annotated[dict, Depends(require_roles("admin", "sales"))],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
 ):
-    r = await db.machine_requests.find_one({"id": req_id})
-    if not r:
+    r = await access.machine_requests.find_one({"id": req_id})
+    if not r or not await _machine_request_references_visible(r, access):
         raise HTTPException(status_code=404, detail="Anfrage nicht gefunden")
     if user["role"] != "admin":
-        ids = await visible_company_ids(user)
+        ids = await visible_company_ids(user, access)
         if r["customer"].get("companyId") not in ids:
             raise HTTPException(status_code=403, detail="Keine Berechtigung")
     status = body.status or "Angebot"
@@ -163,8 +214,8 @@ async def set_machine_terms(
         "productId": body.productId, "coffeePricePerKg": body.coffeePricePerKg, "coffeeName": coffee_name,
         "note": body.note,
     }
-    await db.machine_requests.update_one({"id": req_id}, {"$set": {"terms": terms, "status": status}})
-    await audit(user, "machine_terms", req_id, {"status": status})
+    await access.machine_requests.update_one({"id": req_id}, {"$set": {"terms": terms, "status": status}})
+    await audit(user, "machine_terms", req_id, {"status": status}, tenant_id=access.context.tenant_id)
 
     email = r["customer"]["email"]
     if email and status == "Angebot":
@@ -192,7 +243,7 @@ async def set_machine_terms(
                              html=email_shell("Ihr persönliches Angebot", "Jetzt in der App ansehen & annehmen.", inner))
         except Exception as e:
             logger.warning(f"Angebots-Mail fehlgeschlagen: {e}")
-    return strip_id(await db.machine_requests.find_one({"id": req_id}))
+    return strip_id(await access.machine_requests.find_one({"id": req_id}))
 
 
 @api_router.post("/machine-requests/{req_id}/accept")
@@ -201,8 +252,8 @@ async def accept_machine_offer(
     user: Annotated[dict, Depends(current_user)],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
 ):
-    r = await db.machine_requests.find_one({"id": req_id})
-    if not r:
+    r = await access.machine_requests.find_one({"id": req_id})
+    if not r or not await _machine_request_references_visible(r, access):
         raise HTTPException(status_code=404, detail="Anfrage nicht gefunden")
     if user["role"] != "admin":
         ids = await visible_company_ids(user, access)
@@ -242,11 +293,11 @@ async def accept_machine_offer(
             "machineRequestId": r["id"],
         })
         updates["contractId"] = contract_id
-        await audit(user, "machine_contract_created", contract_id, {"requestId": r["id"]})
+        await audit(user, "machine_contract_created", contract_id, {"requestId": r["id"]}, tenant_id=access.context.tenant_id)
 
-    await db.machine_requests.update_one({"id": req_id}, {"$set": updates})
-    await audit(user, "machine_accept", req_id)
-    return strip_id(await db.machine_requests.find_one({"id": req_id}))
+    await access.machine_requests.update_one({"id": req_id}, {"$set": updates})
+    await audit(user, "machine_accept", req_id, tenant_id=access.context.tenant_id)
+    return strip_id(await access.machine_requests.find_one({"id": req_id}))
 
 
 def _owns(r: dict, user: dict, ids: list) -> bool:
@@ -258,26 +309,31 @@ def _owns(r: dict, user: dict, ids: list) -> bool:
 
 
 @api_router.post("/machine-requests/{req_id}/respond")
-async def respond_machine_offer(req_id: str, body: MachineRespondIn, user: Annotated[dict, Depends(current_user)]):
-    r = await db.machine_requests.find_one({"id": req_id})
-    if not r:
+async def respond_machine_offer(
+    req_id: str,
+    body: MachineRespondIn,
+    user: Annotated[dict, Depends(current_user)],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    r = await access.machine_requests.find_one({"id": req_id})
+    if not r or not await _machine_request_references_visible(r, access):
         raise HTTPException(status_code=404, detail="Anfrage nicht gefunden")
-    ids = await visible_company_ids(user)
+    ids = await visible_company_ids(user, access)
     if not _owns(r, user, ids):
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
     if body.action not in ("decline", "question"):
         raise HTTPException(status_code=400, detail="Ungültige Aktion")
     now = datetime.now(timezone.utc).isoformat()
     if body.action == "decline":
-        await db.machine_requests.update_one({"id": req_id}, {"$set": {"status": "Abgelehnt"}})
-        await audit(user, "machine_decline", req_id)
+        await access.machine_requests.update_one({"id": req_id}, {"$set": {"status": "Abgelehnt"}})
+        await audit(user, "machine_decline", req_id, tenant_id=access.context.tenant_id)
         subject, headline = f"Angebot {req_id} abgelehnt", "Angebot abgelehnt"
         text = f"Der Kunde hat das Angebot für {escape(r['machineName'])} abgelehnt."
     else:
         entry = {"message": body.message, "at": now, "by": user.get("name", "Kunde")}
-        await db.machine_requests.update_one(
+        await access.machine_requests.update_one(
             {"id": req_id}, {"$set": {"status": "Rückfrage"}, "$push": {"questions": entry}})
-        await audit(user, "machine_question", req_id, {"message": body.message})
+        await audit(user, "machine_question", req_id, {"message": body.message}, tenant_id=access.context.tenant_id)
         subject, headline = f"Rückfrage zu {req_id}", "Neue Rückfrage"
         text = f"Rückfrage zu {escape(r['machineName'])}: {escape(body.message)}"
     try:
@@ -286,7 +342,7 @@ async def respond_machine_offer(req_id: str, body: MachineRespondIn, user: Annot
                          html=email_shell(headline, "Maschinen-Anfrage", inner))
     except Exception as e:
         logger.warning(f"Antwort-Mail fehlgeschlagen: {e}")
-    return strip_id(await db.machine_requests.find_one({"id": req_id}))
+    return strip_id(await access.machine_requests.find_one({"id": req_id}))
 
 
 @api_router.get("/machines/leasing-contracts")
@@ -319,11 +375,15 @@ async def leasing_contracts(
 
 
 @api_router.post("/machine-requests/{req_id}/checkout")
-async def machine_checkout(req_id: str, user: Annotated[dict, Depends(current_user)]):
-    r = await db.machine_requests.find_one({"id": req_id})
-    if not r:
+async def machine_checkout(
+    req_id: str,
+    user: Annotated[dict, Depends(current_user)],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    r = await access.machine_requests.find_one({"id": req_id})
+    if not r or not await _machine_request_references_visible(r, access):
         raise HTTPException(status_code=404, detail="Anfrage nicht gefunden")
-    ids = await visible_company_ids(user)
+    ids = await visible_company_ids(user, access)
     if not _owns(r, user, ids):
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
     if r.get("type") != "kauf":
@@ -347,16 +407,20 @@ async def machine_checkout(req_id: str, user: Annotated[dict, Depends(current_us
     except Exception as e:
         logger.warning(f"Stripe Checkout (Maschine) fehlgeschlagen: {e}")
         raise HTTPException(status_code=502, detail="Zahlung konnte nicht gestartet werden")
-    await db.machine_requests.update_one({"id": req_id}, {"$set": {"stripeSessionId": session.id}})
+    await access.machine_requests.update_one({"id": req_id}, {"$set": {"stripeSessionId": session.id}})
     return {"url": session.url, "sessionId": session.id}
 
 
 @api_router.get("/machine-requests/{req_id}/payment-status")
-async def machine_payment_status(req_id: str, user: Annotated[dict, Depends(current_user)]):
-    r = await db.machine_requests.find_one({"id": req_id})
-    if not r:
+async def machine_payment_status(
+    req_id: str,
+    user: Annotated[dict, Depends(current_user)],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    r = await access.machine_requests.find_one({"id": req_id})
+    if not r or not await _machine_request_references_visible(r, access):
         raise HTTPException(status_code=404, detail="Anfrage nicht gefunden")
-    ids = await visible_company_ids(user)
+    ids = await visible_company_ids(user, access)
     if not _owns(r, user, ids):
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
     if r.get("paymentStatus") == "Bezahlt":
@@ -369,7 +433,7 @@ async def machine_payment_status(req_id: str, user: Annotated[dict, Depends(curr
             logger.warning(f"Stripe Status (Maschine) fehlgeschlagen: {e}")
             session = None
         if session and session.get("payment_status") in ("paid", "no_payment_required"):
-            await db.machine_requests.update_one(
+            await access.machine_requests.update_one(
                 {"id": req_id, "paymentStatus": {"$ne": "Bezahlt"}},
                 {"$set": {"paymentStatus": "Bezahlt", "status": "Gekauft",
                           "paidAt": datetime.now(timezone.utc).isoformat()}},
