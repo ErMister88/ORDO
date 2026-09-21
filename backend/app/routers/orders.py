@@ -5,9 +5,10 @@ from typing import Annotated
 from datetime import datetime, timedelta, timezone
 
 from ..core import api_router, db, strip_id, next_seq, logger, ORDER_STATUS_FLOW, audit
-from ..deps import current_user, require_roles, visible_company_ids
+from ..deps import current_user, require_roles, tenant_business_access, visible_company_ids
 from ..models import OrderCreate, OrderStatusIn, OrderItemIn  # noqa: F401
 from ..emailer import send_email, email_shell, company_recipient
+from ..tenant_access import TenantBusinessAccess
 
 
 @api_router.get("/orders")
@@ -17,12 +18,23 @@ async def get_orders(user: Annotated[dict, Depends(current_user)]):
     return [strip_id(o) for o in orders]
 
 
-async def _resolve_unit_price(company_id: str, product: dict, qty: float) -> float:
+async def _resolve_unit_price(
+    access: TenantBusinessAccess,
+    company_id: str,
+    product: dict,
+    qty: float,
+) -> float:
     """Authoritative server-side price: customer price -> contract price -> standard (with volume tiers)."""
-    cp = await db.customer_prices.find_one({"companyId": company_id, "productId": product["id"]})
+    cp = await access.customer_prices.find_one(
+        {"companyId": company_id, "productId": product["id"]}
+    )
     if cp and cp.get("price") is not None:
         return round(float(cp["price"]), 2)
-    ct = await db.contracts.find_one({"companyId": company_id, "productId": product["id"]})
+    ct = await db.contracts.find_one({
+        "tenantId": access.context.tenant_id,
+        "companyId": company_id,
+        "productId": product["id"],
+    })
     if ct and ct.get("price"):
         return round(float(ct["price"]), 2)
     price = float(product["standardPrice"])
@@ -33,8 +45,12 @@ async def _resolve_unit_price(company_id: str, product: dict, qty: float) -> flo
 
 
 @api_router.post("/orders")
-async def create_order(body: OrderCreate, user: Annotated[dict, Depends(current_user)]):
-    ids = await visible_company_ids(user)
+async def create_order(
+    body: OrderCreate,
+    user: Annotated[dict, Depends(current_user)],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    ids = await visible_company_ids(user, access)
     if body.companyId not in ids:
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
     if not body.items:
@@ -43,10 +59,10 @@ async def create_order(body: OrderCreate, user: Annotated[dict, Depends(current_
     for it in body.items:
         if it.qty <= 0:
             raise HTTPException(status_code=400, detail="Ungültige Menge")
-        prod = await db.products.find_one({"id": it.productId})
+        prod = await access.products.find_one({"id": it.productId})
         if not prod or prod.get("active") is False:
             raise HTTPException(status_code=400, detail="Produkt nicht verfügbar")
-        price = await _resolve_unit_price(body.companyId, prod, it.qty)
+        price = await _resolve_unit_price(access, body.companyId, prod, it.qty)
         items.append({"productId": it.productId, "qty": it.qty, "price": price})
     now = datetime.now(timezone.utc)
     seq = await next_seq("order")
@@ -75,13 +91,18 @@ async def get_order(order_id: str, user: Annotated[dict, Depends(current_user)])
 
 
 @api_router.put("/orders/{order_id}/status")
-async def set_order_status(order_id: str, body: OrderStatusIn, user: Annotated[dict, Depends(require_roles("admin", "sales"))]):
+async def set_order_status(
+    order_id: str,
+    body: OrderStatusIn,
+    user: Annotated[dict, Depends(require_roles("admin", "sales"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
     if body.status not in ORDER_STATUS_FLOW:
         raise HTTPException(status_code=400, detail="Ungültiger Status")
     o = await db.orders.find_one({"id": order_id})
     if not o:
         raise HTTPException(status_code=404, detail="Bestellung nicht gefunden")
-    ids = await visible_company_ids(user)
+    ids = await visible_company_ids(user, access)
     if o["companyId"] not in ids:
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
     update = {"status": body.status}
@@ -95,7 +116,7 @@ async def set_order_status(order_id: str, body: OrderStatusIn, user: Annotated[d
     await audit(user, "order.status", order_id, {"status": body.status})
     if body.status == "Versendet":
         try:
-            email, cname = await company_recipient(o["companyId"])
+            email, cname = await company_recipient(access, o["companyId"])
             if email:
                 tracking = update.get("trackingNumber") or o.get("trackingNumber") or "-"
                 eta = update.get("estimatedDelivery") or o.get("estimatedDelivery")

@@ -4,14 +4,19 @@ from typing import Annotated
 from datetime import datetime, timezone
 
 from ..core import api_router, db
-from ..deps import require_roles, visible_company_ids
+from ..deps import require_roles, tenant_business_access, visible_company_ids
+from ..tenant_access import TenantBusinessAccess
 
 
 @api_router.get("/analytics")
-async def analytics(user: Annotated[dict, Depends(require_roles("admin", "sales"))], months: int = 6):
-    ids = await visible_company_ids(user)
+async def analytics(
+    user: Annotated[dict, Depends(require_roles("admin", "sales"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    months: int = 6,
+):
+    ids = await visible_company_ids(user, access)
     orders = await db.orders.find({"companyId": {"$in": ids}}).to_list(10000)
-    products = await db.products.find().to_list(1000)
+    products = await access.products.find().to_list(1000)
     cost_map = {p["id"]: p["cost"] for p in products}
 
     now = datetime.now(timezone.utc)

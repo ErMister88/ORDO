@@ -5,9 +5,10 @@ from typing import Annotated
 from datetime import datetime, timezone
 
 from ..core import api_router, db, strip_id, next_seq, logger, audit
-from ..deps import current_user, require_roles, visible_company_ids
+from ..deps import current_user, require_roles, tenant_business_access, visible_company_ids
 from ..models import OfferCreate, DecisionIn, AcceptOfferIn
 from ..emailer import send_email, email_shell, company_recipient, items_html
+from ..tenant_access import TenantBusinessAccess
 
 
 @api_router.get("/offers")
@@ -18,13 +19,17 @@ async def get_offers(user: Annotated[dict, Depends(current_user)]):
 
 
 @api_router.post("/offers")
-async def create_offer(body: OfferCreate, user: Annotated[dict, Depends(require_roles("admin", "sales"))]):
-    ids = await visible_company_ids(user)
+async def create_offer(
+    body: OfferCreate,
+    user: Annotated[dict, Depends(require_roles("admin", "sales"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    ids = await visible_company_ids(user, access)
     if body.companyId not in ids:
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
     needs_approval = False
     for it in body.items:
-        prod = await db.products.find_one({"id": it.productId})
+        prod = await access.products.find_one({"id": it.productId})
         if not prod:
             raise HTTPException(status_code=400, detail="Produkt unbekannt")
         if it.price < prod["absoluteFloor"]:
@@ -49,15 +54,20 @@ async def create_offer(body: OfferCreate, user: Annotated[dict, Depends(require_
 
 
 @api_router.post("/offers/{offer_id}/approve")
-async def approve_offer(offer_id: str, body: DecisionIn, user: Annotated[dict, Depends(require_roles("admin"))]):
+async def approve_offer(
+    offer_id: str,
+    body: DecisionIn,
+    user: Annotated[dict, Depends(require_roles("admin"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
     o = await db.offers.find_one({"id": offer_id})
     if not o:
         raise HTTPException(status_code=404, detail="Angebot nicht gefunden")
     await db.offers.update_one({"id": offer_id}, {"$set": {"status": "Freigegeben", "decisionNote": body.note}})
     try:
-        email, cname = await company_recipient(o["companyId"])
+        email, cname = await company_recipient(access, o["companyId"])
         if email:
-            rows = await items_html(o["items"])
+            rows = await items_html(access, o["items"])
             total = sum(it["price"] * it["qty"] for it in o["items"])
             inner = (
                 f"<p style='margin:0 0 12px;color:#3A4256;font-size:15px'>Hallo {escape(cname)},<br>"

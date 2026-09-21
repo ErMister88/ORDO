@@ -4,13 +4,17 @@ from typing import Annotated
 from datetime import datetime, timezone
 
 from ..core import api_router, db, strip_id
-from ..deps import current_user, visible_company_ids
+from ..deps import current_user, tenant_business_access, visible_company_ids
+from ..tenant_access import TenantBusinessAccess
 
 
 @api_router.get("/dashboard")
-async def dashboard(user: Annotated[dict, Depends(current_user)]):
-    ids = await visible_company_ids(user)
-    companies = await db.companies.find({"id": {"$in": ids}}).to_list(1000)
+async def dashboard(
+    user: Annotated[dict, Depends(current_user)],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    ids = await visible_company_ids(user, access)
+    companies = await access.companies.find({"id": {"$in": ids}}).to_list(1000)
     orders = await db.orders.find({"companyId": {"$in": ids}}).to_list(5000)
     offers = await db.offers.find({"companyId": {"$in": ids}}).to_list(1000)
     invoices = await db.invoices.find({"companyId": {"$in": ids}}).to_list(1000)

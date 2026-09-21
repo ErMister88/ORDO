@@ -7,21 +7,30 @@ from starlette.concurrency import run_in_threadpool
 from typing import Annotated
 from datetime import datetime, timezone
 
-from ..core import api_router, db, strip_id, next_seq, audit
-from ..deps import current_user, require_roles
+from ..core import api_router, strip_id, next_seq, audit
+from ..deps import (
+    current_user,
+    public_tenant_business_access,
+    require_roles,
+    tenant_business_access,
+)
 from ..models import ProductIn, ActiveIn, StockIn
 from ..storage import put_object, get_object, APP_NAME
+from ..tenant_access import TenantBusinessAccess
 
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
 
 
 @api_router.get("/products")
-async def get_products(user: Annotated[dict, Depends(current_user)]):
+async def get_products(
+    user: Annotated[dict, Depends(current_user)],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
     # Wholesale catalog is B2B-only. Shop customers (shopusers) and any other
     # role must never receive cost/floor/standard pricing. They use /shop/products.
     if user["role"] not in ("admin", "sales", "customer"):
         raise HTTPException(status_code=403, detail="Kein Zugriff auf den Großhandelskatalog")
-    prods = await db.products.find({}).to_list(1000)
+    prods = await access.products.find({}).to_list(1000)
     result = []
     for p in prods:
         p = strip_id(p)
@@ -36,34 +45,53 @@ async def get_products(user: Annotated[dict, Depends(current_user)]):
 
 
 @api_router.post("/products")
-async def create_product(body: ProductIn, user: Annotated[dict, Depends(require_roles("admin"))]):
+async def create_product(
+    body: ProductIn,
+    user: Annotated[dict, Depends(require_roles("admin"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
     seq = await next_seq("product")
     prod = {"id": f"p{seq}", **body.model_dump()}
-    await db.products.insert_one(prod)
+    await access.products.insert_one(prod)
     return strip_id(prod)
 
 
 @api_router.put("/products/{product_id}")
-async def update_product(product_id: str, body: ProductIn, user: Annotated[dict, Depends(require_roles("admin"))]):
-    res = await db.products.update_one({"id": product_id}, {"$set": body.model_dump()})
+async def update_product(
+    product_id: str,
+    body: ProductIn,
+    user: Annotated[dict, Depends(require_roles("admin"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    res = await access.products.update_one({"id": product_id}, {"$set": body.model_dump()})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Produkt nicht gefunden")
-    p = await db.products.find_one({"id": product_id})
+    p = await access.products.find_one({"id": product_id})
     return strip_id(p)
 
 
 @api_router.put("/products/{product_id}/active")
-async def set_product_active(product_id: str, body: ActiveIn, user: Annotated[dict, Depends(require_roles("admin"))]):
-    res = await db.products.update_one({"id": product_id}, {"$set": {"active": body.active}})
+async def set_product_active(
+    product_id: str,
+    body: ActiveIn,
+    user: Annotated[dict, Depends(require_roles("admin"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    res = await access.products.update_one({"id": product_id}, {"$set": {"active": body.active}})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Produkt nicht gefunden")
     return {"ok": True, "active": body.active}
 
 
 @api_router.put("/products/{product_id}/stock")
-async def set_product_stock(product_id: str, body: StockIn, user: Annotated[dict, Depends(require_roles("admin"))]):
+async def set_product_stock(
+    product_id: str,
+    body: StockIn,
+    user: Annotated[dict, Depends(require_roles("admin"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
     stock = None if body.stock is None else max(0, body.stock)
-    res = await db.products.update_one({"id": product_id}, {"$set": {"stock": stock}})
+    res = await access.products.update_one({"id": product_id}, {"$set": {"stock": stock}})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Produkt nicht gefunden")
     await audit(user, "product.stock", product_id, {"stock": stock})
@@ -71,7 +99,11 @@ async def set_product_stock(product_id: str, body: StockIn, user: Annotated[dict
 
 
 @api_router.post("/upload")
-async def upload_image(user: Annotated[dict, Depends(require_roles("admin"))], file: UploadFile = File(...)):
+async def upload_image(
+    user: Annotated[dict, Depends(require_roles("admin"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    file: UploadFile = File(...),
+):
     content_type = file.content_type or "application/octet-stream"
     if content_type not in ALLOWED_IMAGE_TYPES:
         raise HTTPException(status_code=400, detail="Nur Bilddateien sind erlaubt")
@@ -88,7 +120,7 @@ async def upload_image(user: Annotated[dict, Depends(require_roles("admin"))], f
             raise HTTPException(status_code=402, detail="Speicher-Kontingent aufgebraucht")
         raise HTTPException(status_code=502, detail="Upload fehlgeschlagen")
     stored = result["path"]
-    await db.uploads.insert_one({
+    await access.uploads.insert_one({
         "storagePath": stored,
         "ownerId": user["id"],
         "contentType": content_type,
@@ -98,8 +130,11 @@ async def upload_image(user: Annotated[dict, Depends(require_roles("admin"))], f
 
 
 @api_router.get("/files/{path:path}")
-async def serve_file(path: str):
-    doc = await db.uploads.find_one({"storagePath": path})
+async def serve_file(
+    path: str,
+    access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
+):
+    doc = await access.uploads.find_one({"storagePath": path})
     if not doc:
         raise HTTPException(status_code=404, detail="Datei nicht gefunden")
     try:

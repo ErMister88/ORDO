@@ -8,7 +8,7 @@ from html.parser import HTMLParser
 from urllib.parse import urlparse
 from typing import Optional
 
-from .core import db
+from .tenant_access import TenantBusinessAccess
 
 EMAIL_BASE_URL = "https://integrations.emergentagent.com"
 EMAIL_KEY = os.environ.get("EMERGENT_EMAIL_KEY", "")
@@ -103,17 +103,17 @@ async def send_email(*, to: str, subject: str, html: str) -> Optional[str]:
     return resp.json().get("id")
 
 
-async def company_recipient(company_id: str):
-    c = await db.companies.find_one({"id": company_id})
+async def company_recipient(access: TenantBusinessAccess, company_id: str):
+    c = await access.companies.find_one({"id": company_id})
     if not c:
         return None, ""
     return c.get("email"), c.get("name", "")
 
 
-async def items_html(items: list) -> str:
+async def items_html(access: TenantBusinessAccess, items: list) -> str:
     rows = ""
     for it in items:
-        p = await db.products.find_one({"id": it["productId"]})
+        p = await access.products.find_one({"id": it["productId"]})
         label = f"{p['brand']} {p['name']}" if p else it["productId"]
         unit = (p or {}).get("unit", "kg")
         rows += (

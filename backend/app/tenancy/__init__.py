@@ -10,6 +10,7 @@ from .domain import (
     TenantStatus,
 )
 from .persistence import TENANT_SCHEMA_VERSION, tenant_to_document
+from .mongo import MongoTenantDirectory
 from .resolver import (
     SingleTenantResolver,
     TenantDirectory,
@@ -21,6 +22,7 @@ from .resolver import (
 __all__ = [
     "SS_TENANT_ID",
     "SS_TENANT",
+    "MongoTenantDirectory",
     "SingleTenantResolver",
     "Tenant",
     "TenantContext",

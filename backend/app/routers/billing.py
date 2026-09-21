@@ -4,16 +4,17 @@ from typing import Annotated
 from datetime import datetime, timezone
 
 from ..core import api_router, db, strip_id, next_seq
-from ..deps import require_roles, visible_company_ids
+from ..deps import require_roles, tenant_business_access, visible_company_ids
+from ..tenant_access import TenantBusinessAccess
 
 
-async def _build_lines(items):
+async def _build_lines(access: TenantBusinessAccess, items):
     """Return (lineItems, net_total, tax_breakdown, tax_total, gross)."""
     lines = []
     net_total = 0.0
     tax_breakdown = {}
     for it in items:
-        p = await db.products.find_one({"id": it["productId"]})
+        p = await access.products.find_one({"id": it["productId"]})
         rate = int((p or {}).get("taxRate", 7))
         net = round(it["price"] * it["qty"], 2)
         tax = round(net * rate / 100, 2)
@@ -34,16 +35,20 @@ async def _build_lines(items):
 
 
 @api_router.post("/orders/{order_id}/invoice")
-async def create_invoice_for_order(order_id: str, user: Annotated[dict, Depends(require_roles("admin", "sales"))]):
+async def create_invoice_for_order(
+    order_id: str,
+    user: Annotated[dict, Depends(require_roles("admin", "sales"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
     o = await db.orders.find_one({"id": order_id})
     if not o:
         raise HTTPException(status_code=404, detail="Bestellung nicht gefunden")
-    ids = await visible_company_ids(user)
+    ids = await visible_company_ids(user, access)
     if o["companyId"] not in ids:
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
     if o.get("invoiceId"):
         raise HTTPException(status_code=400, detail="Für diese Bestellung existiert bereits eine Rechnung")
-    lines, net, breakdown, tax_total, gross = await _build_lines(o["items"])
+    lines, net, breakdown, tax_total, gross = await _build_lines(access, o["items"])
     now = datetime.now(timezone.utc)
     seq = await next_seq("invoice")
     inv_no = f"RE-{now.year}-{seq:04d}"
@@ -67,11 +72,14 @@ async def create_invoice_for_order(order_id: str, user: Annotated[dict, Depends(
 
 @api_router.get("/companies/{company_id}/collective-invoice")
 async def collective_invoice(company_id: str, year: int, month: int,
-                             user: Annotated[dict, Depends(require_roles("admin", "sales"))]):
-    ids = await visible_company_ids(user)
+                             user: Annotated[dict, Depends(require_roles("admin", "sales"))],
+                             access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)]):
+    company = await access.companies.find_one({"id": company_id})
+    if not company:
+        raise HTTPException(status_code=404, detail="Kunde nicht gefunden")
+    ids = await visible_company_ids(user, access)
     if company_id not in ids:
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
-    company = await db.companies.find_one({"id": company_id})
     orders = await db.orders.find({"companyId": company_id}).to_list(5000)
     picked = []
     all_items = []
@@ -82,7 +90,7 @@ async def collective_invoice(company_id: str, year: int, month: int,
         if dt.year == year and dt.month == month:
             picked.append({"id": o["id"], "date": dt.date().isoformat()})
             all_items.extend(o["items"])
-    lines, net, breakdown, tax_total, gross = await _build_lines(all_items)
+    lines, net, breakdown, tax_total, gross = await _build_lines(access, all_items)
     return {
         "company": strip_id(company) if company else None,
         "year": year,

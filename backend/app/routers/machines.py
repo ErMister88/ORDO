@@ -10,9 +10,10 @@ from fastapi import Depends, HTTPException
 from starlette.concurrency import run_in_threadpool
 
 from ..core import api_router, db, strip_id, next_seq, logger, audit
-from ..deps import require_roles, current_user, visible_company_ids
+from ..deps import current_user, require_roles, tenant_business_access, visible_company_ids
 from ..models import MachineIn, MachineRequestIn, MachineTermsIn, MachineRespondIn
 from ..emailer import send_email, email_shell
+from ..tenant_access import TenantBusinessAccess
 
 stripe.api_key = os.environ.get("STRIPE_API_KEY", "")
 APP_URL = (os.environ.get("APP_URL") or "https://ordo-connect.preview.emergentagent.com").rstrip("/")
@@ -53,17 +54,26 @@ async def delete_machine(machine_id: str, user: Annotated[dict, Depends(require_
 
 
 # ---------------- Requests / acquisition ----------------
-async def _customer_snapshot(user: dict) -> dict:
+async def _customer_snapshot(user: dict, access: TenantBusinessAccess) -> dict:
     company = None
-    if user.get("companyId"):
-        company = await db.companies.find_one({"id": user["companyId"]})
-    return {"userId": user["id"], "companyId": user.get("companyId"),
+    company_id = user.get("companyId")
+    if company_id is not None:
+        if not isinstance(company_id, str) or not company_id:
+            raise HTTPException(status_code=404, detail="Kunde nicht gefunden")
+        company = await access.companies.find_one({"id": company_id})
+        if not company:
+            raise HTTPException(status_code=404, detail="Kunde nicht gefunden")
+    return {"userId": user["id"], "companyId": company_id,
             "userName": user.get("name", ""), "email": user.get("email", ""),
             "companyName": company.get("name") if company else ""}
 
 
 @api_router.post("/machine-requests", status_code=201)
-async def create_machine_request(body: MachineRequestIn, user: Annotated[dict, Depends(current_user)]):
+async def create_machine_request(
+    body: MachineRequestIn,
+    user: Annotated[dict, Depends(current_user)],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
     if body.type not in TYPE_LABEL:
         raise HTTPException(status_code=400, detail="Ungültiger Erwerbstyp")
     m = await db.machines.find_one({"id": body.machineId})
@@ -76,7 +86,7 @@ async def create_machine_request(body: MachineRequestIn, user: Annotated[dict, D
     doc = {
         "id": rid, "machineId": m["id"], "machineName": m["name"], "machinePrice": float(m["price"]),
         "type": body.type, "termMonths": body.termMonths or 48, "message": body.message,
-        "customer": await _customer_snapshot(user),
+        "customer": await _customer_snapshot(user, access),
         "status": status, "paymentStatus": "Offen",
         "terms": None, "createdAt": now.isoformat(),
     }
@@ -110,7 +120,12 @@ async def list_machine_requests(user: Annotated[dict, Depends(current_user)]):
 
 
 @api_router.put("/machine-requests/{req_id}")
-async def set_machine_terms(req_id: str, body: MachineTermsIn, user: Annotated[dict, Depends(require_roles("admin", "sales"))]):
+async def set_machine_terms(
+    req_id: str,
+    body: MachineTermsIn,
+    user: Annotated[dict, Depends(require_roles("admin", "sales"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
     r = await db.machine_requests.find_one({"id": req_id})
     if not r:
         raise HTTPException(status_code=404, detail="Anfrage nicht gefunden")
@@ -131,14 +146,15 @@ async def set_machine_terms(req_id: str, body: MachineTermsIn, user: Annotated[d
 
     coffee_name = ""
     if body.productId:
-        p = await db.products.find_one({"id": body.productId})
-        if p:
-            coffee_name = f"{p.get('brand', '')} {p.get('name', '')}".strip()
-            # Never bind coffee below the product's absolute floor price.
-            floor = p.get("absoluteFloor")
-            if body.coffeePricePerKg is not None and floor is not None and body.coffeePricePerKg < floor:
-                raise HTTPException(status_code=400,
-                                    detail=f"Kaffeepreis darf {floor:.2f} €/kg nicht unterschreiten.")
+        p = await access.products.find_one({"id": body.productId})
+        if not p:
+            raise HTTPException(status_code=404, detail="Produkt nicht gefunden")
+        coffee_name = f"{p.get('brand', '')} {p.get('name', '')}".strip()
+        # Never bind coffee below the product's absolute floor price.
+        floor = p.get("absoluteFloor")
+        if body.coffeePricePerKg is not None and floor is not None and body.coffeePricePerKg < floor:
+            raise HTTPException(status_code=400,
+                                detail=f"Kaffeepreis darf {floor:.2f} €/kg nicht unterschreiten.")
 
     terms = {
         "downPayment": body.downPayment, "monthlyRate": body.monthlyRate,
@@ -261,7 +277,10 @@ async def respond_machine_offer(req_id: str, body: MachineRespondIn, user: Annot
 
 
 @api_router.get("/machines/leasing-contracts")
-async def leasing_contracts(user: Annotated[dict, Depends(require_roles("admin", "sales"))]):
+async def leasing_contracts(
+    user: Annotated[dict, Depends(require_roles("admin", "sales"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
     q = {"source": "machine_leasing"}
     if user["role"] != "admin":
         ids = await visible_company_ids(user)
@@ -269,8 +288,16 @@ async def leasing_contracts(user: Annotated[dict, Depends(require_roles("admin",
     rows = await db.contracts.find(q).sort("start", -1).to_list(1000)
     out = []
     for c in rows:
-        company = await db.companies.find_one({"id": c.get("companyId")}) if c.get("companyId") else None
-        prod = await db.products.find_one({"id": c.get("productId")}) if c.get("productId") else None
+        company = (
+            await access.companies.find_one({"id": c.get("companyId")})
+            if c.get("companyId")
+            else None
+        )
+        prod = (
+            await access.products.find_one({"id": c.get("productId")})
+            if c.get("productId")
+            else None
+        )
         d = strip_id(c)
         d["companyName"] = company.get("name") if company else ""
         d["productName"] = f"{prod.get('brand', '')} {prod.get('name', '')}".strip() if prod else ""

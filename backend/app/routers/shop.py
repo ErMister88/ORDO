@@ -10,9 +10,10 @@ from starlette.concurrency import run_in_threadpool
 
 from ..core import (api_router, db, strip_id, next_seq, logger, audit,
                     JWT_SECRET, JWT_ALGORITHM, create_token, hash_pw, verify_pw)
-from ..deps import require_roles, current_user
+from ..deps import current_user, public_tenant_business_access, require_roles
 from ..models import ShopSettingsIn, ShopOrderIn, ShopRegisterIn, ShopLoginIn, ShopStatusIn, ShopAddressIn
 from ..emailer import send_email, email_shell
+from ..tenant_access import TenantBusinessAccess
 from html import escape
 
 
@@ -39,8 +40,12 @@ async def _settings():
 
 
 @api_router.get("/shop/products")
-async def shop_products():
-    prods = await db.products.find({"active": True, "b2cPrice": {"$gt": 0}}).to_list(1000)
+async def shop_products(
+    access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
+):
+    prods = await access.products.find(
+        {"active": True, "b2cPrice": {"$gt": 0}}
+    ).to_list(1000)
     return [
         {
             "id": p["id"], "brand": p["brand"], "name": p["name"], "unit": p.get("unit", "kg"),
@@ -67,7 +72,11 @@ async def shop_settings_put(body: ShopSettingsIn, user: Annotated[dict, Depends(
 
 
 @api_router.post("/shop/orders")
-async def create_shop_order(body: ShopOrderIn, uid: Annotated[Optional[str], Depends(_optional_uid)] = None):
+async def create_shop_order(
+    body: ShopOrderIn,
+    access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
+    uid: Annotated[Optional[str], Depends(_optional_uid)] = None,
+):
     if not body.items:
         raise HTTPException(status_code=400, detail="Warenkorb ist leer")
     if not body.customer.name.strip() or "@" not in body.customer.email:
@@ -77,7 +86,7 @@ async def create_shop_order(body: ShopOrderIn, uid: Annotated[Optional[str], Dep
     subtotal = 0.0
     tax_map: dict = {}
     for it in body.items:
-        p = await db.products.find_one({"id": it.productId, "active": True})
+        p = await access.products.find_one({"id": it.productId, "active": True})
         if not p or not p.get("b2cPrice"):
             raise HTTPException(status_code=400, detail="Ein Produkt ist nicht mehr verfügbar")
         price = float(p["b2cPrice"])

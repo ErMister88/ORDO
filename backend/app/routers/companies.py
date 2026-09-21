@@ -4,14 +4,18 @@ from typing import Annotated
 from datetime import datetime, timezone
 
 from ..core import api_router, db, strip_id, audit
-from ..deps import current_user, require_roles, visible_company_ids
+from ..deps import current_user, require_roles, tenant_business_access, visible_company_ids
 from ..models import CompanyUpdateIn
+from ..tenant_access import TenantBusinessAccess
 
 
 @api_router.get("/companies")
-async def get_companies(user: Annotated[dict, Depends(require_roles("admin", "sales"))]):
-    ids = await visible_company_ids(user)
-    companies = await db.companies.find({"id": {"$in": ids}}).to_list(1000)
+async def get_companies(
+    user: Annotated[dict, Depends(require_roles("admin", "sales"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    ids = await visible_company_ids(user, access)
+    companies = await access.companies.find({"id": {"$in": ids}}).to_list(1000)
     companies = [strip_id(c) for c in companies]
     now = datetime.now(timezone.utc)
     for c in companies:
@@ -30,31 +34,46 @@ async def get_companies(user: Annotated[dict, Depends(require_roles("admin", "sa
 
 
 @api_router.get("/companies/{company_id}")
-async def get_company(company_id: str, user: Annotated[dict, Depends(current_user)]):
-    ids = await visible_company_ids(user)
-    if company_id not in ids:
-        raise HTTPException(status_code=403, detail="Keine Berechtigung")
-    c = await db.companies.find_one({"id": company_id})
+async def get_company(
+    company_id: str,
+    user: Annotated[dict, Depends(current_user)],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    c = await access.companies.find_one({"id": company_id})
     if not c:
         raise HTTPException(status_code=404, detail="Kunde nicht gefunden")
+    ids = await visible_company_ids(user, access)
+    if company_id not in ids:
+        raise HTTPException(status_code=403, detail="Keine Berechtigung")
     return strip_id(c)
 
 
 @api_router.put("/companies/{company_id}")
-async def update_company(company_id: str, body: CompanyUpdateIn, user: Annotated[dict, Depends(require_roles("admin"))]):
-    c = await db.companies.find_one({"id": company_id})
+async def update_company(
+    company_id: str,
+    body: CompanyUpdateIn,
+    user: Annotated[dict, Depends(require_roles("admin"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    c = await access.companies.find_one({"id": company_id})
     if not c:
         raise HTTPException(status_code=404, detail="Kunde nicht gefunden")
-    await db.companies.update_one({"id": company_id}, {"$set": body.model_dump()})
-    updated = await db.companies.find_one({"id": company_id})
+    await access.companies.update_one({"id": company_id}, {"$set": body.model_dump()})
+    updated = await access.companies.find_one({"id": company_id})
     await audit(user, "company.update", company_id, {"name": body.name})
     return strip_id(updated)
 
 
 @api_router.get("/companies/{company_id}/prices")
-async def get_company_prices(company_id: str, user: Annotated[dict, Depends(current_user)]):
-    ids = await visible_company_ids(user)
+async def get_company_prices(
+    company_id: str,
+    user: Annotated[dict, Depends(current_user)],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    if not await access.companies.find_one({"id": company_id}):
+        raise HTTPException(status_code=404, detail="Kunde nicht gefunden")
+    ids = await visible_company_ids(user, access)
     if company_id not in ids:
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
-    prices = await db.customer_prices.find({"companyId": company_id}).to_list(1000)
+    prices = await access.customer_prices.find({"companyId": company_id}).to_list(1000)
     return [strip_id(p) for p in prices]

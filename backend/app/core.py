@@ -82,6 +82,7 @@ def strip_id(doc: dict) -> dict:
     doc.pop("_id", None)
     doc.pop("_demoSeed", None)
     doc.pop("_demoSeedFingerprint", None)
+    doc.pop("tenantId", None)
     return doc
 
 
