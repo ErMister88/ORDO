@@ -34,6 +34,9 @@ from scripts.migrate import production_approval_for_target
 import scripts.migrate as migrate_script
 
 
+BASELINE_ONLY = (get_migrations()[0],)
+
+
 def isolated_database(name: str = "default"):
     database_name = f"ordo_test_migrations_{name}"
     assert database_name != "ordo_staging"
@@ -74,7 +77,7 @@ def test_empty_isolated_database_preview_is_read_only():
 def test_baseline_application_records_bson_dates_and_only_allowed_index():
     database = isolated_database("baseline")
 
-    report = runner(database).run().as_dict()
+    report = runner(database, migrations=BASELINE_ONLY).run().as_dict()
 
     record = database[MIGRATION_COLLECTION].find_one({"version": 1})
     assert report["executedMigrations"][0]["version"] == 1
@@ -108,8 +111,8 @@ def test_lock_and_migration_metadata_use_majority_concerns():
 
 def test_second_run_skips_completed_migration():
     database = isolated_database("repeat")
-    first = runner(database).run().as_dict()
-    second = runner(database).run().as_dict()
+    first = runner(database, migrations=BASELINE_ONLY).run().as_dict()
+    second = runner(database, migrations=BASELINE_ONLY).run().as_dict()
 
     assert len(first["executedMigrations"]) == 1
     assert second["executedMigrations"] == []
@@ -144,11 +147,11 @@ def test_migration_result_cannot_override_framework_completion_fields():
 
 def test_dry_run_after_application_does_not_write():
     database = isolated_database("dry_applied")
-    runner(database).run()
+    runner(database, migrations=BASELINE_ONLY).run()
     before = deepcopy(database[MIGRATION_COLLECTION].find_one({"version": 1}))
     lock_before = deepcopy(database[LOCK_COLLECTION].find_one({"_id": LOCK_ID}))
 
-    report = runner(database).run(dry_run=True).as_dict()
+    report = runner(database, migrations=BASELINE_ONLY).run(dry_run=True).as_dict()
 
     assert report["plannedMigrations"] == []
     assert report["appliedMigrations"][0]["version"] == 1
@@ -158,7 +161,7 @@ def test_dry_run_after_application_does_not_write():
 
 def test_checksum_mismatch_is_rejected_without_reapplying():
     database = isolated_database("checksum")
-    runner(database).run()
+    runner(database, migrations=BASELINE_ONLY).run()
     original = get_migrations()[0]
     changed = Migration(
         version=original.version,
@@ -326,7 +329,7 @@ def test_expired_lease_cannot_be_revived_by_a_late_heartbeat():
 
 def test_production_guard_blocks_writes_but_allows_read_only_preview():
     database = isolated_database("production_guard")
-    production_runner = runner(database, app_env="production")
+    production_runner = runner(database, app_env="production", migrations=BASELINE_ONLY)
 
     preview = production_runner.run(dry_run=True).as_dict()
     assert preview["dryRun"] is True
@@ -340,6 +343,7 @@ def test_production_guard_blocks_writes_but_allows_read_only_preview():
         database,
         app_env="production",
         production_approval="production:another_database",
+        migrations=BASELINE_ONLY,
     )
     with pytest.raises(ProductionGuardError):
         wrong_target.run()
@@ -348,6 +352,7 @@ def test_production_guard_blocks_writes_but_allows_read_only_preview():
         database,
         app_env=" Production ",
         production_approval=f"production:{database.name}",
+        migrations=BASELINE_ONLY,
     )
     approved.run()
     assert database[MIGRATION_COLLECTION].find_one({"version": 1})["status"] == "completed"
@@ -367,7 +372,7 @@ def test_baseline_does_not_change_business_documents_or_business_indexes():
         for name in ("companies", "orders")
     }
 
-    runner(database).run()
+    runner(database, migrations=BASELINE_ONLY).run()
 
     for name in ("companies", "orders"):
         assert list(database[name].find({}).sort("_id", 1)) == documents_before[name]

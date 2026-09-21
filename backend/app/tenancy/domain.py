@@ -47,6 +47,18 @@ class Tenant:
             raise ValueError("Tenant legal_name must be null or a non-empty string")
 
 
+SS_TENANT = Tenant(
+    tenant_id=SS_TENANT_ID,
+    slug="ss-coffee-and-more",
+    display_name="S&S coffee and more",
+    legal_name=None,
+    status=TenantStatus.ACTIVE,
+    default_currency="EUR",
+    default_locale="de-DE",
+    timezone="Europe/Berlin",
+)
+
+
 @dataclass(frozen=True, slots=True)
 class TenantContext:
     """Server-resolved tenant scope carried through one request or job.
