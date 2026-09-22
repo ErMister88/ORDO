@@ -113,9 +113,13 @@ async def company_recipient(access: TenantBusinessAccess, company_id: str):
 async def items_html(access: TenantBusinessAccess, items: list) -> str:
     rows = ""
     for it in items:
-        p = await access.products.find_one({"id": it["productId"]})
-        label = f"{p['brand']} {p['name']}" if p else it["productId"]
-        unit = (p or {}).get("unit", "kg")
+        if it.get("snapshotVersion") == 1:
+            label = it.get("productName") or it["productId"]
+            unit = it.get("unit", "kg")
+        else:
+            p = await access.products.find_one({"id": it["productId"]})
+            label = f"{p['brand']} {p['name']}" if p else it["productId"]
+            unit = (p or {}).get("unit", "kg")
         rows += (
             "<tr>"
             f"<td style='padding:6px 8px;border-bottom:1px solid #E6E8EF'>{escape(label)}</td>"

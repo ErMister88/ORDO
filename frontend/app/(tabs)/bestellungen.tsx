@@ -206,7 +206,9 @@ export default function Bestellungen() {
               <EmptyState title="Keine Bestellungen" subtitle="Keine Treffer für diese Filter" />
             ) : (
               list.map((o: any) => {
-                const total = o.items.reduce((a: number, i: any) => a + i.price * i.qty, 0);
+                const total = o.netTotalMinor != null
+                  ? o.netTotalMinor / 100
+                  : o.items.reduce((a: number, i: any) => a + i.price * i.qty, 0);
                 return (
                   <Pressable key={o.id} testID={`order-${o.id}`} onPress={() => router.push(`/bestellung/${o.id}`)}>
                     <Card>

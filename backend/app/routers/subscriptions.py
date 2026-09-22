@@ -8,6 +8,8 @@ from ..core import api_router, strip_id, next_seq
 from ..deps import require_roles, tenant_business_access, visible_company_ids
 from ..models import SubscriptionIn
 from ..tenant_access import TenantBusinessAccess
+from ..money import to_minor
+from ..snapshots import clone_snapshot_items, items_total_minor, product_item_snapshot, redact_internal_snapshot_fields
 
 
 async def _references_are_visible(access: TenantBusinessAccess, subscription: dict) -> bool:
@@ -28,7 +30,7 @@ async def list_subscriptions(
 ):
     ids = await visible_company_ids(user, access)
     subs = await access.subscriptions.find({"companyId": {"$in": ids}}).to_list(1000)
-    return [strip_id(s) for s in subs]
+    return [strip_id(redact_internal_snapshot_fields(s)) for s in subs]
 
 
 @api_router.post("/subscriptions")
@@ -41,13 +43,32 @@ async def create_subscription(
     if body.companyId not in ids:
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
     now = datetime.now(timezone.utc)
+    currency = access.context.default_currency
+    snapshots = []
+    for item in body.items:
+        product = await access.products.find_one({"id": item.productId})
+        if not product:
+            raise HTTPException(status_code=404, detail="Abo-Referenz nicht gefunden")
+        snapshots.append(product_item_snapshot(
+            product,
+            quantity=item.qty,
+            unit_price_minor=to_minor(item.price),
+            currency=currency,
+            price_source="subscription_agreed",
+        ))
     sub = {
         "id": "sub-" + secrets.token_hex(5),
         "companyId": body.companyId,
-        "items": [it.model_dump() for it in body.items],
+        "items": snapshots,
+        "currency": currency,
+        "snapshotVersion": 1,
         "intervalDays": body.intervalDays,
         "active": True,
         "createdBy": user["id"],
+        "salesAttribution": {
+            "actorUserId": user["id"], "actorName": user.get("name", ""),
+            "actorRole": user.get("role"), "membershipId": access.context.membership_id,
+        },
         "createdAt": now.isoformat(),
         "nextRun": (now + timedelta(days=body.intervalDays)).date().isoformat(),
         "lastRun": None,
@@ -55,7 +76,7 @@ async def create_subscription(
     if not await _references_are_visible(access, sub):
         raise HTTPException(status_code=404, detail="Abo-Referenz nicht gefunden")
     await access.subscriptions.insert_one(sub)
-    return strip_id(sub)
+    return strip_id(redact_internal_snapshot_fields(sub))
 
 
 @api_router.put("/subscriptions/{sub_id}/toggle")
@@ -104,6 +125,13 @@ async def run_due_subscriptions(
             raise HTTPException(status_code=404, detail="Abo-Referenz nicht gefunden")
     created = []
     for s in due:
+        currency = s.get("currency")
+        if not isinstance(currency, str):
+            raise HTTPException(status_code=409, detail="Abo besitzt keinen verlässlichen historischen Snapshot")
+        try:
+            items = clone_snapshot_items(s["items"], currency=currency)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail="Abo besitzt keinen verlässlichen historischen Snapshot") from exc
         seq = await next_seq("order")
         order_no = f"B-{now.year}-{seq:05d}"
         order = {
@@ -111,7 +139,15 @@ async def run_due_subscriptions(
             "companyId": s["companyId"],
             "createdBy": user["id"],
             "status": "Neu",
-            "items": s["items"],
+            "items": items,
+            "currency": currency,
+            "netTotalMinor": items_total_minor(items, currency=currency),
+            "snapshotVersion": 1,
+            "salesAttribution": {
+                **(s.get("salesAttribution") or {}),
+                "executionActorUserId": user["id"],
+                "subscriptionCreatedBy": s.get("createdBy"),
+            },
             "fromSubscription": s["id"],
             "createdAt": now.isoformat(),
         }

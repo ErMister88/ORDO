@@ -17,9 +17,11 @@ import bcrypt
 from pymongo.errors import DuplicateKeyError
 
 from .tenancy import SS_TENANT, SS_TENANT_ID, tenant_to_document
+from .money import to_minor
+from .snapshots import items_total_minor, product_item_snapshot
 
 
-DEMO_SEED_VERSION = "ordo-demo-v4"
+DEMO_SEED_VERSION = "ordo-demo-v5"
 DEMO_FINGERPRINT_FIELD = "_demoSeedFingerprint"
 DEMO_REFERENCE_TIME = datetime(2026, 9, 18, 12, 0, tzinfo=timezone.utc)
 PASSWORD_KEYS = ("admin", "sales", "customer")
@@ -329,8 +331,58 @@ def build_demo_manifest(now: datetime | None = None) -> dict[str, list[dict]]:
         "machines": machines,
         "counters": counters,
     }
+    _add_money_snapshots(manifest)
     _validate_manifest(manifest)
     return manifest
+
+
+def _add_money_snapshots(manifest: dict[str, list[dict]]) -> None:
+    """Keep explicit demo seeding representative of current production writes."""
+    currency = SS_TENANT.default_currency
+    products = {product["id"]: product for product in manifest["products"]}
+    companies = {company["id"]: company for company in manifest["companies"]}
+    for product in products.values():
+        product["currency"] = currency
+        for field in ("standardPrice", "salesFloor", "absoluteFloor", "cost"):
+            product[f"{field}Minor"] = to_minor(product[field])
+        for tier in product.get("discountTiers", []):
+            tier.update({"priceMinor": to_minor(tier["price"]), "currency": currency})
+    for customer_price in manifest["customer_prices"]:
+        customer_price.update({"priceMinor": to_minor(customer_price["price"]), "currency": currency})
+    for collection in ("offers", "orders"):
+        for document in manifest[collection]:
+            snapshots = [
+                product_item_snapshot(
+                    products[item["productId"]], quantity=item["qty"],
+                    unit_price_minor=to_minor(item["price"]), currency=currency,
+                    price_source="demo_snapshot",
+                )
+                for item in document["items"]
+            ]
+            company = companies[document["companyId"]]
+            document.update({
+                "items": snapshots,
+                "currency": currency,
+                "netTotalMinor": items_total_minor(snapshots, currency=currency),
+                "snapshotVersion": 1,
+                "companySnapshot": {
+                    "companyId": company["id"], "name": company.get("name", ""),
+                    "email": company.get("email", ""), "vatId": company.get("vatId", ""),
+                    "city": company.get("city", ""),
+                },
+                "salesAttribution": {"actorUserId": document["createdBy"]},
+            })
+    for contract in manifest["contracts"]:
+        contract.update({
+            "currency": currency,
+            "priceMinor": to_minor(contract["price"]),
+            "machineRateMinor": to_minor(contract["machineRate"]),
+            "serviceRateMinor": to_minor(contract["serviceRate"]),
+        })
+    for invoice in manifest["invoices"]:
+        invoice.update({"currency": currency, "amountMinor": to_minor(invoice["amount"])})
+    for machine in manifest["machines"]:
+        machine.update({"currency": currency, "priceMinor": to_minor(machine["price"])})
 
 
 def _strict_equal(actual, expected) -> bool:

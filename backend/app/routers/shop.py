@@ -1,11 +1,12 @@
 """B2C shop: public catalog, settings, guest orders, Stripe checkout."""
 import os
 import secrets
+import hashlib
 import stripe
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, Header, HTTPException, Request
 from pymongo.errors import DuplicateKeyError
 from typing import Annotated, Optional
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from starlette.concurrency import run_in_threadpool
 
 from ..core import (api_router, db, strip_id, next_seq, logger,
@@ -30,6 +31,8 @@ from ..deps import (
 from ..models import ShopSettingsIn, ShopOrderIn, ShopRegisterIn, ShopLoginIn, ShopStatusIn, ShopAddressIn
 from ..emailer import send_email, email_shell
 from ..tenant_access import TenantBusinessAccess
+from ..money import MoneyError, amount_minor, currency_code, from_minor, included_tax_minor, percentage_minor, to_minor
+from ..snapshots import product_item_snapshot, redact_internal_snapshot_fields
 from html import escape
 
 
@@ -60,6 +63,19 @@ SHOP_SETTINGS_DEFAULTS = {
 }
 SHOP_REGISTER_WINDOW_SECONDS = 60 * 60
 SHOP_REGISTER_IP_LIMIT = 20
+ORDER_TOKEN_TTL_DAYS = 30
+
+
+def _order_token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _public_shop_order(document: dict) -> dict:
+    public = strip_id(redact_internal_snapshot_fields(document))
+    public.pop("accessTokenHash", None)
+    public.pop("accessTokenExpiresAt", None)
+    public.pop("token", None)
+    return public
 
 
 async def _settings(access: TenantBusinessAccess):
@@ -78,7 +94,10 @@ async def shop_products(
         {
             "id": p["id"], "brand": p["brand"], "name": p["name"], "unit": p.get("unit", "kg"),
             "imageUrl": p.get("imageUrl", ""), "description": p.get("description", ""),
-            "b2cPrice": p["b2cPrice"], "taxRate": p.get("taxRate", 7), "stock": p.get("stock"),
+            "b2cPrice": p["b2cPrice"],
+            "b2cPriceMinor": amount_minor(p, "b2cPrice", expected_currency=access.context.default_currency),
+            "currency": access.context.default_currency,
+            "taxRate": p.get("taxRate", 7), "stock": p.get("stock"),
         }
         for p in prods
     ]
@@ -90,6 +109,9 @@ async def shop_settings_get(
 ):
     s = await _settings(access)
     return {"freeShippingThreshold": s["freeShippingThreshold"], "shippingFee": s["shippingFee"],
+            "freeShippingThresholdMinor": amount_minor(s, "freeShippingThreshold", expected_currency=access.context.default_currency),
+            "shippingFeeMinor": amount_minor(s, "shippingFee", expected_currency=access.context.default_currency),
+            "currency": access.context.default_currency,
             "newsletterDiscountPercent": int(s.get("newsletterDiscountPercent", 10)),
             "newsletterDiscountEnabled": bool(s.get("newsletterDiscountEnabled", True))}
 
@@ -100,9 +122,16 @@ async def shop_settings_put(
     user: Annotated[dict, Depends(require_roles("admin"))],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
 ):
+    currency = access.context.default_currency
+    payload = {
+        **body.model_dump(),
+        "currency": currency,
+        "freeShippingThresholdMinor": to_minor(body.freeShippingThreshold),
+        "shippingFeeMinor": to_minor(body.shippingFee),
+    }
     await access.settings.update_one(
         {"key": SHOP_SETTINGS_KEY},
-        {"$set": body.model_dump(), "$setOnInsert": {"key": SHOP_SETTINGS_KEY}},
+        {"$set": payload, "$setOnInsert": {"key": SHOP_SETTINGS_KEY}},
         upsert=True,
     )
     await tenant_audit(access, user, "shop.settings", "shop", body.model_dump())
@@ -120,27 +149,29 @@ async def create_shop_order(
     if not body.customer.name.strip() or "@" not in body.customer.email:
         raise HTTPException(status_code=400, detail="Name und gültige E-Mail erforderlich")
     s = await _settings(access)
+    currency = access.context.default_currency
     lines = []
-    subtotal = 0.0
-    tax_map: dict = {}
+    subtotal_minor = 0
+    tax_map_minor: dict[str, int] = {}
     for it in body.items:
         p = await access.products.find_one({"id": it.productId, "active": True})
         if not p or not p.get("b2cPrice"):
             raise HTTPException(status_code=400, detail="Ein Produkt ist nicht mehr verfügbar")
-        price = float(p["b2cPrice"])
+        price_minor = amount_minor(p, "b2cPrice", expected_currency=currency)
         qty = float(it.qty)
-        if qty <= 0:
-            continue
         rate = int(p.get("taxRate", 7))
-        gross = price * qty
-        vat = gross - gross / (1 + rate / 100)
-        tax_map[str(rate)] = round(tax_map.get(str(rate), 0.0) + vat, 2)
-        subtotal += gross
-        lines.append({"productId": p["id"], "name": f"{p['brand']} {p['name']}", "qty": qty, "price": price, "taxRate": rate})
+        snapshot = product_item_snapshot(
+            p, quantity=qty, unit_price_minor=price_minor, currency=currency,
+            price_source="b2c_standard",
+        )
+        snapshot["name"] = snapshot["productName"]
+        snapshot["taxMinor"] = included_tax_minor(snapshot["lineTotalMinor"], rate)
+        tax_map_minor[str(rate)] = tax_map_minor.get(str(rate), 0) + snapshot["taxMinor"]
+        subtotal_minor += snapshot["lineTotalMinor"]
+        lines.append(snapshot)
     if not lines:
         raise HTTPException(status_code=400, detail="Warenkorb ist leer")
-    subtotal = round(subtotal, 2)
-    gross_subtotal = subtotal
+    gross_subtotal_minor = subtotal_minor
     # Newsletter discount applies to B2C customers only (guests or shopusers),
     # never to B2B accounts (admin/sales/customer) who have their own pricing.
     is_b2c = True
@@ -150,26 +181,40 @@ async def create_shop_order(
             is_b2c = False
     from .newsletter import resolve_discount
     percent = await resolve_discount(body.promoCode, access) if is_b2c else 0
-    discount = 0.0
+    discount_minor = 0
     if percent > 0:
-        factor = 1 - percent / 100
-        discount = round(subtotal * percent / 100, 2)
-        subtotal = round(subtotal - discount, 2)
-        tax_map = {r: round(v * factor, 2) for r, v in tax_map.items()}
-    shipping = 0.0 if subtotal >= s["freeShippingThreshold"] else float(s["shippingFee"])
-    total = round(subtotal + shipping, 2)
-    tax_total = round(sum(tax_map.values()), 2)
+        discount_minor = percentage_minor(subtotal_minor, percent)
+        subtotal_minor -= discount_minor
+        tax_map_minor = {r: v - percentage_minor(v, percent) for r, v in tax_map_minor.items()}
+    threshold_minor = amount_minor(s, "freeShippingThreshold", expected_currency=currency)
+    shipping_minor = 0 if subtotal_minor >= threshold_minor else amount_minor(s, "shippingFee", expected_currency=currency)
+    total_minor = subtotal_minor + shipping_minor
+    tax_total_minor = sum(tax_map_minor.values())
+    subtotal = from_minor(subtotal_minor)
+    gross_subtotal = from_minor(gross_subtotal_minor)
+    discount = from_minor(discount_minor)
+    shipping = from_minor(shipping_minor)
+    total = from_minor(total_minor)
+    tax_map = {rate: from_minor(value) for rate, value in tax_map_minor.items()}
+    tax_total = from_minor(tax_total_minor)
     now = datetime.now(timezone.utc)
     seq = await next_seq("shop")
     oid = f"S-{now.year}-{seq:05d}"
+    order_token = secrets.token_urlsafe(32)
     doc = {
         "id": oid, "items": lines, "customer": body.customer.model_dump(),
         "subtotal": subtotal, "shipping": shipping, "total": total,
+        "subtotalMinor": subtotal_minor, "shippingMinor": shipping_minor, "totalMinor": total_minor,
+        "grossSubtotalMinor": gross_subtotal_minor,
         "discount": discount, "promoCode": (body.promoCode or "").strip().upper() or None,
+        "discountMinor": discount_minor,
         "discountPercent": percent,
         "taxBreakdown": tax_map, "taxTotal": tax_total,
+        "taxBreakdownMinor": tax_map_minor, "taxTotalMinor": tax_total_minor,
+        "currency": currency, "snapshotVersion": 1,
         "status": "Neu", "paymentStatus": "Offen", "userId": uid,
-        "token": secrets.token_urlsafe(16),
+        "accessTokenHash": _order_token_hash(order_token),
+        "accessTokenExpiresAt": (now + timedelta(days=ORDER_TOKEN_TTL_DAYS)).isoformat(),
         "statusHistory": [{"status": "Neu", "at": now.isoformat()}],
         "createdAt": now.isoformat(),
     }
@@ -204,7 +249,9 @@ async def create_shop_order(
             await send_email(to=email, subject=f"Bestellbestätigung {oid}", html=html)
     except Exception as e:
         logger.warning(f"E-Mail (Bestellbestätigung Shop) fehlgeschlagen: {e}")
-    return {"id": oid, "token": doc["token"], "subtotal": subtotal, "shipping": shipping, "total": total,
+    return {"id": oid, "token": order_token, "subtotal": subtotal, "shipping": shipping, "total": total,
+            "subtotalMinor": subtotal_minor, "shippingMinor": shipping_minor, "totalMinor": total_minor,
+            "currency": currency,
             "discount": discount, "discountPercent": percent,
             "taxBreakdown": tax_map, "taxTotal": tax_total}
 
@@ -213,16 +260,27 @@ def _authorize_shop_order(o: dict, token: Optional[str], uid: Optional[str]) -> 
     """Owner (registered shop user) or a valid per-order token may access it."""
     if o.get("userId") and uid and o["userId"] == uid:
         return
-    if o.get("token") and token and secrets.compare_digest(str(token), str(o["token"])):
-        return
-    raise HTTPException(status_code=403, detail="Kein Zugriff auf diese Bestellung")
+    token_hash = o.get("accessTokenHash")
+    expires_at = o.get("accessTokenExpiresAt")
+    if isinstance(token_hash, str) and token and isinstance(expires_at, str):
+        try:
+            expires = datetime.fromisoformat(expires_at)
+            if expires.tzinfo is None:
+                raise ValueError
+        except ValueError:
+            expires = None
+        if expires is not None and expires > datetime.now(timezone.utc) and secrets.compare_digest(
+            _order_token_hash(token), token_hash
+        ):
+            return
+    raise HTTPException(status_code=404, detail="Bestellung nicht gefunden")
 
 
 @api_router.post("/shop/orders/{order_id}/checkout")
 async def shop_checkout(
     order_id: str,
     access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
-    token: Optional[str] = None,
+    token: Annotated[Optional[str], Header(alias="X-Order-Token")] = None,
     uid: Annotated[Optional[str], Depends(optional_shop_actor_id)] = None,
 ):
     o = await access.shop_orders.find_one({"id": order_id})
@@ -232,16 +290,21 @@ async def shop_checkout(
     if o["paymentStatus"] == "Bezahlt":
         raise HTTPException(status_code=409, detail="Bereits bezahlt")
     try:
+        currency = currency_code(o.get("currency", "EUR"))
+        checkout_total_minor = amount_minor(o, "total", expected_currency=currency)
+    except MoneyError as exc:
+        raise HTTPException(status_code=409, detail="Bestellung besitzt keinen gültigen Zahlungsbetrag") from exc
+    try:
         session = await run_in_threadpool(
             lambda: stripe.checkout.Session.create(
                 mode="payment",
-                currency="eur",
+                currency=currency.lower(),
                 locale="de",
                 customer_email=(o.get("customer") or {}).get("email") or None,
                 line_items=[{
                     "price_data": {
-                        "currency": "eur",
-                        "unit_amount": round(o["total"] * 100),
+                        "currency": currency.lower(),
+                        "unit_amount": checkout_total_minor,
                         "product_data": {"name": f"Bestellung {order_id}"},
                     },
                     "quantity": 1,
@@ -262,7 +325,7 @@ async def shop_checkout(
 async def shop_payment_status(
     order_id: str,
     access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
-    token: Optional[str] = None,
+    token: Annotated[Optional[str], Header(alias="X-Order-Token")] = None,
     uid: Annotated[Optional[str], Depends(optional_shop_actor_id)] = None,
 ):
     o = await access.shop_orders.find_one({"id": order_id})
@@ -301,7 +364,7 @@ async def list_shop_orders(
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
 ):
     rows = await access.shop_orders.find({}).sort("createdAt", -1).to_list(1000)
-    return [strip_id(r) for r in rows]
+    return [_public_shop_order(r) for r in rows]
 
 
 SHOP_STATUSES = ["Neu", "Bestätigt", "In Bearbeitung", "Versendet", "Abgeschlossen", "Storniert"]
@@ -390,7 +453,7 @@ async def update_shop_order_status(
             logger.warning(f"Status-E-Mail fehlgeschlagen: {e}")
 
     updated = await access.shop_orders.find_one({"id": order_id})
-    return strip_id(updated)
+    return _public_shop_order(updated)
 
 
 def _shop_user_public(u: dict) -> dict:
@@ -485,4 +548,4 @@ async def shop_my_orders(
     access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
 ):
     rows = await access.shop_orders.find({"userId": user["id"]}).sort("createdAt", -1).to_list(1000)
-    return [strip_id(r) for r in rows]
+    return [_public_shop_order(r) for r in rows]

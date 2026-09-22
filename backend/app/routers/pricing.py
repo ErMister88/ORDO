@@ -7,6 +7,7 @@ from ..core import api_router, strip_id
 from ..audit_service import tenant_audit
 from ..deps import require_roles, tenant_business_access, visible_company_ids
 from ..models import CustomerPriceIn
+from ..money import amount_minor, from_minor, to_minor
 from ..tenant_access import TenantBusinessAccess
 
 
@@ -23,20 +24,26 @@ async def upsert_customer_price(
     existing = await access.customer_prices.find_one(
         {"companyId": body.companyId, "productId": body.productId}
     )
-    old_price = existing["price"] if existing else None
-    if old_price != body.price:
+    currency = access.context.default_currency
+    new_minor = to_minor(body.price)
+    old_minor = amount_minor(existing, "price", expected_currency=currency) if existing else None
+    old_price = from_minor(old_minor) if old_minor is not None else None
+    if old_minor != new_minor:
         await access.price_history.insert_one({
             "companyId": body.companyId,
             "productId": body.productId,
             "oldPrice": old_price,
-            "newPrice": body.price,
+            "oldPriceMinor": old_minor,
+            "newPrice": from_minor(new_minor),
+            "newPriceMinor": new_minor,
+            "currency": currency,
             "changedBy": user["id"],
             "changedByName": user.get("name", ""),
             "changedAt": datetime.now(timezone.utc).isoformat(),
         })
     await access.customer_prices.update_one(
         {"companyId": body.companyId, "productId": body.productId},
-        {"$set": {"price": body.price}},
+        {"$set": {"price": from_minor(new_minor), "priceMinor": new_minor, "currency": currency}},
         upsert=True,
     )
     await tenant_audit(
@@ -44,9 +51,9 @@ async def upsert_customer_price(
         user,
         "price.set",
         body.companyId,
-        {"productId": body.productId, "price": body.price},
+        {"productId": body.productId, "price": from_minor(new_minor), "priceMinor": new_minor, "currency": currency},
     )
-    return {"ok": True, **body.model_dump()}
+    return {"ok": True, **body.model_dump(), "price": from_minor(new_minor), "priceMinor": new_minor, "currency": currency}
 
 
 @api_router.get("/companies/{company_id}/price-history")

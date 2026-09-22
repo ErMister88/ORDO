@@ -9,6 +9,7 @@ from ..core import api_router, logger
 from ..deps import current_user, tenant_business_access, visible_company_ids
 from ..tenant_access import TenantBusinessAccess
 from .invoices import invoice_references_visible
+from ..money import MoneyError, amount_minor, currency_code
 
 stripe.api_key = os.environ.get("STRIPE_API_KEY", "")
 APP_URL = (os.environ.get("APP_URL") or "https://ordo-connect.preview.emergentagent.com").rstrip("/")
@@ -30,18 +31,22 @@ async def create_checkout(
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
     if inv.get("status") == "Bezahlt":
         raise HTTPException(status_code=409, detail="Rechnung ist bereits bezahlt")
-    amount_cents = int(round(float(inv["amount"]) * 100))
+    try:
+        currency = currency_code(inv.get("currency") or access.context.default_currency)
+        amount_cents = amount_minor(inv, "amount", expected_currency=currency)
+    except MoneyError as exc:
+        raise HTTPException(status_code=409, detail="Rechnung besitzt keinen gültigen Zahlungsbetrag") from exc
     if amount_cents <= 0:
         raise HTTPException(status_code=400, detail="Ungültiger Rechnungsbetrag")
 
     def _create():
         return stripe.checkout.Session.create(
             mode="payment",
-            currency="eur",
+            currency=currency.lower(),
             locale="de",
             line_items=[{
                 "price_data": {
-                    "currency": "eur",
+                    "currency": currency.lower(),
                     "unit_amount": amount_cents,
                     "product_data": {"name": f"Rechnung {invoice_id}"},
                 },

@@ -44,19 +44,19 @@ async function authContext(): Promise<{
   };
 }
 
-export async function apiGet<T = any>(path: string): Promise<T> {
+export async function apiGet<T = any>(path: string, extraHeaders: Record<string, string> = {}): Promise<T> {
   const { headers, token } = await authContext();
-  const res = await fetch(`${API}/api${path}`, { headers });
+  const res = await fetch(`${API}/api${path}`, { headers: { ...headers, ...extraHeaders } });
   await handleAuthFailure(res, token);
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `Fehler ${res.status}`);
   return res.json();
 }
 
-export async function apiPost<T = any>(path: string, body?: any): Promise<T> {
+export async function apiPost<T = any>(path: string, body?: any, extraHeaders: Record<string, string> = {}): Promise<T> {
   const { headers, token } = await authContext();
   const res = await fetch(`${API}/api${path}`, {
     method: "POST",
-    headers: { ...headers, "Content-Type": "application/json" },
+    headers: { ...headers, ...extraHeaders, "Content-Type": "application/json" },
     body: JSON.stringify(body ?? {}),
   });
   await handleAuthFailure(res, token);

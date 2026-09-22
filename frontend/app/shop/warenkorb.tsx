@@ -118,12 +118,13 @@ export default function Warenkorb() {
       });
       let paid = false;
       try {
-        const res = await apiPost(`/shop/orders/${order.id}/checkout?token=${encodeURIComponent(order.token)}`, {});
+        const orderHeaders = { "X-Order-Token": order.token };
+        const res = await apiPost(`/shop/orders/${order.id}/checkout`, {}, orderHeaders);
         if (res?.url) {
           await WebBrowser.openBrowserAsync(res.url);
           for (let i = 0; i < 8; i++) {
             await new Promise((r) => setTimeout(r, 1500));
-            const st = await apiGet(`/shop/orders/${order.id}/payment-status?token=${encodeURIComponent(order.token)}`);
+            const st = await apiGet(`/shop/orders/${order.id}/payment-status`, orderHeaders);
             if (st.status === "Bezahlt") {
               paid = true;
               break;

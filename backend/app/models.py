@@ -1,8 +1,14 @@
 """Pydantic request/response models."""
-from pydantic import BaseModel
-from typing import List, Optional, Literal
+from pydantic import BaseModel, Field
+from typing import Annotated, List, Optional, Literal
 
 from .core import Role
+
+
+MoneyValue = Annotated[float, Field(ge=0, allow_inf_nan=False)]
+PositiveMoneyValue = Annotated[float, Field(gt=0, allow_inf_nan=False)]
+PositiveQuantity = Annotated[float, Field(gt=0, allow_inf_nan=False)]
+PercentValue = Annotated[int, Field(ge=0, le=100)]
 
 
 class PublicUser(BaseModel):
@@ -23,8 +29,8 @@ class Token(BaseModel):
 
 class OfferItemIn(BaseModel):
     productId: str
-    qty: float
-    price: float
+    qty: PositiveQuantity
+    price: PositiveMoneyValue
 
 
 class OfferCreate(BaseModel):
@@ -36,7 +42,7 @@ class OfferCreate(BaseModel):
 
 class OrderItemIn(BaseModel):
     productId: str
-    qty: float
+    qty: PositiveQuantity
 
 
 class OrderCreate(BaseModel):
@@ -49,31 +55,31 @@ class DecisionIn(BaseModel):
 
 
 class DiscountTier(BaseModel):
-    minQty: float
-    price: float
+    minQty: PositiveQuantity
+    price: PositiveMoneyValue
 
 
 class ProductIn(BaseModel):
     brand: str
     name: str
     unit: str = "kg"
-    standardPrice: float
-    salesFloor: float
-    absoluteFloor: float
-    cost: float
+    standardPrice: PositiveMoneyValue
+    salesFloor: PositiveMoneyValue
+    absoluteFloor: PositiveMoneyValue
+    cost: MoneyValue
     description: str = ""
     imageUrl: str = ""
     discountTiers: List[DiscountTier] = []
-    taxRate: int = 7
+    taxRate: PercentValue = 7
     stock: Optional[float] = None
-    b2cPrice: Optional[float] = None
+    b2cPrice: Optional[PositiveMoneyValue] = None
     active: bool = True
 
 
 class CustomerPriceIn(BaseModel):
     companyId: str
     productId: str
-    price: float
+    price: PositiveMoneyValue
 
 
 class OrderStatusIn(BaseModel):
@@ -89,9 +95,9 @@ class StockIn(BaseModel):
 
 
 class ShopSettingsIn(BaseModel):
-    freeShippingThreshold: float = 50.0
-    shippingFee: float = 4.90
-    newsletterDiscountPercent: int = 10
+    freeShippingThreshold: MoneyValue = 50.0
+    shippingFee: MoneyValue = 4.90
+    newsletterDiscountPercent: PercentValue = 10
     newsletterDiscountEnabled: bool = True
 
 
@@ -106,7 +112,7 @@ class ShopCustomerIn(BaseModel):
 
 class ShopItemIn(BaseModel):
     productId: str
-    qty: float
+    qty: PositiveQuantity
 
 
 class ShopOrderIn(BaseModel):
@@ -148,7 +154,7 @@ class MachineIn(BaseModel):
     name: str
     description: str = ""
     imageUrl: str = ""
-    price: float  # Bruttopreis inkl. 19% MwSt (Kauf)
+    price: PositiveMoneyValue  # Bruttopreis inkl. 19% MwSt (Kauf)
     active: bool = True
 
 
@@ -161,13 +167,13 @@ class MachineRequestIn(BaseModel):
 
 class MachineTermsIn(BaseModel):
     status: Optional[str] = None
-    downPayment: Optional[float] = None
-    monthlyRate: Optional[float] = None
-    finalPayment: Optional[float] = None
+    downPayment: Optional[MoneyValue] = None
+    monthlyRate: Optional[MoneyValue] = None
+    finalPayment: Optional[MoneyValue] = None
     termMonths: Optional[int] = None
-    minCoffeeKgMonth: Optional[float] = None
+    minCoffeeKgMonth: Optional[PositiveQuantity] = None
     productId: Optional[str] = None
-    coffeePricePerKg: Optional[float] = None
+    coffeePricePerKg: Optional[PositiveMoneyValue] = None
     note: str = ""
 
 

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from ..core import api_router, strip_id
 from ..deps import current_user, tenant_business_access, visible_company_ids
 from ..tenant_access import TenantBusinessAccess
+from ..money import amount_minor, from_minor, line_total_minor, to_minor
 
 
 @api_router.get("/dashboard")
@@ -20,7 +21,9 @@ async def dashboard(
     invoices = await access.invoices.find({"companyId": {"$in": ids}}).to_list(1000)
 
     def order_total(o):
-        return sum(i["price"] * i["qty"] for i in o["items"])
+        if isinstance(o.get("netTotalMinor"), int):
+            return from_minor(o["netTotalMinor"])
+        return from_minor(sum(line_total_minor(to_minor(i["price"]), i["qty"]) for i in o["items"]))
 
     now = datetime.now(timezone.utc)
     this_month = [o for o in orders if datetime.fromisoformat(o["createdAt"]).month == now.month
@@ -30,7 +33,10 @@ async def dashboard(
     open_offers = [o for o in offers if o["status"] in ("Freigabe nötig", "Freigegeben", "Versendet")]
     approvals = [o for o in offers if o["status"] == "Freigabe nötig"]
     open_invoices = [i for i in invoices if i["status"] != "Bezahlt"]
-    open_invoices_sum = sum(i["amount"] for i in open_invoices)
+    open_invoices_sum = sum(
+        from_minor(amount_minor(i, "amount", expected_currency=i.get("currency", access.context.default_currency)))
+        for i in open_invoices
+    )
 
     followups = []
     for c in companies:

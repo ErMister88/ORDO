@@ -144,7 +144,7 @@ export default function Abos() {
                 <Card key={s.id} testID={`sub-${s.id}`} style={s.active === false ? { opacity: 0.55 } : undefined}>
                   <Text style={styles.subTitle}>{compMap[s.companyId]?.name ?? s.companyId}</Text>
                   <Muted>
-                    {p ? `${p.brand} ${p.name}` : it?.productId} · {num(it?.qty ?? 0)} · alle {s.intervalDays} Tage
+                    {it?.productName || (p ? `${p.brand} ${p.name}` : it?.productId)} · {num(it?.qty ?? 0)} · alle {s.intervalDays} Tage
                   </Muted>
                   <Muted>Nächste Lieferung: {s.nextRun ? dateDE(s.nextRun) : "-"}</Muted>
                   <View style={styles.subActions}>

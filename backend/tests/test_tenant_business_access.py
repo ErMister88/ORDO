@@ -516,7 +516,10 @@ def test_valid_customer_price_and_history_receive_the_same_tenant(monkeypatch):
         tenant_a,
     ))
 
-    assert result == {"ok": True, "companyId": "c1", "productId": "p1", "price": 10.0}
+    assert result == {
+        "ok": True, "companyId": "c1", "productId": "p1", "price": 10.0,
+        "priceMinor": 1000, "currency": "EUR",
+    }
     assert database.raw.customer_prices.find_one({})["tenantId"] == TENANT_A
     assert database.raw.price_history.find_one({})["tenantId"] == TENANT_A
 
@@ -806,6 +809,10 @@ def test_order_create_sets_server_tenant_and_ignores_client_tenant(monkeypatch):
     run(tenant_a.companies.insert_one({"id": "c1", "name": "Company", "active": True}))
     run(tenant_a.products.insert_one({
         "id": "p1",
+        "brand": "Test",
+        "name": "Product",
+        "unit": "kg",
+        "taxRate": 7,
         "standardPrice": 12.5,
         "discountTiers": [],
         "active": True,
@@ -910,6 +917,10 @@ def test_offer_create_sets_server_tenant(monkeypatch):
     run(tenant_a.companies.insert_one({"id": "c1", "active": True}))
     run(tenant_a.products.insert_one({
         "id": "p1",
+        "brand": "Test",
+        "name": "Product",
+        "unit": "kg",
+        "taxRate": 7,
         "absoluteFloor": 5.0,
         "salesFloor": 8.0,
     }))
@@ -996,7 +1007,7 @@ def test_invoice_creation_is_scoped_to_order_and_company_tenant(monkeypatch):
     assert database.raw.invoices.count_documents({}) == 0
 
 
-def test_invoice_creation_sets_tenant_and_keeps_order_reference_local(monkeypatch):
+def test_legacy_order_without_snapshot_cannot_create_mutable_invoice(monkeypatch):
     database = AsyncDatabase("tenant_access_invoice_valid_create")
     tenant_a = access(database, TENANT_A)
     run(tenant_a.companies.insert_one({"id": "c1", "active": True}))
@@ -1017,17 +1028,11 @@ def test_invoice_creation_sets_tenant_and_keeps_order_reference_local(monkeypatc
         return 4
 
     monkeypatch.setattr(billing, "next_seq", fixed_sequence)
-    response = run(billing.create_invoice_for_order(
-        "order-1",
-        principal(tenant_a),
-        tenant_a,
-    ))
-
-    stored = database.raw.invoices.find_one({"id": response["id"]})
-    assert stored["tenantId"] == TENANT_A
-    assert stored["orderId"] == "order-1"
-    assert database.raw.orders.find_one({"id": "order-1"})["invoiceId"] == response["id"]
-    assert "tenantId" not in response
+    with pytest.raises(HTTPException) as exc:
+        run(billing.create_invoice_for_order("order-1", principal(tenant_a), tenant_a))
+    assert exc.value.status_code == 409
+    assert database.raw.invoices.count_documents({}) == 0
+    assert "invoiceId" not in database.raw.orders.find_one({"id": "order-1"})
 
 
 def test_foreign_and_missing_invoice_have_identical_pay_response():
@@ -1153,7 +1158,7 @@ def test_subscription_create_sets_server_tenant():
     assert "tenantId" not in response
 
 
-def test_subscription_run_processes_only_resolved_tenant(monkeypatch):
+def test_legacy_subscription_without_snapshot_fails_closed(monkeypatch):
     database = AsyncDatabase("tenant_access_subscription_run")
     tenant_a = access(database, TENANT_A)
     tenant_b = access(database, TENANT_B)
@@ -1173,15 +1178,10 @@ def test_subscription_run_processes_only_resolved_tenant(monkeypatch):
         return 9
 
     monkeypatch.setattr(subscriptions, "next_seq", fixed_sequence)
-    response = run(subscriptions.run_due_subscriptions(
-        principal(tenant_a),
-        tenant_a,
-    ))
-
-    assert response["count"] == 1
-    created = database.raw.orders.find_one({"id": response["created"][0]})
-    assert created["tenantId"] == TENANT_A
-    assert created["fromSubscription"] == "sub-a"
+    with pytest.raises(HTTPException) as exc:
+        run(subscriptions.run_due_subscriptions(principal(tenant_a), tenant_a))
+    assert exc.value.status_code == 409
+    assert database.raw.orders.count_documents({}) == 0
     foreign_subscription = database.raw.subscriptions.find_one({"id": "sub-b"})
     assert foreign_subscription.get("lastRun") is None
 

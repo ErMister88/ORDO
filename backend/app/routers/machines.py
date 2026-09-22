@@ -15,6 +15,7 @@ from ..deps import current_user, require_roles, tenant_business_access, visible_
 from ..models import MachineIn, MachineRequestIn, MachineTermsIn, MachineRespondIn
 from ..emailer import send_email, email_shell
 from ..tenant_access import TenantBusinessAccess
+from ..money import MoneyError, amount_minor, currency_code, from_minor, to_minor
 
 stripe.api_key = os.environ.get("STRIPE_API_KEY", "")
 APP_URL = (os.environ.get("APP_URL") or "https://ordo-connect.preview.emergentagent.com").rstrip("/")
@@ -38,7 +39,9 @@ async def create_machine(
     user: Annotated[dict, Depends(require_roles("admin"))],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
 ):
+    currency = access.context.default_currency
     doc = {"id": str(uuid.uuid4()), "taxRate": 19,
+           "currency": currency, "priceMinor": to_minor(body.price),
            "createdAt": datetime.now(timezone.utc).isoformat(), **body.model_dump()}
     await access.machines.insert_one(doc)
     await tenant_audit(access, user, "machine_create", doc["id"], {"name": body.name})
@@ -52,7 +55,9 @@ async def update_machine(
     user: Annotated[dict, Depends(require_roles("admin"))],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
 ):
-    r = await access.machines.update_one({"id": machine_id}, {"$set": body.model_dump()})
+    payload = {**body.model_dump(), "currency": access.context.default_currency,
+               "priceMinor": to_minor(body.price)}
+    r = await access.machines.update_one({"id": machine_id}, {"$set": payload})
     if r.matched_count == 0:
         raise HTTPException(status_code=404, detail="Maschine nicht gefunden")
     await tenant_audit(access, user, "machine_update", machine_id, {"name": body.name})
@@ -132,7 +137,12 @@ async def create_machine_request(
     rid = f"M-{now.year}-{seq:05d}"
     status = "Zahlung offen" if body.type == "kauf" else "Angefragt"
     doc = {
-        "id": rid, "machineId": m["id"], "machineName": m["name"], "machinePrice": float(m["price"]),
+        "id": rid, "machineId": m["id"], "machineName": m["name"],
+        "machineDescription": m.get("description", ""),
+        "machinePrice": from_minor(amount_minor(m, "price", expected_currency=access.context.default_currency)),
+        "machinePriceMinor": amount_minor(m, "price", expected_currency=access.context.default_currency),
+        "currency": access.context.default_currency, "taxRate": int(m.get("taxRate", 19)),
+        "snapshotVersion": 1,
         "type": body.type, "termMonths": body.termMonths or 48, "message": body.message,
         "customer": await _customer_snapshot(user, access),
         "status": status, "paymentStatus": "Offen",
@@ -204,7 +214,7 @@ async def set_machine_terms(
         coffee_name = f"{p.get('brand', '')} {p.get('name', '')}".strip()
         # Never bind coffee below the product's absolute floor price.
         floor = p.get("absoluteFloor")
-        if body.coffeePricePerKg is not None and floor is not None and body.coffeePricePerKg < floor:
+        if body.coffeePricePerKg is not None and floor is not None and to_minor(body.coffeePricePerKg) < amount_minor(p, "absoluteFloor", expected_currency=access.context.default_currency):
             raise HTTPException(status_code=400,
                                 detail=f"Kaffeepreis darf {floor:.2f} €/kg nicht unterschreiten.")
 
@@ -214,6 +224,11 @@ async def set_machine_terms(
         "minCoffeeKgMonth": body.minCoffeeKgMonth,
         "productId": body.productId, "coffeePricePerKg": body.coffeePricePerKg, "coffeeName": coffee_name,
         "note": body.note,
+        "currency": access.context.default_currency,
+        "downPaymentMinor": to_minor(body.downPayment) if body.downPayment is not None else None,
+        "monthlyRateMinor": to_minor(body.monthlyRate) if body.monthlyRate is not None else None,
+        "finalPaymentMinor": to_minor(body.finalPayment) if body.finalPayment is not None else None,
+        "coffeePricePerKgMinor": to_minor(body.coffeePricePerKg) if body.coffeePricePerKg is not None else None,
     }
     await access.machine_requests.update_one({"id": req_id}, {"$set": {"terms": terms, "status": status}})
     await tenant_audit(access, user, "machine_terms", req_id, {"status": status})
@@ -280,6 +295,17 @@ async def accept_machine_offer(
         now = datetime.now(timezone.utc)
         seq = await next_seq("contract")
         contract_id = f"S&S-{now.year}-M{seq:04d}"
+        contract_currency = currency_code(t.get("currency") or access.context.default_currency)
+        coffee_price_minor = (
+            amount_minor(t, "coffeePricePerKg", expected_currency=contract_currency)
+            if t.get("coffeePricePerKg") is not None or t.get("coffeePricePerKgMinor") is not None
+            else 0
+        )
+        machine_rate_minor = (
+            amount_minor(t, "monthlyRate", expected_currency=contract_currency)
+            if t.get("monthlyRate") is not None or t.get("monthlyRateMinor") is not None
+            else 0
+        )
         await access.contracts.insert_one({
             "id": contract_id,
             "companyId": company_id,
@@ -287,9 +313,14 @@ async def accept_machine_offer(
             "start": now.date().isoformat(),
             "termMonths": t.get("termMonths") or r.get("termMonths") or 48,
             "minQtyMonth": t.get("minCoffeeKgMonth") or 0,
-            "price": t.get("coffeePricePerKg") or 0,
+            "price": from_minor(coffee_price_minor),
+            "priceMinor": coffee_price_minor,
+            "currency": contract_currency,
+            "productName": t.get("coffeeName", ""),
             "machine": r["machineName"],
-            "machineRate": t.get("monthlyRate") or 0,
+            "machineRate": from_minor(machine_rate_minor),
+            "machineRateMinor": machine_rate_minor,
+            "snapshotVersion": 1,
             "source": "machine_leasing",
             "machineRequestId": r["id"],
         })
@@ -370,7 +401,7 @@ async def leasing_contracts(
         )
         d = strip_id(c)
         d["companyName"] = company.get("name") if company else ""
-        d["productName"] = f"{prod.get('brand', '')} {prod.get('name', '')}".strip() if prod else ""
+        d["productName"] = c.get("productName") or (f"{prod.get('brand', '')} {prod.get('name', '')}".strip() if prod else "")
         out.append(d)
     return out
 
@@ -391,12 +422,16 @@ async def machine_checkout(
         raise HTTPException(status_code=400, detail="Nur Direktkauf ist sofort zahlbar")
     if r.get("paymentStatus") == "Bezahlt":
         raise HTTPException(status_code=409, detail="Bereits bezahlt")
-    amount_cents = int(round(float(r["machinePrice"]) * 100))
+    try:
+        currency = currency_code(r.get("currency") or access.context.default_currency)
+        amount_cents = amount_minor(r, "machinePrice", expected_currency=currency)
+    except MoneyError as exc:
+        raise HTTPException(status_code=409, detail="Maschinenanfrage besitzt keinen gültigen Zahlungsbetrag") from exc
 
     def _create():
         return stripe.checkout.Session.create(
-            mode="payment", currency="eur", locale="de",
-            line_items=[{"price_data": {"currency": "eur", "unit_amount": amount_cents,
+            mode="payment", currency=currency.lower(), locale="de",
+            line_items=[{"price_data": {"currency": currency.lower(), "unit_amount": amount_cents,
                                          "product_data": {"name": r["machineName"]}}, "quantity": 1}],
             client_reference_id=req_id, metadata={"machineRequestId": req_id},
             success_url=f"{APP_URL}/?payment=success&session_id={{CHECKOUT_SESSION_ID}}",

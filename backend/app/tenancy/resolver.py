@@ -96,6 +96,7 @@ class SingleTenantResolver:
 
         return TenantContext(
             tenant_id=tenant.tenant_id,
+            default_currency=tenant.default_currency,
             actor_user_id=subject.actor_user_id if subject else None,
             membership_id=None,
             role=None,
@@ -181,6 +182,7 @@ class MembershipTenantResolver:
 
         return TenantContext(
             tenant_id=membership.tenant_id,
+            default_currency=tenant.default_currency,
             actor_user_id=membership.user_id,
             membership_id=membership.membership_id,
             role=membership.role.value,

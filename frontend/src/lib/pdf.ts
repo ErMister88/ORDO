@@ -175,17 +175,22 @@ function shopWrap(title: string, inner: string): string {
 }
 
 export async function shareOfferPdf(offer: any, company: any, products: Record<string, any>) {
+  company = offer.companySnapshot || company;
   const rows = offer.items
     .map((i: any) => {
       const p = products[i.productId];
-      const line = i.price * i.qty;
-      return `<tr><td>${p ? `${p.brand} ${p.name}` : i.productId}</td>
-        <td class="right">${num(i.qty)} kg</td>
+      const line = i.lineTotalMinor != null ? i.lineTotalMinor / 100 : i.price * i.qty;
+      const label = i.productName || (p ? `${p.brand} ${p.name}` : i.productId);
+      const unit = i.unit || p?.unit || "kg";
+      return `<tr><td>${label}</td>
+        <td class="right">${num(i.qty)} ${unit}</td>
         <td class="right">${euro(i.price)}</td>
         <td class="right">${euro(line)}</td></tr>`;
     })
     .join("");
-  const total = offer.items.reduce((a: number, i: any) => a + i.price * i.qty, 0);
+  const total = offer.netTotalMinor != null
+    ? offer.netTotalMinor / 100
+    : offer.items.reduce((a: number, i: any) => a + i.price * i.qty, 0);
   const inner = `
     <h1>Angebot ${offer.id}</h1>
     <span class="badge">${offer.status}</span>
@@ -222,6 +227,7 @@ function taxSummary(breakdown: Record<string, number>): string {
 }
 
 export async function shareInvoicePdf(invoice: any, company: any) {
+  company = invoice.companySnapshot || company;
   if (invoice.lineItems && invoice.lineItems.length) {
     const inner = `
       <h1>Rechnung ${invoice.id}</h1>
@@ -258,11 +264,13 @@ export async function shareInvoicePdf(invoice: any, company: any) {
 }
 
 export async function shareDeliveryNotePdf(order: any, company: any, products: Record<string, any>) {
+  company = order.companySnapshot || company;
   const rows = order.items
     .map((i: any) => {
       const p = products[i.productId];
-      return `<tr><td>${p ? `${p.brand} ${p.name}` : i.productId}</td>
-        <td class="right">${num(i.qty)} ${p?.unit ?? "kg"}</td></tr>`;
+      const label = i.productName || (p ? `${p.brand} ${p.name}` : i.productId);
+      return `<tr><td>${label}</td>
+        <td class="right">${num(i.qty)} ${i.unit || p?.unit || "kg"}</td></tr>`;
     })
     .join("");
   const inner = `

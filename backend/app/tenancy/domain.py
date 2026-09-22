@@ -88,6 +88,13 @@ class Tenant:
                 raise ValueError(f"Tenant {field_name} must not contain surrounding whitespace")
         if self.legal_name is not None and not self.legal_name.strip():
             raise ValueError("Tenant legal_name must be null or a non-empty string")
+        if (
+            not isinstance(self.default_currency, str)
+            or len(self.default_currency) != 3
+            or not self.default_currency.isalpha()
+            or not self.default_currency.isupper()
+        ):
+            raise ValueError("Tenant default_currency must be an uppercase ISO code")
 
 
 SS_TENANT = Tenant(
@@ -117,6 +124,7 @@ class TenantContext:
     membership_id: str | None = None
     role: str | None = None
     company_id: str | None = None
+    default_currency: str = "EUR"
 
     def __post_init__(self) -> None:
         if not self.tenant_id or self.tenant_id != self.tenant_id.strip():
@@ -127,6 +135,13 @@ class TenantContext:
             value = getattr(self, field_name)
             if value is not None and (not value or value != value.strip()):
                 raise ValueError(f"TenantContext {field_name} must be null or a normalized string")
+        if (
+            not isinstance(self.default_currency, str)
+            or len(self.default_currency) != 3
+            or not self.default_currency.isalpha()
+            or not self.default_currency.isupper()
+        ):
+            raise ValueError("TenantContext default_currency must be an uppercase ISO code")
         if self.resolution_source is TenantResolutionSource.MEMBERSHIP:
             if self.actor_user_id is None or self.membership_id is None or self.role is None:
                 raise ValueError(

@@ -8,32 +8,61 @@ from ..deps import require_roles, tenant_business_access, visible_company_ids
 from ..tenant_access import TenantBusinessAccess
 from .invoices import invoice_references_visible
 from .orders import order_references_visible
+from ..money import from_minor, require_minor, tax_minor
+from ..snapshots import SNAPSHOT_VERSION, redact_internal_snapshot_fields
 
 
 async def _build_lines(access: TenantBusinessAccess, items):
     """Return (lineItems, net_total, tax_breakdown, tax_total, gross)."""
     lines = []
-    net_total = 0.0
-    tax_breakdown = {}
+    net_total_minor = 0
+    tax_breakdown_minor = {}
+    currency = access.context.default_currency
     for it in items:
-        p = await access.products.find_one({"id": it["productId"]})
-        rate = int((p or {}).get("taxRate", 7))
-        net = round(it["price"] * it["qty"], 2)
-        tax = round(net * rate / 100, 2)
-        net_total += net
-        tax_breakdown[str(rate)] = round(tax_breakdown.get(str(rate), 0.0) + tax, 2)
+        if it.get("snapshotVersion") != SNAPSHOT_VERSION or it.get("currency") != currency:
+            raise HTTPException(
+                status_code=409,
+                detail="Bestellung besitzt keinen verlässlichen historischen Positions-Snapshot",
+            )
+        rate = int(it["taxRate"])
+        net_minor = require_minor(it["lineTotalMinor"])
+        unit_price_minor = require_minor(it["unitPriceMinor"])
+        item_tax_minor = tax_minor(net_minor, rate)
+        net_total_minor += net_minor
+        tax_breakdown_minor[str(rate)] = tax_breakdown_minor.get(str(rate), 0) + item_tax_minor
         lines.append({
+            "snapshotVersion": SNAPSHOT_VERSION,
             "productId": it["productId"],
-            "name": f"{p['brand']} {p['name']}" if p else it["productId"],
-            "unit": (p or {}).get("unit", "kg"),
+            "sku": it.get("sku"),
+            "name": it.get("productName") or it["productId"],
+            "description": it.get("description", ""),
+            "unit": it.get("unit", "kg"),
             "qty": it["qty"],
             "price": it["price"],
-            "net": net,
+            "unitPriceMinor": unit_price_minor,
+            "net": from_minor(net_minor),
+            "netMinor": net_minor,
             "taxRate": rate,
+            "taxMinor": item_tax_minor,
+            "grossMinor": net_minor + item_tax_minor,
+            "currency": currency,
+            "priceSource": it.get("priceSource"),
+            "costMinor": it.get("costMinor"),
         })
-    tax_total = round(sum(tax_breakdown.values()), 2)
-    gross = round(net_total + tax_total, 2)
-    return lines, round(net_total, 2), tax_breakdown, tax_total, gross
+    tax_total_minor = sum(tax_breakdown_minor.values())
+    gross_minor = net_total_minor + tax_total_minor
+    return (
+        lines,
+        from_minor(net_total_minor),
+        {rate: from_minor(value) for rate, value in tax_breakdown_minor.items()},
+        from_minor(tax_total_minor),
+        from_minor(gross_minor),
+        net_total_minor,
+        tax_breakdown_minor,
+        tax_total_minor,
+        gross_minor,
+        currency,
+    )
 
 
 @api_router.post("/orders/{order_id}/invoice")
@@ -50,7 +79,7 @@ async def create_invoice_for_order(
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
     if o.get("invoiceId"):
         raise HTTPException(status_code=400, detail="Für diese Bestellung existiert bereits eine Rechnung")
-    lines, net, breakdown, tax_total, gross = await _build_lines(access, o["items"])
+    lines, net, breakdown, tax_total, gross, net_minor, breakdown_minor, tax_minor_total, gross_minor, currency = await _build_lines(access, o["items"])
     now = datetime.now(timezone.utc)
     seq = await next_seq("invoice")
     inv_no = f"RE-{now.year}-{seq:04d}"
@@ -60,10 +89,18 @@ async def create_invoice_for_order(
         "orderId": order_id,
         "date": now.date().isoformat(),
         "lineItems": lines,
+        "snapshotVersion": 1,
+        "currency": currency,
         "net": net,
+        "netMinor": net_minor,
         "taxBreakdown": breakdown,
+        "taxBreakdownMinor": breakdown_minor,
         "taxTotal": tax_total,
+        "taxTotalMinor": tax_minor_total,
         "amount": gross,
+        "amountMinor": gross_minor,
+        "companySnapshot": o.get("companySnapshot"),
+        "salesAttribution": o.get("salesAttribution"),
         "status": "Offen",
         "createdAt": now.isoformat(),
     }
@@ -71,7 +108,7 @@ async def create_invoice_for_order(
         raise HTTPException(status_code=404, detail="Bestellung nicht gefunden")
     await access.invoices.insert_one(invoice)
     await access.orders.update_one({"id": order_id}, {"$set": {"invoiceId": inv_no}})
-    return strip_id(invoice)
+    return strip_id(redact_internal_snapshot_fields(invoice))
 
 
 @api_router.get("/companies/{company_id}/collective-invoice")
@@ -96,15 +133,24 @@ async def collective_invoice(company_id: str, year: int, month: int,
         if dt.year == year and dt.month == month:
             picked.append({"id": o["id"], "date": dt.date().isoformat()})
             all_items.extend(o["items"])
-    lines, net, breakdown, tax_total, gross = await _build_lines(access, all_items)
+    lines, net, breakdown, tax_total, gross, net_minor, breakdown_minor, tax_minor_total, gross_minor, currency = await _build_lines(access, all_items)
     return {
         "company": strip_id(company) if company else None,
         "year": year,
         "month": month,
         "orders": picked,
-        "lineItems": lines,
+        "lineItems": [
+            {key: value for key, value in line.items() if key != "costMinor"}
+            for line in lines
+        ],
+        "snapshotVersion": 1,
+        "currency": currency,
         "net": net,
+        "netMinor": net_minor,
         "taxBreakdown": breakdown,
+        "taxBreakdownMinor": breakdown_minor,
         "taxTotal": tax_total,
+        "taxTotalMinor": tax_minor_total,
         "amount": gross,
+        "amountMinor": gross_minor,
     }

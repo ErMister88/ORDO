@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from ..core import api_router
 from ..deps import require_roles, tenant_business_access, visible_company_ids
 from ..tenant_access import TenantBusinessAccess
+from ..money import from_minor, line_total_minor, to_minor
 
 
 @api_router.get("/analytics")
@@ -16,9 +17,6 @@ async def analytics(
 ):
     ids = await visible_company_ids(user, access)
     orders = await access.orders.find({"companyId": {"$in": ids}}).to_list(10000)
-    products = await access.products.find().to_list(1000)
-    cost_map = {p["id"]: p["cost"] for p in products}
-
     now = datetime.now(timezone.utc)
     buckets = {}
     labels = []
@@ -29,7 +27,7 @@ async def analytics(
             m += 12
             y -= 1
         key = f"{y}-{m:02d}"
-        buckets[key] = {"revenue": 0.0, "kg": 0.0, "margin": 0.0}
+        buckets[key] = {"revenueMinor": 0, "kg": 0.0, "marginMinor": 0, "marginComplete": True}
         labels.append(key)
 
     for o in orders:
@@ -37,10 +35,16 @@ async def analytics(
         key = f"{dt.year}-{dt.month:02d}"
         if key in buckets:
             for it in o["items"]:
-                rev = it["price"] * it["qty"]
-                buckets[key]["revenue"] += rev
+                rev_minor = it.get("lineTotalMinor")
+                if not isinstance(rev_minor, int):
+                    rev_minor = line_total_minor(to_minor(it["price"]), it["qty"])
+                buckets[key]["revenueMinor"] += rev_minor
                 buckets[key]["kg"] += it["qty"]
-                buckets[key]["margin"] += (it["price"] - cost_map.get(it["productId"], 0)) * it["qty"]
+                cost_minor = it.get("costMinor")
+                if isinstance(cost_minor, int):
+                    buckets[key]["marginMinor"] += rev_minor - line_total_minor(cost_minor, it["qty"])
+                else:
+                    buckets[key]["marginComplete"] = False
 
     month_names = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"]
     is_admin = user["role"] == "admin"
@@ -49,11 +53,12 @@ async def analytics(
         y, m = key.split("-")
         row = {
             "label": month_names[int(m) - 1],
-            "revenue": round(buckets[key]["revenue"], 2),
+            "revenue": from_minor(buckets[key]["revenueMinor"]),
             "kg": round(buckets[key]["kg"], 1),
         }
         if is_admin:
-            row["margin"] = round(buckets[key]["margin"], 2)
+            row["margin"] = from_minor(buckets[key]["marginMinor"])
+            row["marginComplete"] = buckets[key]["marginComplete"]
         series.append(row)
 
     total_rev = sum(s["revenue"] for s in series)
@@ -63,8 +68,9 @@ async def analytics(
         "showMargin": is_admin,
     }
     if is_admin:
-        total_margin = sum(buckets[key]["margin"] for key in labels)
+        total_margin = sum(from_minor(buckets[key]["marginMinor"]) for key in labels)
         margin_pct = (total_margin / total_rev * 100) if total_rev else 0
         result["totalMargin"] = round(total_margin, 2)
         result["marginPct"] = round(margin_pct, 1)
+        result["marginDataComplete"] = all(buckets[key]["marginComplete"] for key in labels)
     return result

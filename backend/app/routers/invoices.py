@@ -8,6 +8,7 @@ from ..audit_service import tenant_audit
 from ..deps import current_user, require_roles, tenant_business_access, visible_company_ids
 from ..tenant_access import TenantBusinessAccess
 from .orders import order_references_visible
+from ..snapshots import redact_internal_snapshot_fields
 
 
 async def invoice_references_visible(access: TenantBusinessAccess, invoice: dict) -> bool:
@@ -60,7 +61,10 @@ async def get_invoices(
 ):
     ids = await visible_company_ids(user, access)
     rows = await access.invoices.find({"companyId": {"$in": ids}}).sort("date", -1).to_list(1000)
-    return [strip_id(r) for r in rows if await invoice_references_visible(access, r)]
+    return [
+        strip_id(redact_internal_snapshot_fields(r))
+        for r in rows if await invoice_references_visible(access, r)
+    ]
 
 
 @api_router.put("/invoices/{invoice_id}/pay")

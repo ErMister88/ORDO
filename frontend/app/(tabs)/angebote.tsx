@@ -102,18 +102,20 @@ export default function Angebote() {
             const visibleOffers = (offers.data ?? []).filter((o: any) => {
               if (oStatus !== "Alle" && o.status !== oStatus) return false;
               if (!q) return true;
-              const cname = (compMap[o.companyId]?.name ?? "").toLowerCase();
+              const cname = (o.companySnapshot?.name ?? compMap[o.companyId]?.name ?? "").toLowerCase();
               return o.id.toLowerCase().includes(q) || cname.includes(q);
             });
             return visibleOffers.length === 0 ? (
               <EmptyState title="Keine Angebote" subtitle="Keine Treffer für diese Filter" />
             ) : (
               visibleOffers.map((o: any) => {
-              const comp = compMap[o.companyId];
+              const comp = o.companySnapshot || compMap[o.companyId];
               const monthlyDb = o.items.reduce((s: number, it: any) => {
-                const p = prodMap[it.productId];
-                return s + (p ? (it.price - p.cost) * it.qty : 0);
+                return s + (typeof it.costMinor === "number"
+                  ? (it.price - it.costMinor / 100) * it.qty
+                  : 0);
               }, 0);
+              const hasHistoricalCost = o.items.every((it: any) => typeof it.costMinor === "number");
               return (
                 <Card key={o.id} testID={`offer-${o.id}`}>
                   <View style={styles.offerTop}>
@@ -133,7 +135,7 @@ export default function Angebote() {
                           </View>
                         )}
                         <Muted style={{ flex: 1 }}>
-                          {p ? `${p.brand} ${p.name}` : it.productId} · {num(it.qty)} kg · {euro(it.price)}/kg
+                          {it.productName || (p ? `${p.brand} ${p.name}` : it.productId)} · {num(it.qty)} {it.unit || p?.unit || "kg"} · {euro(it.price)}/{it.unit || p?.unit || "kg"}
                         </Muted>
                       </View>
                     );
@@ -182,7 +184,11 @@ export default function Angebote() {
 
                   {isAdmin && o.status === "Freigabe nötig" && (
                     <View style={styles.actions}>
-                      <Muted>DB: {euro(monthlyDb)}/Monat · Vertrag ca. {euro(monthlyDb * o.termMonths)}</Muted>
+                      <Muted>
+                        {hasHistoricalCost
+                          ? `DB: ${euro(monthlyDb)}/Monat · Vertrag ca. ${euro(monthlyDb * o.termMonths)}`
+                          : "Historische Kostenbasis fehlt"}
+                      </Muted>
                       <View style={styles.actionRow}>
                         <Button
                           testID={`approve-${o.id}`}

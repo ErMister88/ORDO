@@ -41,7 +41,9 @@ export default function BestellungDetail() {
   });
   const cancelled = o?.status === "Storniert";
   const currentIdx = o ? FLOW.indexOf(o.status) : -1;
-  const total = o ? o.items.reduce((a: number, i: any) => a + i.price * i.qty, 0) : 0;
+  const total = o ? (o.netTotalMinor != null
+    ? o.netTotalMinor / 100
+    : o.items.reduce((a: number, i: any) => a + i.price * i.qty, 0)) : 0;
 
   const advance = useMutation({
     mutationFn: (status: string) => apiPut(`/orders/${id}/status`, { status }),
@@ -221,12 +223,12 @@ export default function BestellungDetail() {
                       </View>
                     )}
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.itemName}>{p ? `${p.brand} ${p.name}` : it.productId}</Text>
+                      <Text style={styles.itemName}>{it.productName || (p ? `${p.brand} ${p.name}` : it.productId)}</Text>
                       <Muted>
-                        {num(it.qty)} kg × {euro(it.price)}
+                        {num(it.qty)} {it.unit || p?.unit || "kg"} × {euro(it.price)}
                       </Muted>
                     </View>
-                    <Text style={styles.itemTotal}>{euro(it.price * it.qty)}</Text>
+                    <Text style={styles.itemTotal}>{euro(it.lineTotalMinor != null ? it.lineTotalMinor / 100 : it.price * it.qty)}</Text>
                   </View>
                 );
               })}

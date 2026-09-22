@@ -9,6 +9,8 @@ from ..audit_service import tenant_audit
 from ..deps import current_user, require_roles, tenant_business_access, visible_company_ids
 from ..models import OrderCreate, OrderStatusIn, OrderItemIn  # noqa: F401
 from ..emailer import send_email, email_shell, company_recipient
+from ..money import amount_minor, from_minor
+from ..snapshots import items_total_minor, product_item_snapshot, redact_internal_snapshot_fields
 from ..tenant_access import TenantBusinessAccess
 
 
@@ -17,6 +19,8 @@ async def order_references_visible(access: TenantBusinessAccess, order: dict) ->
     if not isinstance(company_id, str) or not await access.companies.find_one({"id": company_id}):
         return False
     for item in order.get("items", []):
+        if item.get("snapshotVersion") == 1 and item.get("currency") == order.get("currency"):
+            continue
         product_id = item.get("productId")
         if not isinstance(product_id, str) or not await access.products.find_one({"id": product_id}):
             return False
@@ -42,7 +46,7 @@ async def get_orders(
 ):
     ids = await visible_company_ids(user, access)
     orders = await access.orders.find({"companyId": {"$in": ids}}).sort("createdAt", -1).to_list(2000)
-    return [strip_id(o) for o in orders]
+    return [strip_id(redact_internal_snapshot_fields(o)) for o in orders]
 
 
 async def _resolve_unit_price(
@@ -52,22 +56,36 @@ async def _resolve_unit_price(
     qty: float,
 ) -> float:
     """Authoritative server-side price: customer price -> contract price -> standard (with volume tiers)."""
+    minor, _source = await _resolve_unit_money(access, company_id, product, qty)
+    return from_minor(minor)
+
+
+async def _resolve_unit_money(
+    access: TenantBusinessAccess,
+    company_id: str,
+    product: dict,
+    qty: float,
+) -> tuple[int, str]:
+    """Preserve the established B2B priority while using exact minor units."""
+    currency = access.context.default_currency
     cp = await access.customer_prices.find_one(
         {"companyId": company_id, "productId": product["id"]}
     )
     if cp and cp.get("price") is not None:
-        return round(float(cp["price"]), 2)
+        return amount_minor(cp, "price", expected_currency=currency), "customer_price"
     ct = await access.contracts.find_one({
         "companyId": company_id,
         "productId": product["id"],
     })
     if ct and ct.get("price"):
-        return round(float(ct["price"]), 2)
-    price = float(product["standardPrice"])
+        return amount_minor(ct, "price", expected_currency=currency), "contract_price"
+    price = amount_minor(product, "standardPrice", expected_currency=currency)
+    source = "standard_price"
     for t in sorted(product.get("discountTiers", []), key=lambda x: x.get("minQty", 0)):
         if qty >= t.get("minQty", 0) and t.get("price") is not None:
-            price = float(t["price"])
-    return round(price, 2)
+            price = amount_minor(t, "price", expected_currency=currency)
+            source = "volume_tier"
+    return price, source
 
 
 @api_router.post("/orders")
@@ -82,14 +100,24 @@ async def create_order(
     if not body.items:
         raise HTTPException(status_code=400, detail="Bestellung enthält keine Artikel")
     items = []
+    currency = access.context.default_currency
+    company = await access.companies.find_one({"id": body.companyId})
+    if not company:
+        raise HTTPException(status_code=404, detail="Kunde nicht gefunden")
     for it in body.items:
         if it.qty <= 0:
             raise HTTPException(status_code=400, detail="Ungültige Menge")
         prod = await access.products.find_one({"id": it.productId})
         if not prod or prod.get("active") is False:
             raise HTTPException(status_code=400, detail="Produkt nicht verfügbar")
-        price = await _resolve_unit_price(access, body.companyId, prod, it.qty)
-        items.append({"productId": it.productId, "qty": it.qty, "price": price})
+        price_minor, price_source = await _resolve_unit_money(access, body.companyId, prod, it.qty)
+        items.append(product_item_snapshot(
+            prod,
+            quantity=it.qty,
+            unit_price_minor=price_minor,
+            currency=currency,
+            price_source=price_source,
+        ))
     now = datetime.now(timezone.utc)
     seq = await next_seq("order")
     order_no = f"B-{now.year}-{seq:05d}"
@@ -99,10 +127,25 @@ async def create_order(
         "createdBy": user["id"],
         "status": "Neu",
         "items": items,
+        "currency": currency,
+        "netTotalMinor": items_total_minor(items, currency=currency),
+        "snapshotVersion": 1,
+        "companySnapshot": {
+            "companyId": company["id"],
+            "name": company.get("name", ""),
+            "email": company.get("email", ""),
+            "vatId": company.get("vatId", ""),
+            "city": company.get("city", ""),
+        },
+        "salesAttribution": {
+            "actorUserId": user["id"], "actorName": user.get("name", ""),
+            "actorRole": user.get("role"), "membershipId": access.context.membership_id,
+            "salesRepId": company.get("assignedSalesRepId"),
+        },
         "createdAt": now.isoformat(),
     }
     await access.orders.insert_one(order)
-    return strip_id(order)
+    return strip_id(redact_internal_snapshot_fields(order))
 
 
 @api_router.get("/orders/{order_id}")
@@ -117,7 +160,7 @@ async def get_order(
     ids = await visible_company_ids(user, access)
     if o["companyId"] not in ids:
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
-    return strip_id(o)
+    return strip_id(redact_internal_snapshot_fields(o))
 
 
 @api_router.put("/orders/{order_id}/status")

@@ -623,5 +623,5 @@ def test_shop_order_without_owner_or_access_token_is_never_public():
             None,
             "other",
         )
-    assert legacy_order.value.status_code == 403
-    assert foreign_owner.value.status_code == 403
+    assert legacy_order.value.status_code == 404
+    assert foreign_owner.value.status_code == 404

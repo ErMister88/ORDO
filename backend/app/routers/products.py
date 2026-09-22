@@ -16,10 +16,28 @@ from ..deps import (
     tenant_business_access,
 )
 from ..models import ProductIn, ActiveIn, StockIn
+from ..money import to_minor
 from ..storage import put_object, get_object, APP_NAME
 from ..tenant_access import TenantBusinessAccess
 
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
+
+
+def _product_payload(body: ProductIn, currency: str) -> dict:
+    payload = body.model_dump()
+    payload.update({
+        "currency": currency,
+        "standardPriceMinor": to_minor(body.standardPrice),
+        "salesFloorMinor": to_minor(body.salesFloor),
+        "absoluteFloorMinor": to_minor(body.absoluteFloor),
+        "costMinor": to_minor(body.cost),
+        "b2cPriceMinor": to_minor(body.b2cPrice) if body.b2cPrice is not None else None,
+        "discountTiers": [
+            {**tier.model_dump(), "priceMinor": to_minor(tier.price), "currency": currency}
+            for tier in body.discountTiers
+        ],
+    })
+    return payload
 
 
 @api_router.get("/products")
@@ -37,10 +55,14 @@ async def get_products(
         p = strip_id(p)
         if user["role"] == "customer":
             p.pop("cost", None)
+            p.pop("costMinor", None)
             p.pop("salesFloor", None)
+            p.pop("salesFloorMinor", None)
             p.pop("absoluteFloor", None)
+            p.pop("absoluteFloorMinor", None)
         elif user["role"] == "sales":
             p.pop("cost", None)
+            p.pop("costMinor", None)
         result.append(p)
     return result
 
@@ -52,7 +74,7 @@ async def create_product(
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
 ):
     seq = await next_seq("product")
-    prod = {"id": f"p{seq}", **body.model_dump()}
+    prod = {"id": f"p{seq}", **_product_payload(body, access.context.default_currency)}
     await access.products.insert_one(prod)
     return strip_id(prod)
 
@@ -64,7 +86,10 @@ async def update_product(
     user: Annotated[dict, Depends(require_roles("admin"))],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
 ):
-    res = await access.products.update_one({"id": product_id}, {"$set": body.model_dump()})
+    res = await access.products.update_one(
+        {"id": product_id},
+        {"$set": _product_payload(body, access.context.default_currency)},
+    )
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Produkt nicht gefunden")
     p = await access.products.find_one({"id": product_id})
