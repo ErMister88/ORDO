@@ -72,19 +72,26 @@ Shop-Settings verwenden das Zielmodell `(tenantId, key)` mit dem Schlüssel `sho
 
 Newsletter-E-Mail, Bestätigungs-, Abmelde- und Rabattcode-Lookups sind tenantgebunden. Push-Registrierungen speichern zusätzlich eine serverseitig gebildete, tenantpräfixierte Provider-ID. Vorhandene Provider-Registrierungen ohne diese ID müssen sich nach einem kontrollierten Rollout erneut registrieren; es gibt keinen globalen Fallback.
 
+## Audit-Isolation
+
+`audit_log` verwendet dieselbe serverseitige Tenant-Zugriffsschicht wie die
+Business-Collections. Tenantbezogene Ereignisse können nur über eine
+`TenantBusinessAccess`-Instanz geschrieben werden; `tenantId` wird dabei aus
+dem bereits aufgelösten `TenantContext` gesetzt. Der Tenant-Admin-Endpunkt
+filtert vor Sortierung und 200er-Limit auf diesen Tenant und entfernt
+`tenantId` aus der Antwort.
+
+Globale Identity-Ereignisse (`login`, `user.create`, `user.reset`) bleiben
+ausdrücklich global. Sie besitzen keine `tenantId` und werden deshalb im
+Tenant-Admin-Endpunkt nicht angezeigt. Das gilt auch für historische
+Audit-Einträge ohne `tenantId`. Es gibt keinen S&S-Legacy-Fallback.
+
 ## Noch nicht vollständig umgestellte Bereiche
 
 `users` bleibt entsprechend dem Zielmodell eine globale Identitäts-Collection.
-Tenant-Memberships und tenantbezogene Benutzerlisten folgen erst im dafür
-freigegebenen Arbeitspaket. Ebenso enthalten bestehende Audit-Einträge noch
-keine durchgängige `tenantId`. Benutzerverwaltung und Audit-Auswertung dürfen
-daher vor dieser Erweiterung nicht für mehrere aktive Tenants freigeschaltet
-werden.
-
-Audit-Ereignisse aus den in Arbeitspaket 3.6 geänderten Machine-, Shop- und
-Settings-Pfaden erhalten den serverseitig aufgelösten `tenantId`. Die
-`audit_log`-Abfrage und historische Einträge sind damit noch nicht vollständig
-tenantisoliert; diese Gesamtkorrektur bleibt ein separates Arbeitspaket.
+Tenant-Memberships, tenantbezogene Rollen und tenantbezogene Benutzerlisten
+folgen erst im dafür freigegebenen Arbeitspaket. Die Tenant-Isolation der
+Audit-Persistenz ersetzt diese noch fehlende Benutzerautorisierung nicht.
 
 ## Verbindliche Sicherheitsregel für spätere KI-Funktionen
 

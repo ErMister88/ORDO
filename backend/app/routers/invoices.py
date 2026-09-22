@@ -3,7 +3,8 @@ from fastapi import Depends, HTTPException
 from typing import Annotated
 from datetime import datetime, timezone
 
-from ..core import api_router, strip_id, audit
+from ..core import api_router, strip_id
+from ..audit_service import tenant_audit
 from ..deps import current_user, require_roles, tenant_business_access, visible_company_ids
 from ..tenant_access import TenantBusinessAccess
 from .orders import order_references_visible
@@ -78,5 +79,5 @@ async def mark_invoice_paid(
         {"id": invoice_id},
         {"$set": {"status": "Bezahlt", "paidAt": datetime.now(timezone.utc).isoformat()}},
     )
-    await audit(user, "invoice.paid", invoice_id, {})
+    await tenant_audit(access, user, "invoice.paid", invoice_id, {})
     return {"ok": True, "status": "Bezahlt"}

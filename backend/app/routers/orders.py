@@ -4,7 +4,8 @@ from fastapi import Depends, HTTPException
 from typing import Annotated
 from datetime import datetime, timedelta, timezone
 
-from ..core import api_router, strip_id, next_seq, logger, ORDER_STATUS_FLOW, audit
+from ..core import api_router, strip_id, next_seq, logger, ORDER_STATUS_FLOW
+from ..audit_service import tenant_audit
 from ..deps import current_user, require_roles, tenant_business_access, visible_company_ids
 from ..models import OrderCreate, OrderStatusIn, OrderItemIn  # noqa: F401
 from ..emailer import send_email, email_shell, company_recipient
@@ -142,7 +143,7 @@ async def set_order_status(
         update["shippedAt"] = now.isoformat()
         update["estimatedDelivery"] = eta.date().isoformat()
     await access.orders.update_one({"id": order_id}, {"$set": update})
-    await audit(user, "order.status", order_id, {"status": body.status})
+    await tenant_audit(access, user, "order.status", order_id, {"status": body.status})
     if body.status == "Versendet":
         try:
             email, cname = await company_recipient(access, o["companyId"])

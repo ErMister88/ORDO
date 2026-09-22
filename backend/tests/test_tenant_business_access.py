@@ -19,7 +19,7 @@ os.environ["DB_NAME"] = "ordo_test_tenant_business_import"
 os.environ["JWT_SECRET"] = "test-only"
 os.environ["APP_ENV"] = "test"
 
-from app import core, deps
+from app import audit_service, deps
 from app.models import (
     AcceptOfferIn,
     CustomerPriceIn,
@@ -44,6 +44,7 @@ from app.models import (
     ValidateCodeIn,
 )
 from app.routers import (
+    audit as audit_router,
     billing,
     companies,
     invoices,
@@ -452,7 +453,7 @@ def test_customer_price_rejects_cross_tenant_references_without_disclosure(
     async def no_audit(*_args, **_kwargs):
         return None
 
-    monkeypatch.setattr(pricing, "audit", no_audit)
+    monkeypatch.setattr(pricing, "tenant_audit", no_audit)
     with pytest.raises(HTTPException) as exc:
         run(pricing.upsert_customer_price(
             CustomerPriceIn(companyId="c1", productId="p1", price=10.0),
@@ -475,7 +476,7 @@ def test_valid_customer_price_and_history_receive_the_same_tenant(monkeypatch):
     async def no_audit(*_args, **_kwargs):
         return None
 
-    monkeypatch.setattr(pricing, "audit", no_audit)
+    monkeypatch.setattr(pricing, "tenant_audit", no_audit)
     result = run(pricing.upsert_customer_price(
         CustomerPriceIn(companyId="c1", productId="p1", price=10.0),
         {"id": "u-admin", "name": "Admin"},
@@ -694,6 +695,7 @@ def test_machine_terms_reject_product_from_other_tenant(monkeypatch):
 def test_application_has_no_direct_unscoped_access_to_converted_collections():
     app_dir = Path(__file__).resolve().parents[1] / "app"
     allowed = {
+        Path("audit_service.py"),
         Path("database_setup.py"),
         Path("demo_seed.py"),
         Path("tenant_access.py"),
@@ -1187,7 +1189,7 @@ def test_machine_contract_write_sets_server_tenant(monkeypatch):
         return None
 
     monkeypatch.setattr(machines, "next_seq", fixed_sequence)
-    monkeypatch.setattr(machines, "audit", no_audit)
+    monkeypatch.setattr(machines, "tenant_audit", no_audit)
     run(machines.accept_machine_offer(
         "mr-1",
         {"id": "u1", "role": "admin"},
@@ -1221,7 +1223,7 @@ def test_machine_catalog_create_list_update_and_delete_are_tenant_scoped(monkeyp
     async def no_audit(*_args, **_kwargs):
         return None
 
-    monkeypatch.setattr(machines, "audit", no_audit)
+    monkeypatch.setattr(machines, "tenant_audit", no_audit)
     body = MachineIn(name="Machine A", price=1000)
     created = run(machines.create_machine(body, {"id": "admin-a"}, tenant_a))
     machine_id = created["id"]
@@ -1247,7 +1249,7 @@ def test_foreign_and_missing_machine_delete_are_indistinguishable(monkeypatch):
     async def no_audit(*_args, **_kwargs):
         return None
 
-    monkeypatch.setattr(machines, "audit", no_audit)
+    monkeypatch.setattr(machines, "tenant_audit", no_audit)
     for machine_id in ("machine", "missing"):
         with pytest.raises(HTTPException) as exc:
             run(machines.delete_machine(machine_id, {"id": "admin-a"}, tenant_a))
@@ -1371,7 +1373,7 @@ def test_shop_order_reads_and_status_updates_are_tenant_scoped(monkeypatch):
     async def no_audit(*_args, **_kwargs):
         return None
 
-    monkeypatch.setattr(shop, "audit", no_audit)
+    monkeypatch.setattr(shop, "tenant_audit", no_audit)
     listed = run(shop.list_shop_orders({"role": "admin"}, tenant_a))
     mine = run(shop.shop_my_orders({"id": "user", "role": "shopuser"}, tenant_a))
     assert [row["id"] for row in listed] == ["own"]
@@ -1398,7 +1400,7 @@ def test_shop_settings_ignore_legacy_and_are_separate_per_tenant(monkeypatch):
     async def no_audit(*_args, **_kwargs):
         return None
 
-    monkeypatch.setattr(shop, "audit", no_audit)
+    monkeypatch.setattr(shop, "tenant_audit", no_audit)
     run(shop.shop_settings_put(ShopSettingsIn(shippingFee=4.5), {"id": "admin"}, tenant_a))
     run(shop.shop_settings_put(ShopSettingsIn(shippingFee=8.5), {"id": "admin"}, tenant_b))
     assert run(shop.shop_settings_get(tenant_a))["shippingFee"] == 4.5
@@ -1475,19 +1477,185 @@ def test_push_registration_and_broadcast_use_tenant_namespaced_targets(monkeypat
     assert run(push.push_stats({"role": "admin"}, tenant_a)) == {"registered": 1}
 
 
-def test_tenant_scoped_audit_context_is_persisted_without_response_leak(monkeypatch):
+def test_tenant_audit_write_and_read_are_isolated_without_response_leak(monkeypatch):
     database = AsyncDatabase("tenant_edge_audit")
-    monkeypatch.setattr(core, "db", database)
-    run(core.audit(
-        {"id": "admin", "email": "admin@example.test", "role": "admin"},
-        "edge_action",
-        "entity",
-        tenant_id=TENANT_A,
+    tenant_a = access(database, TENANT_A)
+    tenant_b = access(database, TENANT_B)
+    monkeypatch.setattr(audit_service, "db", database)
+    user = {"id": "admin", "email": "admin@example.test", "role": "admin"}
+
+    run(audit_service.tenant_audit(
+        tenant_a,
+        user,
+        "same-action",
+        "same-entity",
+        {"marker": "a"},
     ))
-    assert database.raw.audit_log.find_one({"action": "edge_action"})["tenantId"] == TENANT_A
+    run(audit_service.tenant_audit(
+        tenant_b,
+        user,
+        "same-action",
+        "same-entity",
+        {"marker": "b"},
+    ))
+    run(audit_service.global_audit(user, "login"))
+    run(audit_service.global_audit(user, "user.create", "new-user"))
+    database.raw.audit_log.insert_one({
+        "at": "2020-01-01T00:00:00+00:00",
+        "action": "legacy",
+        "userEmail": "legacy-other-tenant@example.test",
+        "meta": {"secret": "legacy"},
+    })
+
+    rows_a = run(audit_router.get_audit(user, tenant_a))
+    rows_b = run(audit_router.get_audit(user, tenant_b))
+
+    assert [(row["entity"], row["meta"]["marker"]) for row in rows_a] == [
+        ("same-entity", "a")
+    ]
+    assert [(row["entity"], row["meta"]["marker"]) for row in rows_b] == [
+        ("same-entity", "b")
+    ]
+    assert "tenantId" not in rows_a[0]
+    assert database.raw.audit_log.find_one({"meta.marker": "a"})["tenantId"] == TENANT_A
+    assert database.raw.audit_log.find_one({"meta.marker": "b"})["tenantId"] == TENANT_B
+    assert all(row["action"] not in {"login", "user.create", "legacy"} for row in rows_a + rows_b)
+    assert "legacy-other-tenant@example.test" not in str(rows_a + rows_b)
+
+    client_override = {"tenant_id": TENANT_B}
+    with pytest.raises(TypeError):
+        audit_service.tenant_audit(
+            tenant_a,
+            user,
+            "client-override",
+            **client_override,
+        )
+    with pytest.raises(AttributeError):
+        run(audit_service.tenant_audit(None, user, "missing-context"))
+    assert database.raw.audit_log.count_documents({"action": "client-override"}) == 0
+    assert database.raw.audit_log.count_documents({"action": "missing-context"}) == 0
+
+
+def test_tenant_audit_limit_applies_after_tenant_filter():
+    database = AsyncDatabase("tenant_audit_limit_after_filter")
+    tenant_a = access(database, TENANT_A)
+    tenant_b = access(database, TENANT_B)
+    run(tenant_a.audit_log.insert_one({
+        "at": "2026-01-01T00:00:00+00:00",
+        "action": "tenant-a-only",
+        "entity": "a",
+        "meta": {},
+    }))
+    for index in range(210):
+        run(tenant_b.audit_log.insert_one({
+            "at": f"2026-02-01T00:{index // 60:02d}:{index % 60:02d}+00:00",
+            "action": "tenant-b-event",
+            "entity": str(index),
+            "meta": {},
+        }))
+
+    rows_a = run(audit_router.get_audit({"role": "admin"}, tenant_a))
+    rows_b = run(audit_router.get_audit({"role": "admin"}, tenant_b))
+
+    assert [row["action"] for row in rows_a] == ["tenant-a-only"]
+    assert len(rows_b) == 200
+    assert {row["action"] for row in rows_b} == {"tenant-b-event"}
+    assert [row["entity"] for row in rows_b[:3]] == ["209", "208", "207"]
+    assert rows_b[-1]["entity"] == "10"
+
+
+def test_audit_tenant_id_is_immutable_in_filters_and_updates():
+    database = AsyncDatabase("tenant_audit_immutable")
+    tenant_a = access(database, TENANT_A)
+    run(tenant_a.audit_log.insert_one({"action": "safe"}))
+
+    with pytest.raises(TenantScopeViolation, match="Conflicting tenantId"):
+        run(tenant_a.audit_log.find_one({"tenantId": TENANT_B}))
+    with pytest.raises(TenantScopeViolation, match="Conflicting tenantId"):
+        run(tenant_a.audit_log.find_one({
+            "$or": [{"action": "safe"}, {"tenantId": TENANT_B}],
+        }))
+    with pytest.raises(TenantScopeViolation, match="immutable"):
+        run(tenant_a.audit_log.update_one({}, {"$unset": {"tenantId": ""}}))
+    with pytest.raises(TenantScopeViolation, match="immutable"):
+        run(tenant_a.audit_log.update_one({}, {"$rename": {"action": "tenantId"}}))
+
+    assert database.raw.audit_log.find_one({"action": "safe"})["tenantId"] == TENANT_A
+
+
+def test_audit_callsites_are_explicitly_classified():
+    app_dir = Path(__file__).resolve().parents[1] / "app"
+    tenant_calls = []
+    global_calls = []
+    legacy_calls = []
+    for path in app_dir.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+                continue
+            if node.func.id == "tenant_audit":
+                assert len(node.args) >= 3 and isinstance(node.args[2], ast.Constant)
+                tenant_calls.append((path.name, node.args[2].value))
+            elif node.func.id == "global_audit":
+                assert len(node.args) >= 2 and isinstance(node.args[1], ast.Constant)
+                global_calls.append((path.name, node.args[1].value))
+            elif node.func.id == "audit":
+                legacy_calls.append(f"{path}:{node.lineno}")
+
+    assert sorted(tenant_calls) == sorted([
+        ("companies.py", "company.update"),
+        ("invoices.py", "invoice.paid"),
+        ("machines.py", "machine_accept"),
+        ("machines.py", "machine_contract_created"),
+        ("machines.py", "machine_create"),
+        ("machines.py", "machine_decline"),
+        ("machines.py", "machine_delete"),
+        ("machines.py", "machine_question"),
+        ("machines.py", "machine_terms"),
+        ("machines.py", "machine_update"),
+        ("offers.py", "offer.accept"),
+        ("offers.py", "offer.approve"),
+        ("orders.py", "order.status"),
+        ("pricing.py", "price.set"),
+        ("products.py", "product.stock"),
+        ("shop.py", "shop.settings"),
+        ("shop.py", "shop_order_status"),
+    ])
+    assert sorted(global_calls) == sorted([
+        ("auth.py", "login"),
+        ("users.py", "user.create"),
+        ("users.py", "user.reset"),
+    ])
+    assert legacy_calls == []
+
+
+def test_global_audit_is_the_only_direct_runtime_audit_persistence_edge():
+    app_dir = Path(__file__).resolve().parents[1] / "app"
+    source = (app_dir / "audit_service.py").read_text(encoding="utf-8")
+    violations = unscoped_collection_accesses(source, "audit_service.py")
+    assert len(violations) == 1
+    assert violations[0].endswith(":attribute:audit_log")
+
+    tree = ast.parse(source)
+    raw_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "insert_one"
+        and isinstance(node.func.value, ast.Attribute)
+        and isinstance(node.func.value.value, ast.Name)
+        and node.func.value.value.id == "db"
+        and node.func.value.attr == "audit_log"
+    ]
+    assert len(raw_calls) == 1
 
 
 @pytest.mark.parametrize("source", [
+    "db.audit_log.find({})",
+    "db['audit_log'].update_many({}, {'$set': {'action': 'x'}})",
+    "getattr(db, 'audit_log').aggregate([{'$lookup': {'from': 'users'}}])",
+    "db.get_collection('audit_log').bulk_write([])",
     "db.machines.find({})",
     "db['machine_requests'].update_many({}, {'$set': {'status': 'x'}})",
     "getattr(db, 'shop_orders').find_one_and_update({}, {})",

@@ -3,7 +3,8 @@ from fastapi import Depends, HTTPException
 from typing import Annotated
 from datetime import datetime, timezone
 
-from ..core import api_router, strip_id, audit
+from ..core import api_router, strip_id
+from ..audit_service import tenant_audit
 from ..deps import require_roles, tenant_business_access, visible_company_ids
 from ..models import CustomerPriceIn
 from ..tenant_access import TenantBusinessAccess
@@ -38,7 +39,13 @@ async def upsert_customer_price(
         {"$set": {"price": body.price}},
         upsert=True,
     )
-    await audit(user, "price.set", body.companyId, {"productId": body.productId, "price": body.price})
+    await tenant_audit(
+        access,
+        user,
+        "price.set",
+        body.companyId,
+        {"productId": body.productId, "price": body.price},
+    )
     return {"ok": True, **body.model_dump()}
 
 

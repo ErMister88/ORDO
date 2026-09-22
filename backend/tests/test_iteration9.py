@@ -229,10 +229,9 @@ class TestAuditLog:
         assert r.status_code == 200
         rows = r.json()
         assert isinstance(rows, list)
-        # After earlier tests, we should see offer.approve, offer.accept, and login
+        # Global identity events are deliberately excluded from tenant audit.
         actions = {row["action"] for row in rows}
-        # login must always be present (fixtures logged in)
-        assert "login" in actions, f"Expected 'login' audit entry, got {actions}"
+        assert "login" not in actions, f"Global login leaked into tenant audit: {actions}"
 
     def test_audit_records_offer_approve_and_accept(
         self, api_client, base_url, admin_token, _module_cleanup

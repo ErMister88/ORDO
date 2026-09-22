@@ -3,7 +3,8 @@ from fastapi import Depends, HTTPException
 from typing import Annotated
 from datetime import datetime, timezone
 
-from ..core import api_router, strip_id, audit
+from ..core import api_router, strip_id
+from ..audit_service import tenant_audit
 from ..deps import current_user, require_roles, tenant_business_access, visible_company_ids
 from ..models import CompanyUpdateIn
 from ..tenant_access import TenantBusinessAccess
@@ -60,7 +61,7 @@ async def update_company(
         raise HTTPException(status_code=404, detail="Kunde nicht gefunden")
     await access.companies.update_one({"id": company_id}, {"$set": body.model_dump()})
     updated = await access.companies.find_one({"id": company_id})
-    await audit(user, "company.update", company_id, {"name": body.name})
+    await tenant_audit(access, user, "company.update", company_id, {"name": body.name})
     return strip_id(updated)
 
 

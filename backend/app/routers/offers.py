@@ -4,7 +4,8 @@ from fastapi import Depends, HTTPException
 from typing import Annotated
 from datetime import datetime, timezone
 
-from ..core import api_router, strip_id, next_seq, logger, audit
+from ..core import api_router, strip_id, next_seq, logger
+from ..audit_service import tenant_audit
 from ..deps import current_user, require_roles, tenant_business_access, visible_company_ids
 from ..models import OfferCreate, DecisionIn, AcceptOfferIn
 from ..emailer import send_email, email_shell, company_recipient, items_html
@@ -97,7 +98,7 @@ async def approve_offer(
             await send_email(to=email, subject=f"Angebot {o['id']} freigegeben", html=html)
     except Exception as e:
         logger.warning(f"E-Mail (Angebot freigegeben) fehlgeschlagen: {e}")
-    await audit(user, "offer.approve", offer_id, {})
+    await tenant_audit(access, user, "offer.approve", offer_id, {})
     return {"ok": True, "status": "Freigegeben"}
 
 
@@ -133,7 +134,7 @@ async def accept_offer(
     }
     await access.orders.insert_one(order)
     await access.offers.update_one({"id": offer_id}, {"$set": {"status": "Angenommen", "orderId": order_no}})
-    await audit(user, "offer.accept", offer_id, {"orderId": order_no})
+    await tenant_audit(access, user, "offer.accept", offer_id, {"orderId": order_no})
     return strip_id(order)
 
 

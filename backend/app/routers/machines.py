@@ -9,7 +9,8 @@ import stripe
 from fastapi import Depends, HTTPException
 from starlette.concurrency import run_in_threadpool
 
-from ..core import api_router, db, strip_id, next_seq, logger, audit
+from ..core import api_router, db, strip_id, next_seq, logger
+from ..audit_service import tenant_audit
 from ..deps import current_user, require_roles, tenant_business_access, visible_company_ids
 from ..models import MachineIn, MachineRequestIn, MachineTermsIn, MachineRespondIn
 from ..emailer import send_email, email_shell
@@ -40,7 +41,7 @@ async def create_machine(
     doc = {"id": str(uuid.uuid4()), "taxRate": 19,
            "createdAt": datetime.now(timezone.utc).isoformat(), **body.model_dump()}
     await access.machines.insert_one(doc)
-    await audit(user, "machine_create", doc["id"], {"name": body.name}, tenant_id=access.context.tenant_id)
+    await tenant_audit(access, user, "machine_create", doc["id"], {"name": body.name})
     return strip_id(doc)
 
 
@@ -54,7 +55,7 @@ async def update_machine(
     r = await access.machines.update_one({"id": machine_id}, {"$set": body.model_dump()})
     if r.matched_count == 0:
         raise HTTPException(status_code=404, detail="Maschine nicht gefunden")
-    await audit(user, "machine_update", machine_id, {"name": body.name}, tenant_id=access.context.tenant_id)
+    await tenant_audit(access, user, "machine_update", machine_id, {"name": body.name})
     return strip_id(await access.machines.find_one({"id": machine_id}))
 
 
@@ -67,7 +68,7 @@ async def delete_machine(
     result = await access.machines.update_one({"id": machine_id}, {"$set": {"active": False}})
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Maschine nicht gefunden")
-    await audit(user, "machine_delete", machine_id, tenant_id=access.context.tenant_id)
+    await tenant_audit(access, user, "machine_delete", machine_id)
     return {"ok": True}
 
 
@@ -215,7 +216,7 @@ async def set_machine_terms(
         "note": body.note,
     }
     await access.machine_requests.update_one({"id": req_id}, {"$set": {"terms": terms, "status": status}})
-    await audit(user, "machine_terms", req_id, {"status": status}, tenant_id=access.context.tenant_id)
+    await tenant_audit(access, user, "machine_terms", req_id, {"status": status})
 
     email = r["customer"]["email"]
     if email and status == "Angebot":
@@ -293,10 +294,10 @@ async def accept_machine_offer(
             "machineRequestId": r["id"],
         })
         updates["contractId"] = contract_id
-        await audit(user, "machine_contract_created", contract_id, {"requestId": r["id"]}, tenant_id=access.context.tenant_id)
+        await tenant_audit(access, user, "machine_contract_created", contract_id, {"requestId": r["id"]})
 
     await access.machine_requests.update_one({"id": req_id}, {"$set": updates})
-    await audit(user, "machine_accept", req_id, tenant_id=access.context.tenant_id)
+    await tenant_audit(access, user, "machine_accept", req_id)
     return strip_id(await access.machine_requests.find_one({"id": req_id}))
 
 
@@ -326,14 +327,14 @@ async def respond_machine_offer(
     now = datetime.now(timezone.utc).isoformat()
     if body.action == "decline":
         await access.machine_requests.update_one({"id": req_id}, {"$set": {"status": "Abgelehnt"}})
-        await audit(user, "machine_decline", req_id, tenant_id=access.context.tenant_id)
+        await tenant_audit(access, user, "machine_decline", req_id)
         subject, headline = f"Angebot {req_id} abgelehnt", "Angebot abgelehnt"
         text = f"Der Kunde hat das Angebot für {escape(r['machineName'])} abgelehnt."
     else:
         entry = {"message": body.message, "at": now, "by": user.get("name", "Kunde")}
         await access.machine_requests.update_one(
             {"id": req_id}, {"$set": {"status": "Rückfrage"}, "$push": {"questions": entry}})
-        await audit(user, "machine_question", req_id, {"message": body.message}, tenant_id=access.context.tenant_id)
+        await tenant_audit(access, user, "machine_question", req_id, {"message": body.message})
         subject, headline = f"Rückfrage zu {req_id}", "Neue Rückfrage"
         text = f"Rückfrage zu {escape(r['machineName'])}: {escape(body.message)}"
     try:

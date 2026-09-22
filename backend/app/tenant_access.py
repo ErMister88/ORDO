@@ -9,6 +9,7 @@ from .tenancy import TenantContext
 
 
 TENANT_SCOPED_BUSINESS_COLLECTIONS = frozenset({
+    "audit_log",
     "companies",
     "contracts",
     "customer_prices",
@@ -128,6 +129,7 @@ class TenantBusinessAccess:
 
     def __init__(self, database, context: TenantContext) -> None:
         self.context = context
+        self.audit_log = TenantScopedCollection(database, "audit_log", context)
         self.companies = TenantScopedCollection(database, "companies", context)
         self.contracts = TenantScopedCollection(database, "contracts", context)
         self.products = TenantScopedCollection(database, "products", context)

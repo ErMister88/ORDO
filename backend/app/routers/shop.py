@@ -8,8 +8,9 @@ from typing import Annotated, Optional
 from datetime import datetime, timezone
 from starlette.concurrency import run_in_threadpool
 
-from ..core import (api_router, db, strip_id, next_seq, logger, audit,
+from ..core import (api_router, db, strip_id, next_seq, logger,
                     JWT_SECRET, JWT_ALGORITHM, create_token, hash_pw, verify_pw)
+from ..audit_service import tenant_audit
 from ..deps import (
     current_user,
     public_tenant_business_access,
@@ -87,7 +88,7 @@ async def shop_settings_put(
         {"$set": body.model_dump(), "$setOnInsert": {"key": SHOP_SETTINGS_KEY}},
         upsert=True,
     )
-    await audit(user, "shop.settings", "shop", body.model_dump(), tenant_id=access.context.tenant_id)
+    await tenant_audit(access, user, "shop.settings", "shop", body.model_dump())
     return {"ok": True, **body.model_dump()}
 
 
@@ -339,12 +340,12 @@ async def update_shop_order_status(
         {"$set": set_fields,
          "$push": {"statusHistory": {"status": body.status, "at": now.isoformat()}}},
     )
-    await audit(
+    await tenant_audit(
+        access,
         user,
         "shop_order_status",
         order_id,
         {"status": body.status, "tracking": tracking or None},
-        tenant_id=access.context.tenant_id,
     )
 
     track_url = _gls_track_url(tracking, (o.get("customer") or {}).get("zip", "")) if tracking else ""

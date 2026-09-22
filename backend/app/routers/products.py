@@ -7,7 +7,8 @@ from starlette.concurrency import run_in_threadpool
 from typing import Annotated
 from datetime import datetime, timezone
 
-from ..core import api_router, strip_id, next_seq, audit
+from ..core import api_router, strip_id, next_seq
+from ..audit_service import tenant_audit
 from ..deps import (
     current_user,
     public_tenant_business_access,
@@ -94,7 +95,7 @@ async def set_product_stock(
     res = await access.products.update_one({"id": product_id}, {"$set": {"stock": stock}})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Produkt nicht gefunden")
-    await audit(user, "product.stock", product_id, {"stock": stock})
+    await tenant_audit(access, user, "product.stock", product_id, {"stock": stock})
     return {"ok": True, "stock": stock}
 
 
