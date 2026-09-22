@@ -1,6 +1,12 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
 import { storage } from "@/src/utils/storage";
-import { loginRequest, fetchMe, TOKEN_KEY, User } from "@/src/api/client";
+import {
+  loginRequest,
+  fetchMe,
+  setAuthFailureHandler,
+  TOKEN_KEY,
+  User,
+} from "@/src/api/client";
 import { queryClient } from "@/src/query-client";
 
 async function clearUserCache() {
@@ -23,6 +29,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    setAuthFailureHandler(async () => {
+      await clearUserCache();
+      setUser(null);
+    });
     (async () => {
       const token = await storage.secureGet<string>(TOKEN_KEY, "");
       if (token) {
@@ -36,6 +46,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       setLoading(false);
     })();
+    return () => setAuthFailureHandler(null);
   }, []);
 
   const signIn = useCallback(async (email: string, password: string) => {

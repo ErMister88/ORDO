@@ -1,20 +1,30 @@
 """B2C shop: public catalog, settings, guest orders, Stripe checkout."""
 import os
 import secrets
-import jwt
 import stripe
-from fastapi import Depends, HTTPException, Header
+from fastapi import Depends, HTTPException, Request
+from pymongo.errors import DuplicateKeyError
 from typing import Annotated, Optional
 from datetime import datetime, timezone
 from starlette.concurrency import run_in_threadpool
 
 from ..core import (api_router, db, strip_id, next_seq, logger,
-                    JWT_SECRET, JWT_ALGORITHM, create_token, hash_pw, verify_pw)
+                    DUMMY_HASH, hash_pw, verify_pw)
 from ..audit_service import tenant_audit
+from ..auth_security import (
+    AuthRateLimitExceeded,
+    identity_is_active,
+    MongoAuthRateLimiter,
+    RateLimitKey,
+    issue_shop_token,
+    login_rate_keys,
+    retry_minutes,
+)
 from ..deps import (
-    authenticated_identity,
+    optional_shop_actor_id,
     public_tenant_business_access,
     require_roles,
+    shop_actor_identity,
     tenant_business_access,
 )
 from ..models import ShopSettingsIn, ShopOrderIn, ShopRegisterIn, ShopLoginIn, ShopStatusIn, ShopAddressIn
@@ -23,14 +33,19 @@ from ..tenant_access import TenantBusinessAccess
 from html import escape
 
 
-async def _optional_uid(authorization: Optional[str] = Header(None)) -> Optional[str]:
-    if not authorization or not authorization.lower().startswith("bearer "):
-        return None
-    try:
-        payload = jwt.decode(authorization.split(" ", 1)[1], JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        return payload.get("sub")
-    except Exception:
-        return None
+def _client_ip(request: Request | None) -> str:
+    return request.client.host if request and request.client else "unknown"
+
+
+def _rate_limit_error(exc: AuthRateLimitExceeded) -> HTTPException:
+    return HTTPException(
+        status_code=429,
+        detail=(
+            "Zu viele Authentifizierungsversuche. Bitte in "
+            f"{retry_minutes(exc.retry_after_seconds)} Minuten erneut versuchen."
+        ),
+        headers={"Retry-After": str(exc.retry_after_seconds)},
+    )
 
 stripe.api_key = os.environ.get("STRIPE_API_KEY", "")
 APP_URL = os.environ.get("APP_URL", "https://ordo-connect.app")
@@ -43,6 +58,8 @@ SHOP_SETTINGS_DEFAULTS = {
     "newsletterDiscountPercent": 10,
     "newsletterDiscountEnabled": True,
 }
+SHOP_REGISTER_WINDOW_SECONDS = 60 * 60
+SHOP_REGISTER_IP_LIMIT = 20
 
 
 async def _settings(access: TenantBusinessAccess):
@@ -96,7 +113,7 @@ async def shop_settings_put(
 async def create_shop_order(
     body: ShopOrderIn,
     access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
-    uid: Annotated[Optional[str], Depends(_optional_uid)] = None,
+    uid: Annotated[Optional[str], Depends(optional_shop_actor_id)] = None,
 ):
     if not body.items:
         raise HTTPException(status_code=400, detail="Warenkorb ist leer")
@@ -198,9 +215,6 @@ def _authorize_shop_order(o: dict, token: Optional[str], uid: Optional[str]) -> 
         return
     if o.get("token") and token and secrets.compare_digest(str(token), str(o["token"])):
         return
-    # Legacy orders created before per-order tokens: allow (no token stored).
-    if not o.get("token"):
-        return
     raise HTTPException(status_code=403, detail="Kein Zugriff auf diese Bestellung")
 
 
@@ -209,7 +223,7 @@ async def shop_checkout(
     order_id: str,
     access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
     token: Optional[str] = None,
-    uid: Annotated[Optional[str], Depends(_optional_uid)] = None,
+    uid: Annotated[Optional[str], Depends(optional_shop_actor_id)] = None,
 ):
     o = await access.shop_orders.find_one({"id": order_id})
     if not o:
@@ -249,7 +263,7 @@ async def shop_payment_status(
     order_id: str,
     access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
     token: Optional[str] = None,
-    uid: Annotated[Optional[str], Depends(_optional_uid)] = None,
+    uid: Annotated[Optional[str], Depends(optional_shop_actor_id)] = None,
 ):
     o = await access.shop_orders.find_one({"id": order_id})
     if not o:
@@ -385,40 +399,80 @@ def _shop_user_public(u: dict) -> dict:
 
 
 @api_router.post("/shop/register")
-async def shop_register(body: ShopRegisterIn):
+async def shop_register(body: ShopRegisterIn, request: Request = None):
     email = body.email.strip().lower()
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="Ungültige E-Mail-Adresse")
     if len(body.password) < 8:
         raise HTTPException(status_code=400, detail="Passwort muss mindestens 8 Zeichen haben")
+    limiter = MongoAuthRateLimiter(db)
+    keys = (
+        RateLimitKey(
+            "ip",
+            _client_ip(request),
+            SHOP_REGISTER_IP_LIMIT,
+            SHOP_REGISTER_WINDOW_SECONDS,
+        ),
+    )
+    try:
+        await limiter.ensure_allowed("shop_registration", keys)
+        # Consume the quota before creating the identity. A limiter storage
+        # failure can therefore never leave an account behind after a 5xx.
+        await limiter.record("shop_registration", keys)
+    except AuthRateLimitExceeded as exc:
+        raise _rate_limit_error(exc) from exc
     if await db.users.find_one({"email": email}):
         raise HTTPException(status_code=409, detail="E-Mail ist bereits registriert")
     uid = "sc-" + secrets.token_hex(5)
     doc = {"id": uid, "name": body.name.strip() or email, "email": email, "role": "shopuser",
            "hashed_password": hash_pw(body.password), "companyId": None, "salesRepId": None,
+           "active": True, "authVersion": 0, "must_change_password": False,
            "createdAt": datetime.now(timezone.utc).isoformat()}
-    await db.users.insert_one(doc)
-    return {"access_token": create_token(doc), "user": _shop_user_public(doc)}
+    try:
+        await db.users.insert_one(doc)
+    except DuplicateKeyError as exc:
+        raise HTTPException(status_code=409, detail="E-Mail ist bereits registriert") from exc
+    return {"access_token": issue_shop_token(doc), "user": _shop_user_public(doc)}
 
 
 @api_router.post("/shop/login")
-async def shop_login(body: ShopLoginIn):
+async def shop_login(body: ShopLoginIn, request: Request = None):
     email = body.email.strip().lower()
+    keys = login_rate_keys(email, _client_ip(request))
+    limiter = MongoAuthRateLimiter(db)
+    try:
+        await limiter.ensure_allowed("credential_login", keys)
+    except AuthRateLimitExceeded as exc:
+        raise _rate_limit_error(exc) from exc
     u = await db.users.find_one({"email": email})
-    if not u or not verify_pw(body.password, u["hashed_password"]):
+    password_ok = verify_pw(
+        body.password,
+        u.get("hashed_password", DUMMY_HASH) if u else DUMMY_HASH,
+    )
+    if (
+        not u
+        or not identity_is_active(u)
+        or u.get("role") != "shopuser"
+        or not password_ok
+    ):
+        try:
+            await limiter.record("credential_login", keys)
+        except AuthRateLimitExceeded as exc:
+            raise _rate_limit_error(exc) from exc
         raise HTTPException(status_code=401, detail="E-Mail oder Passwort falsch")
-    return {"access_token": create_token(u), "user": _shop_user_public(u)}
+    await limiter.clear("credential_login", keys[:1])
+    return {"access_token": issue_shop_token(u), "user": _shop_user_public(u)}
 
 
 @api_router.get("/shop/me")
-async def shop_me(user: Annotated[dict, Depends(authenticated_identity)]):
+async def shop_me(user: Annotated[dict, Depends(shop_actor_identity)]):
     return _shop_user_public(user)
 
 
 @api_router.put("/shop/me/address")
 async def shop_save_address(
     body: ShopAddressIn,
-    user: Annotated[dict, Depends(authenticated_identity)],
+    user: Annotated[dict, Depends(shop_actor_identity)],
 ):
     addr = body.model_dump()
     await db.users.update_one({"id": user["id"]}, {"$set": {"address": addr}})
@@ -427,7 +481,7 @@ async def shop_save_address(
 
 @api_router.get("/shop/my-orders")
 async def shop_my_orders(
-    user: Annotated[dict, Depends(authenticated_identity)],
+    user: Annotated[dict, Depends(shop_actor_identity)],
     access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
 ):
     rows = await access.shop_orders.find({"userId": user["id"]}).sort("createdAt", -1).to_list(1000)

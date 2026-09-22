@@ -6,6 +6,13 @@ from typing import Annotated
 from fastapi import Depends, HTTPException
 
 from ..audit_service import global_audit, tenant_audit
+from ..auth_security import (
+    AuthRateLimitExceeded,
+    MongoAuthRateLimiter,
+    RateLimitKey,
+    retry_minutes,
+    rotate_credentials,
+)
 from ..core import api_router, db, hash_pw, random_password
 from ..deps import require_roles, tenant_business_access
 from ..models import CreateUserIn
@@ -102,6 +109,8 @@ async def create_user(
         "hashed_password": hash_pw(password),
         "companyId": company_id,
         "salesRepId": user_id if body.role == "sales" else None,
+        "active": True,
+        "authVersion": 0,
         "must_change_password": True,
         "createdAt": now,
     }
@@ -173,13 +182,29 @@ async def admin_reset_password(
         )
 
     password = random_password()
-    await db.users.update_one(
-        {"id": user_id},
-        {"$set": {
-            "hashed_password": hash_pw(password),
-            "must_change_password": True,
-        }},
+    reset_limit = (
+        RateLimitKey("actor", admin["id"], 30, 15 * 60),
     )
+    limiter = MongoAuthRateLimiter(db)
+    try:
+        await limiter.ensure_allowed("admin_password_reset", reset_limit)
+        await limiter.record("admin_password_reset", reset_limit)
+    except AuthRateLimitExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                "Zu viele Passwortresets. Bitte in "
+                f"{retry_minutes(exc.retry_after_seconds)} Minuten erneut versuchen."
+            ),
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        ) from exc
+    if not await rotate_credentials(
+        db,
+        identity,
+        hashed_password=hash_pw(password),
+        must_change_password=True,
+    ):
+        raise HTTPException(status_code=409, detail="Benutzer wurde parallel geändert")
     await global_audit(admin, "identity.reset", user_id, {"email": identity["email"]})
     await tenant_audit(access, admin, "membership.identity_reset", membership["id"])
     return {"id": user_id, "email": identity["email"], "initialPassword": password}

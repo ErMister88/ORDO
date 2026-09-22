@@ -4,12 +4,16 @@ from datetime import datetime, timezone
 from typing import Annotated, Optional
 
 import httpx
-import jwt
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, HTTPException
 from pydantic import BaseModel
 
-from ..core import api_router, logger, JWT_SECRET, JWT_ALGORITHM
-from ..deps import public_tenant_business_access, require_roles, tenant_business_access
+from ..core import api_router, logger
+from ..deps import (
+    optional_shop_actor_id,
+    public_tenant_business_access,
+    require_roles,
+    tenant_business_access,
+)
 from ..models import PushBroadcastIn
 from ..tenant_access import TenantBusinessAccess
 
@@ -29,27 +33,16 @@ class RegisterPushBody(BaseModel):
     device_token: str
 
 
-def _caller_id(request: Request) -> Optional[str]:
-    auth = request.headers.get("Authorization", "")
-    if auth.startswith("Bearer "):
-        try:
-            return jwt.decode(auth[7:], JWT_SECRET, algorithms=[JWT_ALGORITHM]).get("sub")
-        except Exception:
-            return None
-    return None
-
-
 @api_router.post("/register-push", status_code=201)
 async def register_push(
     body: RegisterPushBody,
-    request: Request,
     access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
+    caller_id: Annotated[Optional[str], Depends(optional_shop_actor_id)] = None,
 ):
     # Authenticated callers are bound to their own account id (cannot spoof
     # another user's id); anonymous device ids are namespaced so they can never
     # collide with or impersonate a real user account.
-    caller = _caller_id(request)
-    reg_id = caller if caller else f"anon:{body.user_id}"
+    reg_id = caller_id if caller_id else f"anon:{body.user_id}"
     provider_user_id = f"{access.context.tenant_id}:{reg_id}"
     await access.push_registrations.update_one(
         {"userId": reg_id},

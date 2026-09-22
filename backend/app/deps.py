@@ -4,9 +4,16 @@ from __future__ import annotations
 from typing import Annotated, List
 
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 
-from .core import JWT_ALGORITHM, JWT_SECRET, Role, db, oauth2_scheme
+from .auth_security import (
+    AuthStateError,
+    decode_access_token,
+    decode_actor_token,
+    password_change_required,
+    validate_identity_token,
+)
+from .core import Role, db, oauth2_scheme
 from .tenant_access import TenantBusinessAccess
 from .tenancy import (
     MembershipTenantResolver,
@@ -32,21 +39,16 @@ def _authentication_error() -> HTTPException:
 async def authenticated_identity(
     token: Annotated[str, Depends(oauth2_scheme)],
 ) -> dict:
-    """Return only the global identity; no tenant authorization is implied."""
+    """Validate a tenant token and return its current global identity."""
 
-    err = _authentication_error()
     try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        uid = payload.get("sub")
-        if not isinstance(uid, str) or not uid:
-            raise err
-    except HTTPException:
-        raise
-    except Exception:
-        raise err
-    user = await db.users.find_one({"id": uid})
-    if not user:
-        raise err
+        payload = decode_access_token(token, "tenant")
+        user = await db.users.find_one({"id": payload["sub"]})
+        if not user:
+            raise AuthStateError("Identity does not exist")
+        validate_identity_token(user, payload, "tenant")
+    except (jwt.PyJWTError, AuthStateError, KeyError, TypeError, ValueError) as exc:
+        raise _authentication_error() from exc
     identity = dict(user)
     identity["_token_payload"] = payload
     return identity
@@ -79,14 +81,15 @@ def membership_principal(identity: dict, context: TenantContext) -> dict:
     principal["role"] = context.role
     principal["companyId"] = context.company_id
     principal["salesRepId"] = None
+    principal["must_change_password"] = password_change_required(identity)
     principal["_tenant_context"] = context
     return principal
 
 
-async def current_user(
+async def authenticated_tenant_principal(
     identity: Annotated[dict, Depends(authenticated_identity)],
 ) -> dict:
-    """Return a tenant-authorized principal whose role comes from membership."""
+    """Resolve current membership without enforcing a pending password change."""
 
     payload = identity.get("_token_payload") or {}
     requested_tenant_id = payload.get("tenant_id")
@@ -107,6 +110,59 @@ async def current_user(
             detail="Keine aktive Tenant-Mitgliedschaft",
         ) from exc
     return membership_principal(identity, context)
+
+
+async def current_user(
+    user: Annotated[dict, Depends(authenticated_tenant_principal)],
+) -> dict:
+    """Return a fully usable tenant principal with current password state."""
+
+    if password_change_required(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Passwortänderung erforderlich",
+        )
+    return user
+
+
+async def _shop_actor_from_token(token: str) -> dict:
+    try:
+        kind, payload = decode_actor_token(token)
+        identity = await db.users.find_one({"id": payload["sub"]})
+        if not identity:
+            raise AuthStateError("Identity does not exist")
+        validate_identity_token(identity, payload, kind)
+    except (jwt.PyJWTError, AuthStateError, KeyError, TypeError, ValueError) as exc:
+        raise _authentication_error() from exc
+
+    result = dict(identity)
+    result["_token_payload"] = payload
+    if kind == "tenant":
+        result = await authenticated_tenant_principal(result)
+    if password_change_required(result):
+        raise HTTPException(status_code=403, detail="Passwortänderung erforderlich")
+    return result
+
+
+async def shop_actor_identity(
+    token: Annotated[str, Depends(oauth2_scheme)],
+) -> dict:
+    """Accept a current shop token or a fully valid tenant token for B2C use."""
+
+    return await _shop_actor_from_token(token)
+
+
+async def optional_shop_actor_id(
+    authorization: Annotated[str | None, Header()] = None,
+) -> str | None:
+    """Treat only an absent bearer as guest; malformed/present tokens fail."""
+
+    if authorization is None:
+        return None
+    scheme, separator, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not separator or not token.strip():
+        raise _authentication_error()
+    return (await _shop_actor_from_token(token.strip()))["id"]
 
 
 def require_roles(*allowed: Role):

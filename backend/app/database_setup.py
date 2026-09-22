@@ -12,6 +12,11 @@ async def ensure_required_indexes(database) -> None:
         expireAfterSeconds=0,
         name="ttl_reset",
     )
+    await database.auth_rate_limits.create_index(
+        "expiresAt",
+        expireAfterSeconds=0,
+        name="ttl_auth_rate_limit",
+    )
     await database.offers.create_index("id", unique=True, name="uniq_offer_id")
     await database.orders.create_index("id", unique=True, name="uniq_order_id")
     await database.products.create_index("id", unique=True, name="uniq_product_id")

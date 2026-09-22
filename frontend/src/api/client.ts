@@ -7,6 +7,20 @@ if (!API) {
   );
 }
 export const TOKEN_KEY = "ss_auth_token";
+let authFailureHandler: (() => void | Promise<void>) | null = null;
+
+export function setAuthFailureHandler(handler: (() => void | Promise<void>) | null) {
+  authFailureHandler = handler;
+}
+
+async function handleAuthFailure(res: Response, requestToken: string) {
+  if (res.status !== 401 || !requestToken) return;
+  const currentToken = await storage.secureGet<string>(TOKEN_KEY, "");
+  // A delayed response from the previous user must never clear a newer login.
+  if (currentToken !== requestToken) return;
+  await storage.secureRemove(TOKEN_KEY);
+  await authFailureHandler?.();
+}
 
 export type Role = "admin" | "sales" | "customer";
 export type User = {
@@ -19,36 +33,45 @@ export type User = {
   must_change_password?: boolean;
 };
 
-async function authHeader(): Promise<Record<string, string>> {
-  const token = await storage.secureGet<string>(TOKEN_KEY, "");
-  return token ? { Authorization: `Bearer ${token}` } : {};
+async function authContext(): Promise<{
+  headers: Record<string, string>;
+  token: string;
+}> {
+  const token = (await storage.secureGet<string>(TOKEN_KEY, "")) ?? "";
+  return {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    token,
+  };
 }
 
 export async function apiGet<T = any>(path: string): Promise<T> {
-  const headers = await authHeader();
+  const { headers, token } = await authContext();
   const res = await fetch(`${API}/api${path}`, { headers });
+  await handleAuthFailure(res, token);
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `Fehler ${res.status}`);
   return res.json();
 }
 
 export async function apiPost<T = any>(path: string, body?: any): Promise<T> {
-  const headers = await authHeader();
+  const { headers, token } = await authContext();
   const res = await fetch(`${API}/api${path}`, {
     method: "POST",
     headers: { ...headers, "Content-Type": "application/json" },
     body: JSON.stringify(body ?? {}),
   });
+  await handleAuthFailure(res, token);
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `Fehler ${res.status}`);
   return res.json();
 }
 
 export async function apiPut<T = any>(path: string, body?: any): Promise<T> {
-  const headers = await authHeader();
+  const { headers, token } = await authContext();
   const res = await fetch(`${API}/api${path}`, {
     method: "PUT",
     headers: { ...headers, "Content-Type": "application/json" },
     body: JSON.stringify(body ?? {}),
   });
+  await handleAuthFailure(res, token);
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `Fehler ${res.status}`);
   return res.json();
 }
@@ -56,8 +79,9 @@ export async function apiPut<T = any>(path: string, body?: any): Promise<T> {
 export const API_BASE = API;
 
 export async function apiDelete<T = any>(path: string): Promise<T> {
-  const headers = await authHeader();
+  const { headers, token } = await authContext();
   const res = await fetch(`${API}/api${path}`, { method: "DELETE", headers });
+  await handleAuthFailure(res, token);
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `Fehler ${res.status}`);
   return res.json();
 }
@@ -74,7 +98,7 @@ export async function apiUpload(
   type: string,
 ): Promise<{ url: string; path: string }> {
   const { Platform } = require("react-native");
-  const headers = await authHeader();
+  const { headers, token } = await authContext();
   const form = new FormData();
   if (Platform.OS === "web") {
     const blob = await (await fetch(uri)).blob();
@@ -83,6 +107,7 @@ export async function apiUpload(
     form.append("file", { uri, name, type } as any);
   }
   const res = await fetch(`${API}/api/upload`, { method: "POST", headers, body: form });
+  await handleAuthFailure(res, token);
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `Upload fehlgeschlagen (${res.status})`);
   return res.json();
 }

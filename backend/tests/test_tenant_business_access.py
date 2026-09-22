@@ -10,7 +10,6 @@ from pathlib import Path
 import mongomock
 import pytest
 from fastapi import HTTPException
-from starlette.requests import Request
 
 # Application imports create a lazy Motor client. Pin it to a non-routable
 # test-only target before importing any app module.
@@ -1508,11 +1507,6 @@ class _PushClient:
         return _PushResponse()
 
 
-def _request(authorization: str | None = None) -> Request:
-    headers = [] if authorization is None else [(b"authorization", authorization.encode())]
-    return Request({"type": "http", "method": "POST", "path": "/", "headers": headers})
-
-
 def test_push_registration_and_broadcast_use_tenant_namespaced_targets(monkeypatch):
     database = AsyncDatabase("tenant_edge_push")
     tenant_a = access(database, TENANT_A)
@@ -1521,8 +1515,8 @@ def test_push_registration_and_broadcast_use_tenant_namespaced_targets(monkeypat
     monkeypatch.setattr(push, "_client", client)
     body = push.RegisterPushBody(user_id="device", platform="ios", device_token="token")
 
-    run(push.register_push(body, _request(), tenant_a))
-    run(push.register_push(body, _request(), tenant_b))
+    run(push.register_push(body, tenant_a))
+    run(push.register_push(body, tenant_b))
     a_doc = database.raw.push_registrations.find_one({"tenantId": TENANT_A})
     b_doc = database.raw.push_registrations.find_one({"tenantId": TENANT_B})
     assert a_doc["providerUserId"] == f"{TENANT_A}:anon:device"

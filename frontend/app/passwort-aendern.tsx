@@ -2,19 +2,19 @@ import { useState } from "react";
 import { View, Text, ScrollView, Pressable, KeyboardAvoidingView, Platform } from "react-native";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArrowLeft, CheckCircle } from "phosphor-react-native";
+import { ArrowLeft } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
 import { apiPost } from "@/src/api/client";
 import { useAuth } from "@/src/auth/auth";
-import { Card, Input, Button, SectionTitle, Muted } from "@/src/components/ui";
+import { Card, Input, Button, SectionTitle } from "@/src/components/ui";
 
 export default function PasswortAendern() {
   const styles = useStyles();
   const { colors } = useTheme();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { refresh, signOut } = useAuth();
+  const { signOut } = useAuth();
   const { forced } = useLocalSearchParams<{ forced?: string }>();
   const isForced = forced === "1";
 
@@ -22,7 +22,6 @@ export default function PasswortAendern() {
   const [pw, setPw] = useState("");
   const [pw2, setPw2] = useState("");
   const [msg, setMsg] = useState("");
-  const [done, setDone] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const submit = async () => {
@@ -42,12 +41,8 @@ export default function PasswortAendern() {
     setLoading(true);
     try {
       await apiPost("/auth/password/change", { currentPassword: current, newPassword: pw });
-      if (isForced) {
-        await refresh();
-        router.replace("/(tabs)");
-        return;
-      }
-      setDone(true);
+      await signOut();
+      router.replace("/login?passwordChanged=1");
     } catch (e: any) {
       setMsg(e.message || "Fehler");
     } finally {
@@ -81,28 +76,17 @@ export default function PasswortAendern() {
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-          {done ? (
-            <Card testID="change-done">
-              <View style={{ alignItems: "center", gap: 10, paddingVertical: 8 }}>
-                <CheckCircle size={48} color={colors.success} weight="fill" />
-                <Text style={styles.doneTitle}>Passwort geändert</Text>
-                <Muted>Ihr neues Passwort ist ab sofort aktiv.</Muted>
-                <Button testID="change-back" title="Zurück" onPress={() => router.back()} style={{ marginTop: 8, alignSelf: "stretch" }} />
-              </View>
-            </Card>
-          ) : (
-            <Card testID="change-form">
-              <SectionTitle>Neues Passwort festlegen</SectionTitle>
-              <Text style={styles.label}>Aktuelles Passwort</Text>
-              <Input testID="change-current" value={current} onChangeText={setCurrent} placeholder="••••••••" secureTextEntry />
-              <Text style={styles.label}>Neues Passwort</Text>
-              <Input testID="change-new" value={pw} onChangeText={setPw} placeholder="mind. 8 Zeichen" secureTextEntry />
-              <Text style={styles.label}>Neues Passwort bestätigen</Text>
-              <Input testID="change-new2" value={pw2} onChangeText={setPw2} placeholder="wiederholen" secureTextEntry />
-              {msg ? <Text style={styles.err}>{msg}</Text> : null}
-              <Button testID="change-submit" title="Passwort ändern" loading={loading} onPress={submit} style={{ marginTop: 8 }} />
-            </Card>
-          )}
+          <Card testID="change-form">
+            <SectionTitle>Neues Passwort festlegen</SectionTitle>
+            <Text style={styles.label}>Aktuelles Passwort</Text>
+            <Input testID="change-current" value={current} onChangeText={setCurrent} placeholder="••••••••" secureTextEntry />
+            <Text style={styles.label}>Neues Passwort</Text>
+            <Input testID="change-new" value={pw} onChangeText={setPw} placeholder="mind. 8 Zeichen" secureTextEntry />
+            <Text style={styles.label}>Neues Passwort bestätigen</Text>
+            <Input testID="change-new2" value={pw2} onChangeText={setPw2} placeholder="wiederholen" secureTextEntry />
+            {msg ? <Text style={styles.err}>{msg}</Text> : null}
+            <Button testID="change-submit" title="Passwort ändern" loading={loading} onPress={submit} style={{ marginTop: 8 }} />
+          </Card>
         </ScrollView>
       </KeyboardAvoidingView>
     </View>
@@ -127,5 +111,4 @@ const useStyles = makeStyles((c) => ({
   content: { padding: 20, gap: 12, paddingBottom: 32 },
   label: { fontSize: 13, fontWeight: "700", color: c.onSurfaceSecondary, marginTop: 10, marginBottom: 4 },
   err: { color: c.error, fontSize: 14, fontWeight: "600", marginTop: 8 },
-  doneTitle: { fontSize: 18, fontWeight: "800", color: c.onSurface },
 }));

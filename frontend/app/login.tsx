@@ -8,7 +8,7 @@ import {
   Pressable,
   useWindowDimensions,
 } from "react-native";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -28,6 +28,7 @@ export default function Login() {
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
   const { signIn } = useAuth();
+  const { passwordChanged } = useLocalSearchParams<{ passwordChanged?: string }>();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -81,6 +82,10 @@ export default function Login() {
         >
           <Text style={styles.title}>Anmelden</Text>
           <Text style={styles.subtitle}>Melden Sie sich bei Ihrem Konto an</Text>
+
+          {passwordChanged === "1" ? (
+            <Text style={styles.success}>Passwort geändert. Bitte melden Sie sich neu an.</Text>
+          ) : null}
 
           <View style={styles.form}>
             <Text style={styles.fieldLabel}>E-Mail</Text>
@@ -166,6 +171,7 @@ const useStyles = makeStyles((c) => ({
   shopLink: { alignSelf: "center", marginTop: 16, paddingVertical: 12, paddingHorizontal: 18, borderRadius: 12, backgroundColor: c.brandTertiary },
   shopLinkText: { color: c.brandPrimary, fontWeight: "800", fontSize: 15 },
   error: { color: c.error, fontSize: 14, fontWeight: "600", marginTop: 4 },
+  success: { color: c.success, fontSize: 14, fontWeight: "700", marginBottom: 8 },
 }));
 
 function StyleSheetAbsolute() {

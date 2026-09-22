@@ -5,7 +5,6 @@ from copy import deepcopy
 from datetime import datetime, timezone
 import os
 
-import jwt
 import mongomock
 import pytest
 from fastapi import HTTPException
@@ -16,8 +15,9 @@ os.environ["DB_NAME"] = "ordo_test_membership_import"
 os.environ["JWT_SECRET"] = "test-only-membership-secret-at-least-32-bytes"
 os.environ["APP_ENV"] = "test"
 
-from app import core as app_core, deps
-from app.core import JWT_ALGORITHM, hash_pw
+from app import auth_security, deps
+from app.auth_security import decode_access_token, issue_shop_token, issue_tenant_token
+from app.core import hash_pw
 from app.models import CompanyUpdateIn, CreateUserIn
 from app.routers import auth, companies, users
 from app.tenant_access import TenantBusinessAccess
@@ -39,8 +39,12 @@ from app.tenancy import (
 TENANT_A = "tnt_test_a"
 TENANT_B = "tnt_test_b"
 JWT_SECRET = "test-only-membership-secret-at-least-32-bytes"
-app_core.JWT_SECRET = JWT_SECRET
-deps.JWT_SECRET = JWT_SECRET
+auth_security.JWT_SECRET = JWT_SECRET
+
+
+@pytest.fixture(autouse=True)
+def _stable_token_secret(monkeypatch):
+    monkeypatch.setattr(auth_security, "JWT_SECRET", JWT_SECRET)
 
 
 class AsyncCursor:
@@ -72,8 +76,14 @@ class AsyncCollection:
     async def update_one(self, *args, **kwargs):
         return self._collection.update_one(*args, **kwargs)
 
+    async def find_one_and_update(self, *args, **kwargs):
+        return self._collection.find_one_and_update(*args, **kwargs)
+
     async def delete_one(self, *args, **kwargs):
         return self._collection.delete_one(*args, **kwargs)
+
+    async def delete_many(self, *args, **kwargs):
+        return self._collection.delete_many(*args, **kwargs)
 
     async def count_documents(self, *args, **kwargs):
         return self._collection.count_documents(*args, **kwargs)
@@ -343,23 +353,33 @@ def test_current_user_ignores_global_role_and_revalidates_signed_claims(monkeypa
     )
     monkeypatch.setattr(deps, "db", database)
 
-    token = jwt.encode(
-        {"sub": "user", "role": "sales", "tenant_id": TENANT_A, "membership_id": "mbr-a"},
-        JWT_SECRET,
-        algorithm=JWT_ALGORITHM,
+    token = issue_tenant_token(
+        database.raw.users.find_one({"id": "user"}),
+        TenantContext(
+            tenant_id=TENANT_A,
+            actor_user_id="user",
+            membership_id="mbr-a",
+            role="sales",
+            resolution_source=TenantResolutionSource.MEMBERSHIP,
+        ),
     )
     identity = run(deps.authenticated_identity(token))
-    principal = run(deps.current_user(identity))
+    principal = run(deps.current_user(run(deps.authenticated_tenant_principal(identity))))
     assert principal["role"] == "admin"
     assert principal["companyId"] is None
 
-    forged = jwt.encode(
-        {"sub": "user", "tenant_id": TENANT_B, "membership_id": "mbr-a"},
-        JWT_SECRET,
-        algorithm=JWT_ALGORITHM,
+    forged = issue_tenant_token(
+        database.raw.users.find_one({"id": "user"}),
+        TenantContext(
+            tenant_id=TENANT_B,
+            actor_user_id="user",
+            membership_id="mbr-a",
+            role="admin",
+            resolution_source=TenantResolutionSource.MEMBERSHIP,
+        ),
     )
     with pytest.raises(HTTPException) as exc:
-        run(deps.current_user(run(deps.authenticated_identity(forged))))
+        run(deps.authenticated_tenant_principal(run(deps.authenticated_identity(forged))))
     assert exc.value.status_code == 403
 
 
@@ -370,10 +390,15 @@ def test_unknown_global_identity_is_rejected_before_membership_resolution(monkey
         membership_document("mbr-ghost", TENANT_A, "ghost", "admin")
     )
     monkeypatch.setattr(deps, "db", database)
-    token = jwt.encode(
-        {"sub": "ghost", "tenant_id": TENANT_A, "membership_id": "mbr-ghost"},
-        JWT_SECRET,
-        algorithm=JWT_ALGORITHM,
+    token = issue_tenant_token(
+        {"id": "ghost"},
+        TenantContext(
+            tenant_id=TENANT_A,
+            actor_user_id="ghost",
+            membership_id="mbr-ghost",
+            role="admin",
+            resolution_source=TenantResolutionSource.MEMBERSHIP,
+        ),
     )
 
     with pytest.raises(HTTPException) as exc:
@@ -410,7 +435,7 @@ def test_internal_login_selects_valid_membership_and_rejects_ambiguous_user(monk
 
     response = run(auth.login(form, requested_tenant_id=TENANT_B))
     assert response["user"].role == "sales"
-    payload = jwt.decode(response["access_token"], JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    payload = decode_access_token(response["access_token"], "tenant")
     assert payload["tenant_id"] == TENANT_B
     assert payload["membership_id"] == "mbr-b"
 
@@ -588,10 +613,10 @@ def test_shop_identity_remains_global_and_has_no_implicit_membership(monkeypatch
         "role": "shopuser", "hashed_password": hash_pw("password"),
     })
     monkeypatch.setattr(deps, "db", database)
-    token = jwt.encode({"sub": "shop"}, JWT_SECRET, algorithm=JWT_ALGORITHM)
-    identity = run(deps.authenticated_identity(token))
-    assert identity["role"] == "shopuser"
+    token = issue_shop_token(database.raw.users.find_one({"id": "shop"}))
     with pytest.raises(HTTPException) as exc:
-        run(deps.current_user(identity))
-    assert exc.value.status_code == 403
+        run(deps.authenticated_identity(token))
+    assert exc.value.status_code == 401
+    identity = run(deps.shop_actor_identity(token))
+    assert identity["role"] == "shopuser"
     assert database.raw.tenant_memberships.count_documents({}) == 0

@@ -200,6 +200,7 @@ def test_normal_application_startup_creates_no_demo_or_business_documents(
     expected_indexes = {
         "users": ("uniq_email", [("email", 1)], True, None),
         "password_resets": ("ttl_reset", [("expiresAt", 1)], False, 0),
+        "auth_rate_limits": ("ttl_auth_rate_limit", [("expiresAt", 1)], False, 0),
         "offers": ("uniq_offer_id", [("id", 1)], True, None),
         "orders": ("uniq_order_id", [("id", 1)], True, None),
         "products": ("uniq_product_id", [("id", 1)], True, None),

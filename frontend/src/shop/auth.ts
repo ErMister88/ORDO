@@ -20,15 +20,23 @@ export async function shopLogout() {
 
 async function req(path: string, method: string, body?: any, auth = false): Promise<any> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
+  let requestToken = "";
   if (auth) {
-    const t = await shopToken();
-    if (t) headers.Authorization = `Bearer ${t}`;
+    requestToken = await shopToken();
+    if (requestToken) headers.Authorization = `Bearer ${requestToken}`;
   }
   const res = await fetch(`${API_BASE}/api${path}`, {
     method,
     headers,
     body: body ? JSON.stringify(body) : undefined,
   });
+  if (
+    res.status === 401
+    && requestToken
+    && (await shopToken()) === requestToken
+  ) {
+    await shopLogout();
+  }
   const d = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(d.detail || `Fehler ${res.status}`);
   return d;

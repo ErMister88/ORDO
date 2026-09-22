@@ -6,14 +6,12 @@ from pymongo import ReturnDocument
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
-import jwt
 import bcrypt
 import secrets
 import string
 import hashlib
 from pathlib import Path
 from typing import Literal
-from datetime import datetime, timedelta, timezone
 
 ROOT_DIR = Path(__file__).parent.parent
 load_dotenv(ROOT_DIR / ".env")
@@ -25,6 +23,31 @@ db = client[os.environ["DB_NAME"]]
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 TOKEN_MINUTES = int(os.getenv("ACCESS_TOKEN_MINUTES", "720"))
+
+
+def validate_jwt_configuration(
+    app_env: str,
+    secret: str,
+    algorithm: str,
+    token_minutes: int,
+) -> None:
+    normalized_env = app_env.strip().lower()
+    if algorithm != "HS256":
+        raise RuntimeError("JWT_ALGORITHM must be HS256")
+    if token_minutes < 1:
+        raise RuntimeError("ACCESS_TOKEN_MINUTES must be positive")
+    if normalized_env in {"stage", "staging", "prod", "production"} and len(
+        secret.encode("utf-8")
+    ) < 32:
+        raise RuntimeError("JWT_SECRET must contain at least 32 bytes in staging/production")
+
+
+validate_jwt_configuration(
+    os.getenv("APP_ENV", ""),
+    JWT_SECRET,
+    JWT_ALGORITHM,
+    TOKEN_MINUTES,
+)
 
 app = FastAPI(title="S&S B2B API")
 api_router = APIRouter(prefix="/api")
@@ -64,20 +87,6 @@ def gen_reset_code() -> tuple:
     code = "".join(secrets.choice(alphabet) for _ in range(8))
     digest = hashlib.sha256(code.encode()).hexdigest()
     return code, digest
-
-
-def create_token(user: dict, context=None) -> str:
-    now = datetime.now(timezone.utc)
-    payload = {
-        "sub": user["id"],
-        "role": context.role if context is not None else user["role"],
-        "iat": now,
-        "exp": now + timedelta(minutes=TOKEN_MINUTES),
-    }
-    if context is not None:
-        payload["tenant_id"] = context.tenant_id
-        payload["membership_id"] = context.membership_id
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
 def strip_id(doc: dict) -> dict:

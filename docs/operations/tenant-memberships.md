@@ -72,7 +72,7 @@ Review des Plans und eine gesonderte Freigabe erforderlich.
 
 ## Demo-Daten und Rollout
 
-Neue Demo-Daten verwenden Seed-Version `ordo-demo-v3` und enthalten
+Neue Demo-Daten verwenden Seed-Version `ordo-demo-v4` und enthalten
 Memberships für die internen Demo-Identitäten. Bestehende Demo-Daten mit einem
 älteren Fingerprint werden nicht stillschweigend überschrieben. Ein Upgrade
 solcher Daten braucht einen kontrollierten, ausdrücklich freigegebenen Ablauf.
@@ -95,5 +95,5 @@ erfolgreich abgeschlossen sein.
   nicht definiert.
 - Membership-Änderungs- und Einladungsworkflows sind nicht Bestandteil dieses
   Pakets.
-- Die allgemeine JWT-Invalidierung, erzwungener Passwortwechsel und gemeinsame
-  Login-Rate-Limits werden im Auth-Härtungspaket umgesetzt.
+- JWT-Invalidierung, erzwungener Passwortwechsel und gemeinsame Login-Limits
+  sind in `auth-session-security.md` beschrieben.

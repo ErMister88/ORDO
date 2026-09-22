@@ -19,7 +19,7 @@ from pymongo.errors import DuplicateKeyError
 from .tenancy import SS_TENANT, SS_TENANT_ID, tenant_to_document
 
 
-DEMO_SEED_VERSION = "ordo-demo-v3"
+DEMO_SEED_VERSION = "ordo-demo-v4"
 DEMO_FINGERPRINT_FIELD = "_demoSeedFingerprint"
 DEMO_REFERENCE_TIME = datetime(2026, 9, 18, 12, 0, tzinfo=timezone.utc)
 PASSWORD_KEYS = ("admin", "sales", "customer")
@@ -121,16 +121,19 @@ def build_demo_manifest(now: datetime | None = None) -> dict[str, list[dict]]:
     users = [
         _with_metadata("users", "u-admin", {
             "id": "u-admin", "name": "Sergio (Admin)", "email": "admin@ss-coffee.de",
-            "role": "admin", "createdAt": created_at, "_passwordKey": "admin",
+            "role": "admin", "active": True, "authVersion": 0,
+            "must_change_password": False, "createdAt": created_at, "_passwordKey": "admin",
         }),
         _with_metadata("users", "u-sales", {
             "id": "u-sales", "name": "Marco Vertrieb", "email": "vertrieb@ss-coffee.de",
-            "role": "sales", "salesRepId": "u-sales", "createdAt": created_at,
+            "role": "sales", "salesRepId": "u-sales", "active": True,
+            "authVersion": 0, "must_change_password": False, "createdAt": created_at,
             "_passwordKey": "sales",
         }),
         _with_metadata("users", "u-customer", {
             "id": "u-customer", "name": "Ristorante Roma", "email": "kunde@ss-coffee.de",
-            "role": "customer", "companyId": "c1", "createdAt": created_at,
+            "role": "customer", "companyId": "c1", "active": True,
+            "authVersion": 0, "must_change_password": False, "createdAt": created_at,
             "_passwordKey": "customer",
         }),
     ]
