@@ -9,7 +9,6 @@ import { makeStyles, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
 import { apiGet, apiPost, fileUrl } from "@/src/api/client";
 import { euro, num } from "@/src/lib/format";
-import { applicableTier } from "@/src/lib/pricing";
 import { shareOfferPdf } from "@/src/lib/pdf";
 import { ScreenHeader } from "@/src/components/screen-header";
 import { Card, Input, Button, StatusBadge, SectionTitle, EmptyState, Muted } from "@/src/components/ui";
@@ -257,6 +256,11 @@ function CreateOffer({
   const product = products.find((p) => p.id === productId) || activeProducts[0];
   const parsed = Number((price || "").replace(",", "."));
   const q = Number(qty) || 0;
+  const baseQuote = useQuery({
+    queryKey: ["b2b-offer-quote", companyId, product?.id, q],
+    queryFn: () => apiPost("/pricing/b2b/quote", { companyId, items: [{ productId: product.id, qty: q }] }),
+    enabled: !!companyId && !!product && q > 0,
+  });
 
   const state = useMemo(() => {
     if (!product || !parsed) return null;
@@ -266,7 +270,6 @@ function CreateOffer({
   }, [product, parsed]);
 
   const db = product && parsed ? (parsed - product.cost) * q : 0;
-  const tier = applicableTier(product?.discountTiers, q);
 
   const addItem = () => {
     if (!product || !parsed || !q) return;
@@ -390,35 +393,15 @@ function CreateOffer({
             value={price}
             onChangeText={onPrice}
             keyboardType="decimal-pad"
-            placeholder={String(product.standardPrice)}
+            placeholder={baseQuote.data ? String(baseQuote.data.lines[0].finalUnitPrice) : "Preis festlegen"}
           />
         </View>
       </View>
 
       <Muted>
-        Standard {euro(product.standardPrice)} · Vertriebslimit {euro(product.salesFloor)} · Grenze{" "}
+        Autoritative Basis {baseQuote.data ? euro(baseQuote.data.lines[0].finalUnitPrice) : "nicht verfügbar"} netto · Vertriebslimit {euro(product.salesFloor)} · Grenze{" "}
         {euro(product.absoluteFloor)}
       </Muted>
-
-      {product.discountTiers?.length ? (
-        <View style={styles.tierBox} testID="tier-box">
-          <Text style={styles.tierTitle}>Mengenrabatt-Staffeln</Text>
-          {product.discountTiers.map((t: any, i: number) => (
-            <Text
-              key={i}
-              style={[styles.tierRow, tier?.minQty === t.minQty && styles.tierRowActive]}
-            >
-              ab {num(t.minQty)} {product.unit} · {euro(t.price)}/{product.unit}
-              {tier?.minQty === t.minQty ? "  ✓" : ""}
-            </Text>
-          ))}
-          {tier ? (
-            <Pressable testID="apply-tier" style={styles.applyTierBtn} onPress={() => onPrice(String(tier.price))}>
-              <Text style={styles.applyTierTxt}>Staffelpreis {euro(tier.price)} übernehmen</Text>
-            </Pressable>
-          ) : null}
-        </View>
-      ) : null}
 
       {parsed && isAdmin ? (
         <Muted>

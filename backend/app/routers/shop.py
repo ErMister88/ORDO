@@ -28,11 +28,13 @@ from ..deps import (
     shop_actor_identity,
     tenant_business_access,
 )
-from ..models import ShopSettingsIn, ShopOrderIn, ShopRegisterIn, ShopLoginIn, ShopStatusIn, ShopAddressIn
+from ..models import (ShopSettingsIn, ShopOrderIn, ShopQuoteIn, ShopRegisterIn,
+                      ShopLoginIn, ShopStatusIn, ShopAddressIn)
 from ..emailer import send_email, email_shell
 from ..tenant_access import TenantBusinessAccess
-from ..money import MoneyError, amount_minor, currency_code, from_minor, included_tax_minor, percentage_minor, to_minor
-from ..snapshots import product_item_snapshot, redact_internal_snapshot_fields
+from ..money import MoneyError, amount_minor, currency_code, from_minor, included_tax_minor, to_minor
+from ..pricing_engine import BasketQuote, PricingEngine, PricingError
+from ..snapshots import redact_internal_snapshot_fields
 from html import escape
 
 
@@ -55,12 +57,6 @@ APP_URL = os.environ.get("APP_URL", "https://ordo-connect.app")
 
 
 SHOP_SETTINGS_KEY = "shop"
-SHOP_SETTINGS_DEFAULTS = {
-    "freeShippingThreshold": 50.0,
-    "shippingFee": 4.90,
-    "newsletterDiscountPercent": 10,
-    "newsletterDiscountEnabled": True,
-}
 SHOP_REGISTER_WINDOW_SECONDS = 60 * 60
 SHOP_REGISTER_IP_LIMIT = 20
 ORDER_TOKEN_TTL_DAYS = 30
@@ -80,7 +76,22 @@ def _public_shop_order(document: dict) -> dict:
 
 async def _settings(access: TenantBusinessAccess):
     settings = await access.settings.find_one({"key": SHOP_SETTINGS_KEY})
-    return {**SHOP_SETTINGS_DEFAULTS, **(settings or {})}
+    if not settings:
+        raise HTTPException(status_code=503, detail="Shop-Preis- und Versandkonfiguration fehlt")
+    return settings
+
+
+async def _quote(body: ShopQuoteIn | ShopOrderIn, access: TenantBusinessAccess) -> BasketQuote:
+    settings = await _settings(access)
+    from .newsletter import resolve_discount
+    percent = await resolve_discount(body.promoCode, access)
+    try:
+        return await PricingEngine(access).quote_b2c_basket(
+            [item.model_dump() for item in body.items], settings,
+            subscription=body.subscription, basket_discount_percent=percent,
+        )
+    except (PricingError, MoneyError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @api_router.get("/shop/products")
@@ -90,17 +101,24 @@ async def shop_products(
     prods = await access.products.find(
         {"active": True, "b2cPrice": {"$gt": 0}}
     ).to_list(1000)
-    return [
-        {
+    result = []
+    for p in prods:
+        try:
+            _product, quote = await PricingEngine(access).quote_b2c(p["id"], 1)
+        except PricingError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        result.append({
             "id": p["id"], "brand": p["brand"], "name": p["name"], "unit": p.get("unit", "kg"),
             "imageUrl": p.get("imageUrl", ""), "description": p.get("description", ""),
-            "b2cPrice": p["b2cPrice"],
-            "b2cPriceMinor": amount_minor(p, "b2cPrice", expected_currency=access.context.default_currency),
+            "b2cPrice": quote.public()["baseUnitPrice"],
+            "b2cPriceMinor": quote.base_unit_price_minor,
             "currency": access.context.default_currency,
-            "taxRate": p.get("taxRate", 7), "stock": p.get("stock"),
-        }
-        for p in prods
-    ]
+            "taxRate": quote.tax_rate, "stock": p.get("stock"),
+            "b2cTiers": [{"minQty": float(t["minQty"]), "price": from_minor(t["priceMinor"]),
+                           "priceMinor": t["priceMinor"]}
+                          for t in PricingEngine(access)._validated_b2c_tiers(p)],
+        })
+    return result
 
 
 @api_router.get("/shop/settings")
@@ -112,8 +130,9 @@ async def shop_settings_get(
             "freeShippingThresholdMinor": amount_minor(s, "freeShippingThreshold", expected_currency=access.context.default_currency),
             "shippingFeeMinor": amount_minor(s, "shippingFee", expected_currency=access.context.default_currency),
             "currency": access.context.default_currency,
-            "newsletterDiscountPercent": int(s.get("newsletterDiscountPercent", 10)),
-            "newsletterDiscountEnabled": bool(s.get("newsletterDiscountEnabled", True))}
+            "newsletterDiscountPercent": int(s.get("newsletterDiscountPercent", 0)),
+            "newsletterDiscountEnabled": bool(s.get("newsletterDiscountEnabled", False)),
+            "subscriptionDiscountPercent": s.get("subscriptionDiscountPercent")}
 
 
 @api_router.put("/shop/settings")
@@ -138,6 +157,14 @@ async def shop_settings_put(
     return {"ok": True, **body.model_dump()}
 
 
+@api_router.post("/shop/quote")
+async def shop_quote(
+    body: ShopQuoteIn,
+    access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
+):
+    return (await _quote(body, access)).public()
+
+
 @api_router.post("/shop/orders")
 async def create_shop_order(
     body: ShopOrderIn,
@@ -148,48 +175,26 @@ async def create_shop_order(
         raise HTTPException(status_code=400, detail="Warenkorb ist leer")
     if not body.customer.name.strip() or "@" not in body.customer.email:
         raise HTTPException(status_code=400, detail="Name und gültige E-Mail erforderlich")
-    s = await _settings(access)
-    currency = access.context.default_currency
+    if body.subscription:
+        ordering_user = await db.users.find_one({"id": uid}) if uid else None
+        if not ordering_user or ordering_user.get("role") != "shopuser":
+            raise HTTPException(status_code=401, detail="Monats-Abos erfordern ein Shop-Konto")
+    basket = await _quote(body, access)
+    currency = basket.currency
     lines = []
-    subtotal_minor = 0
-    tax_map_minor: dict[str, int] = {}
-    for it in body.items:
-        p = await access.products.find_one({"id": it.productId, "active": True})
-        if not p or not p.get("b2cPrice"):
-            raise HTTPException(status_code=400, detail="Ein Produkt ist nicht mehr verfügbar")
-        price_minor = amount_minor(p, "b2cPrice", expected_currency=currency)
-        qty = float(it.qty)
-        rate = int(p.get("taxRate", 7))
-        snapshot = product_item_snapshot(
-            p, quantity=qty, unit_price_minor=price_minor, currency=currency,
-            price_source="b2c_standard",
-        )
+    for product, quote in basket.lines:
+        snapshot = quote.snapshot(product)
         snapshot["name"] = snapshot["productName"]
-        snapshot["taxMinor"] = included_tax_minor(snapshot["lineTotalMinor"], rate)
-        tax_map_minor[str(rate)] = tax_map_minor.get(str(rate), 0) + snapshot["taxMinor"]
-        subtotal_minor += snapshot["lineTotalMinor"]
+        snapshot["taxMinor"] = included_tax_minor(snapshot["lineTotalMinor"], quote.tax_rate)
         lines.append(snapshot)
-    if not lines:
-        raise HTTPException(status_code=400, detail="Warenkorb ist leer")
-    gross_subtotal_minor = subtotal_minor
-    # Newsletter discount applies to B2C customers only (guests or shopusers),
-    # never to B2B accounts (admin/sales/customer) who have their own pricing.
-    is_b2c = True
-    if uid:
-        ordering_user = await db.users.find_one({"id": uid})
-        if ordering_user and ordering_user.get("role") != "shopuser":
-            is_b2c = False
-    from .newsletter import resolve_discount
-    percent = await resolve_discount(body.promoCode, access) if is_b2c else 0
-    discount_minor = 0
-    if percent > 0:
-        discount_minor = percentage_minor(subtotal_minor, percent)
-        subtotal_minor -= discount_minor
-        tax_map_minor = {r: v - percentage_minor(v, percent) for r, v in tax_map_minor.items()}
-    threshold_minor = amount_minor(s, "freeShippingThreshold", expected_currency=currency)
-    shipping_minor = 0 if subtotal_minor >= threshold_minor else amount_minor(s, "shippingFee", expected_currency=currency)
-    total_minor = subtotal_minor + shipping_minor
+    subtotal_minor = basket.payable_merchandise_minor
+    gross_subtotal_minor = basket.merchandise_minor
+    discount_minor = basket.basket_discount_minor
+    shipping_minor = basket.shipping_minor
+    total_minor = basket.total_minor
+    tax_map_minor = dict(basket.tax_breakdown_minor)
     tax_total_minor = sum(tax_map_minor.values())
+    percent = basket.basket_discount_percent
     subtotal = from_minor(subtotal_minor)
     gross_subtotal = from_minor(gross_subtotal_minor)
     discount = from_minor(discount_minor)
@@ -212,6 +217,9 @@ async def create_shop_order(
         "taxBreakdown": tax_map, "taxTotal": tax_total,
         "taxBreakdownMinor": tax_map_minor, "taxTotalMinor": tax_total_minor,
         "currency": currency, "snapshotVersion": 1,
+        "pricingContext": "b2c", "priceSemantics": "gross",
+        "subscription": body.subscription,
+        "subscriptionInterval": "monthly" if body.subscription else None,
         "status": "Neu", "paymentStatus": "Offen", "userId": uid,
         "accessTokenHash": _order_token_hash(order_token),
         "accessTokenExpiresAt": (now + timedelta(days=ORDER_TOKEN_TTL_DAYS)).isoformat(),

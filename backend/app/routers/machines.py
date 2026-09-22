@@ -16,11 +16,13 @@ from ..models import MachineIn, MachineRequestIn, MachineTermsIn, MachineRespond
 from ..emailer import send_email, email_shell
 from ..tenant_access import TenantBusinessAccess
 from ..money import MoneyError, amount_minor, currency_code, from_minor, to_minor
+from ..pricing_engine import PricingEngine, PricingError
 
 stripe.api_key = os.environ.get("STRIPE_API_KEY", "")
 APP_URL = (os.environ.get("APP_URL") or "https://ordo-connect.preview.emergentagent.com").rstrip("/")
 
-TYPE_LABEL = {"kauf": "Kauf", "finanzierung": "Finanzierung", "leasing": "Leasing (Kaffeebindung)"}
+TYPE_LABEL = {"kauf": "Kauf", "finanzierung": "Finanzierung", "leasing": "Leasing (Kaffeebindung)",
+              "bereitstellung": "Bereitstellung"}
 
 # ---------------- Catalog ----------------
 @api_router.get("/machines")
@@ -40,7 +42,7 @@ async def create_machine(
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
 ):
     currency = access.context.default_currency
-    doc = {"id": str(uuid.uuid4()), "taxRate": 19,
+    doc = {"id": str(uuid.uuid4()),
            "currency": currency, "priceMinor": to_minor(body.price),
            "createdAt": datetime.now(timezone.utc).isoformat(), **body.model_dump()}
     await access.machines.insert_one(doc)
@@ -132,6 +134,14 @@ async def create_machine_request(
     m = await access.machines.find_one({"id": body.machineId})
     if not m or not m.get("active", True):
         raise HTTPException(status_code=404, detail="Maschine nicht verfügbar")
+    direct_quote = None
+    if body.type == "kauf":
+        try:
+            m, direct_quote = await PricingEngine(access).quote_b2c_machine(body.machineId)
+        except PricingError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if body.productId and not await access.products.find_one({"id": body.productId, "active": {"$ne": False}}):
+        raise HTTPException(status_code=404, detail="Kaffeesorte nicht gefunden")
     now = datetime.now(timezone.utc)
     seq = await next_seq("machinereq")
     rid = f"M-{now.year}-{seq:05d}"
@@ -139,15 +149,25 @@ async def create_machine_request(
     doc = {
         "id": rid, "machineId": m["id"], "machineName": m["name"],
         "machineDescription": m.get("description", ""),
-        "machinePrice": from_minor(amount_minor(m, "price", expected_currency=access.context.default_currency)),
-        "machinePriceMinor": amount_minor(m, "price", expected_currency=access.context.default_currency),
-        "currency": access.context.default_currency, "taxRate": int(m.get("taxRate", 19)),
         "snapshotVersion": 1,
-        "type": body.type, "termMonths": body.termMonths or 48, "message": body.message,
+        "type": body.type, "termMonths": body.termMonths, "message": body.message,
+        "requestedCoffeeProductId": body.productId,
+        "expectedCoffeeKgMonth": body.expectedCoffeeKgMonth,
+        "requestContact": {"companyName": body.companyName, "name": body.contactName,
+                           "email": body.contactEmail, "phone": body.contactPhone},
         "customer": await _customer_snapshot(user, access),
         "status": status, "paymentStatus": "Offen",
         "terms": None, "createdAt": now.isoformat(),
     }
+    if direct_quote is not None:
+        doc.update({
+            "machinePrice": from_minor(direct_quote.final_unit_price_minor),
+            "machinePriceMinor": direct_quote.final_unit_price_minor,
+            "currency": direct_quote.currency, "taxRate": direct_quote.tax_rate,
+            "pricingContext": direct_quote.pricing_context,
+            "priceSemantics": direct_quote.price_semantics,
+            "priceSource": direct_quote.price_source,
+        })
     await access.machine_requests.insert_one(doc)
 
     # Notify staff about new requests (best-effort).

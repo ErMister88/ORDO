@@ -472,6 +472,16 @@ def test_registry_executes_baseline_tenant_expansion_and_membership_schema():
 
     report = runner(database, migrations=None).run().as_dict()
 
-    assert [item["version"] for item in report["executedMigrations"]] == [1, 2, 3, 4]
+    assert [item["version"] for item in report["executedMigrations"]] == [1, 2, 3, 4, 5]
     assert database.tenants.count_documents({"id": SS_TENANT_ID}) == 1
-    assert all(rows == [] for rows in business_documents(database).values())
+    documents = business_documents(database)
+    settings = documents.pop("settings")
+    assert len(settings) == 1
+    settings[0].pop("_id")
+    assert settings == [{
+        "tenantId": SS_TENANT_ID, "key": "shop", "currency": "EUR",
+        "freeShippingThreshold": 59.0, "freeShippingThresholdMinor": 5900,
+        "shippingFee": 4.9, "shippingFeeMinor": 490,
+        "newsletterDiscountPercent": 10, "newsletterDiscountEnabled": True,
+    }]
+    assert all(rows == [] for rows in documents.values())

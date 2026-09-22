@@ -1,6 +1,7 @@
 """Pydantic request/response models."""
 from pydantic import BaseModel, Field
 from typing import Annotated, List, Optional, Literal
+from datetime import datetime
 
 from .core import Role
 
@@ -70,7 +71,8 @@ class ProductIn(BaseModel):
     description: str = ""
     imageUrl: str = ""
     discountTiers: List[DiscountTier] = []
-    taxRate: PercentValue = 7
+    b2cTiers: List[DiscountTier] = []
+    taxRate: PercentValue
     stock: Optional[float] = None
     b2cPrice: Optional[PositiveMoneyValue] = None
     active: bool = True
@@ -80,6 +82,20 @@ class CustomerPriceIn(BaseModel):
     companyId: str
     productId: str
     price: PositiveMoneyValue
+
+
+class B2BPromotionIn(BaseModel):
+    name: str
+    productId: str
+    companyId: Optional[str] = None
+    price: PositiveMoneyValue
+    startsAt: datetime
+    endsAt: datetime
+
+
+class PricingQuoteIn(BaseModel):
+    companyId: str
+    items: List[OrderItemIn]
 
 
 class OrderStatusIn(BaseModel):
@@ -95,10 +111,11 @@ class StockIn(BaseModel):
 
 
 class ShopSettingsIn(BaseModel):
-    freeShippingThreshold: MoneyValue = 50.0
-    shippingFee: MoneyValue = 4.90
-    newsletterDiscountPercent: PercentValue = 10
+    freeShippingThreshold: MoneyValue
+    shippingFee: MoneyValue
+    newsletterDiscountPercent: PercentValue
     newsletterDiscountEnabled: bool = True
+    subscriptionDiscountPercent: Optional[PercentValue] = None
 
 
 class ShopCustomerIn(BaseModel):
@@ -115,10 +132,17 @@ class ShopItemIn(BaseModel):
     qty: PositiveQuantity
 
 
+class ShopQuoteIn(BaseModel):
+    items: List[ShopItemIn]
+    promoCode: Optional[str] = None
+    subscription: bool = False
+
+
 class ShopOrderIn(BaseModel):
     items: List[ShopItemIn]
     customer: ShopCustomerIn
     promoCode: Optional[str] = None
+    subscription: bool = False
 
 
 class NewsletterIn(BaseModel):
@@ -155,13 +179,20 @@ class MachineIn(BaseModel):
     description: str = ""
     imageUrl: str = ""
     price: PositiveMoneyValue  # Bruttopreis inkl. 19% MwSt (Kauf)
+    taxRate: PercentValue
     active: bool = True
 
 
 class MachineRequestIn(BaseModel):
     machineId: str
-    type: str  # "kauf" | "finanzierung" | "leasing"
+    type: Literal["kauf", "finanzierung", "leasing", "bereitstellung"]
     termMonths: Optional[int] = 48
+    productId: Optional[str] = None
+    expectedCoffeeKgMonth: Optional[PositiveQuantity] = None
+    companyName: str = ""
+    contactName: str = ""
+    contactEmail: str = ""
+    contactPhone: str = ""
     message: str = ""
 
 
@@ -240,7 +271,7 @@ class AcceptOfferIn(BaseModel):
 
 class SubscriptionIn(BaseModel):
     companyId: str
-    items: List[OfferItemIn]
+    items: List[OrderItemIn]
     intervalDays: int = 28
 
 

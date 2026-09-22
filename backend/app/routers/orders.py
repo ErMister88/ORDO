@@ -9,8 +9,9 @@ from ..audit_service import tenant_audit
 from ..deps import current_user, require_roles, tenant_business_access, visible_company_ids
 from ..models import OrderCreate, OrderStatusIn, OrderItemIn  # noqa: F401
 from ..emailer import send_email, email_shell, company_recipient
-from ..money import amount_minor, from_minor
-from ..snapshots import items_total_minor, product_item_snapshot, redact_internal_snapshot_fields
+from ..money import from_minor
+from ..pricing_engine import PricingEngine, PricingError
+from ..snapshots import items_total_minor, redact_internal_snapshot_fields
 from ..tenant_access import TenantBusinessAccess
 
 
@@ -55,7 +56,7 @@ async def _resolve_unit_price(
     product: dict,
     qty: float,
 ) -> float:
-    """Authoritative server-side price: customer price -> contract price -> standard (with volume tiers)."""
+    """Compatibility helper backed by the central authoritative B2B engine."""
     minor, _source = await _resolve_unit_money(access, company_id, product, qty)
     return from_minor(minor)
 
@@ -66,26 +67,11 @@ async def _resolve_unit_money(
     product: dict,
     qty: float,
 ) -> tuple[int, str]:
-    """Preserve the established B2B priority while using exact minor units."""
-    currency = access.context.default_currency
-    cp = await access.customer_prices.find_one(
-        {"companyId": company_id, "productId": product["id"]}
+    """Compatibility helper backed by the central authoritative B2B engine."""
+    _stored_product, quote = await PricingEngine(access).quote_b2b(
+        company_id, product["id"], qty
     )
-    if cp and cp.get("price") is not None:
-        return amount_minor(cp, "price", expected_currency=currency), "customer_price"
-    ct = await access.contracts.find_one({
-        "companyId": company_id,
-        "productId": product["id"],
-    })
-    if ct and ct.get("price"):
-        return amount_minor(ct, "price", expected_currency=currency), "contract_price"
-    price = amount_minor(product, "standardPrice", expected_currency=currency)
-    source = "standard_price"
-    for t in sorted(product.get("discountTiers", []), key=lambda x: x.get("minQty", 0)):
-        if qty >= t.get("minQty", 0) and t.get("price") is not None:
-            price = amount_minor(t, "price", expected_currency=currency)
-            source = "volume_tier"
-    return price, source
+    return quote.final_unit_price_minor, quote.price_source
 
 
 @api_router.post("/orders")
@@ -107,17 +93,13 @@ async def create_order(
     for it in body.items:
         if it.qty <= 0:
             raise HTTPException(status_code=400, detail="Ungültige Menge")
-        prod = await access.products.find_one({"id": it.productId})
-        if not prod or prod.get("active") is False:
-            raise HTTPException(status_code=400, detail="Produkt nicht verfügbar")
-        price_minor, price_source = await _resolve_unit_money(access, body.companyId, prod, it.qty)
-        items.append(product_item_snapshot(
-            prod,
-            quantity=it.qty,
-            unit_price_minor=price_minor,
-            currency=currency,
-            price_source=price_source,
-        ))
+        try:
+            prod, quote = await PricingEngine(access).quote_b2b(
+                body.companyId, it.productId, it.qty
+            )
+        except PricingError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        items.append(quote.snapshot(prod))
     now = datetime.now(timezone.utc)
     seq = await next_seq("order")
     order_no = f"B-{now.year}-{seq:05d}"

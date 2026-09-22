@@ -37,10 +37,9 @@ export default function Abos() {
 
   const create = useMutation({
     mutationFn: () => {
-      const p = prodMap[productId];
       return apiPost("/subscriptions", {
         companyId,
-        items: [{ productId, qty: Number(qty.replace(",", ".")), price: p?.standardPrice ?? 0 }],
+        items: [{ productId, qty: Number(qty.replace(",", ".")) }],
         intervalDays: Number(interval.replace(",", ".")) || 28,
       });
     },
@@ -111,7 +110,7 @@ export default function Abos() {
             {showProd &&
               activeProducts.map((p: any) => (
                 <Pressable key={p.id} testID={`sub-product-${p.id}`} style={styles.option} onPress={() => { setProductId(p.id); setShowProd(false); }}>
-                  <Text style={styles.optionText}>{p.brand} {p.name} · {euro(p.standardPrice)}</Text>
+                  <Text style={styles.optionText}>{p.brand} {p.name}</Text>
                 </Pressable>
               ))}
             <View style={styles.row}>

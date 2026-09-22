@@ -12,7 +12,7 @@ import { apiGet, apiPost, apiPut, apiDelete, apiUpload, fileUrl } from "@/src/ap
 import { euro } from "@/src/lib/format";
 import { Card, Input, Button, SectionTitle, Muted, EmptyState, StatusBadge, InfoRow } from "@/src/components/ui";
 
-const EMPTY = { name: "", description: "", price: "", imageUrl: "", active: true };
+const EMPTY = { name: "", description: "", price: "", taxRate: "19", imageUrl: "", active: true };
 
 export default function MaschinenAdmin() {
   const styles = useStyles();
@@ -35,7 +35,7 @@ export default function MaschinenAdmin() {
   const startNew = () => { setEditing("new"); setForm({ ...EMPTY }); };
   const startEdit = (m: any) => {
     setEditing(m.id);
-    setForm({ name: m.name, description: m.description ?? "", price: String(m.price), imageUrl: m.imageUrl ?? "", active: m.active });
+    setForm({ name: m.name, description: m.description ?? "", price: String(m.price), taxRate: String(m.taxRate ?? ""), imageUrl: m.imageUrl ?? "", active: m.active });
   };
 
   const pickImage = async () => {
@@ -61,7 +61,7 @@ export default function MaschinenAdmin() {
 
   const save = useMutation({
     mutationFn: () => {
-      const body = { name: form.name, description: form.description, imageUrl: form.imageUrl, price: num(form.price), active: form.active };
+      const body = { name: form.name, description: form.description, imageUrl: form.imageUrl, price: num(form.price), taxRate: Math.round(num(form.taxRate)), active: form.active };
       return editing === "new" ? apiPost("/machines", body) : apiPut(`/machines/${editing}`, body);
     },
     onSuccess: () => { setEditing(null); qc.invalidateQueries({ queryKey: ["machines"] }); },
@@ -104,8 +104,10 @@ export default function MaschinenAdmin() {
               <Input testID="m-name" value={form.name} onChangeText={set("name")} placeholder="z. B. WMF 1500 S+" />
               <Text style={styles.label}>Beschreibung</Text>
               <Input testID="m-desc" value={form.description} onChangeText={set("description")} placeholder="Kurzbeschreibung" multiline style={{ minHeight: 60 }} />
-              <Text style={styles.label}>Preis (brutto, inkl. 19% MwSt)</Text>
+              <Text style={styles.label}>Preis (brutto)</Text>
               <Input testID="m-price" value={form.price} onChangeText={set("price")} keyboardType="decimal-pad" placeholder="0,00" />
+              <Text style={styles.label}>MwSt-Satz (%)</Text>
+              <Input testID="m-tax" value={form.taxRate} onChangeText={set("taxRate")} keyboardType="number-pad" placeholder="19" />
               <Pressable style={styles.switchRow} onPress={() => set("active")(!form.active)} testID="m-active">
                 <View style={[styles.checkbox, form.active && styles.checkboxOn]} />
                 <Text style={styles.switchTxt}>Aktiv (im Katalog sichtbar)</Text>

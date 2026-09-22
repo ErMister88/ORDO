@@ -25,12 +25,14 @@ export default function ShopAdmin() {
   const [fee, setFee] = useState("");
   const [nlPercent, setNlPercent] = useState("10");
   const [nlEnabled, setNlEnabled] = useState(true);
+  const [subPercent, setSubPercent] = useState("");
   useEffect(() => {
     if (settings.data) {
       setThr(String(settings.data.freeShippingThreshold));
       setFee(String(settings.data.shippingFee));
       setNlPercent(String(settings.data.newsletterDiscountPercent ?? 10));
       setNlEnabled(settings.data.newsletterDiscountEnabled ?? true);
+      setSubPercent(settings.data.subscriptionDiscountPercent == null ? "" : String(settings.data.subscriptionDiscountPercent));
     }
   }, [settings.data]);
 
@@ -41,6 +43,7 @@ export default function ShopAdmin() {
         shippingFee: Number(fee.replace(",", ".")) || 0,
         newsletterDiscountPercent: Math.max(0, Math.min(100, Math.round(Number(nlPercent.replace(",", ".")) || 0))),
         newsletterDiscountEnabled: nlEnabled,
+        subscriptionDiscountPercent: subPercent.trim() === "" ? null : Math.max(0, Math.min(100, Math.round(Number(subPercent.replace(",", "."))))),
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["shop-settings"] }),
   });
@@ -90,6 +93,14 @@ export default function ShopAdmin() {
             <Text style={styles.label}>Versandkosten sonst (€)</Text>
             <Input testID="shop-fee" value={fee} onChangeText={setFee} keyboardType="decimal-pad" />
             <Button testID="shop-settings-save" title="Speichern" loading={save.isPending} onPress={() => save.mutate()} style={{ marginTop: 10 }} />
+          </Card>
+
+          <SectionTitle style={{ marginTop: 4 }}>Monats-Abo</SectionTitle>
+          <Card>
+            <Text style={styles.label}>Abo-Rabatt in Prozent (%)</Text>
+            <Muted>Leer lassen, solange kein B2C-Abo-Rabatt freigegeben ist.</Muted>
+            <Input testID="subscription-percent" value={subPercent} onChangeText={setSubPercent} keyboardType="number-pad" />
+            <Button title="Abo-Rabatt speichern" loading={save.isPending} onPress={() => save.mutate()} style={{ marginTop: 10 }} />
           </Card>
 
           <SectionTitle style={{ marginTop: 4 }}>Newsletter-Rabatt</SectionTitle>

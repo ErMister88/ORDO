@@ -267,7 +267,7 @@ def test_subscription_order_gets_independent_snapshot(monkeypatch):
     subscription = run(subscriptions.create_subscription(
         SubscriptionIn(
             companyId="company",
-            items=[OfferItemIn(productId="product", qty=2, price=8.75)],
+            items=[OrderItemIn(productId="product", qty=2)],
             intervalDays=28,
         ),
         actor(access), access,
@@ -282,7 +282,7 @@ def test_subscription_order_gets_independent_snapshot(monkeypatch):
     result = run(subscriptions.run_due_subscriptions(actor(access), access))
     order = database.raw.orders.find_one({"id": result["created"][0]})
     assert order["items"][0]["productName"] == "Brand Original"
-    assert order["items"][0]["unitPriceMinor"] == 875
+    assert order["items"][0]["unitPriceMinor"] == 1001
     assert order["items"] is not database.raw.subscriptions.find_one({"id": subscription["id"]})["items"]
 
 
@@ -290,6 +290,9 @@ def test_shop_order_is_stable_and_guest_token_is_hashed_expiring_and_non_enumera
     database = AsyncDatabase("money_shop")
     access = scoped(database)
     seed_catalog(access)
+    run(access.settings.insert_one({"key": "shop", "currency": "EUR",
+                                    "freeShippingThresholdMinor": 5900, "shippingFeeMinor": 490,
+                                    "newsletterDiscountPercent": 10, "newsletterDiscountEnabled": True}))
 
     async def sequence(_name):
         return 9

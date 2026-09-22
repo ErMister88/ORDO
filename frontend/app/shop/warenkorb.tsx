@@ -21,7 +21,6 @@ export default function Warenkorb() {
   const cart = useCart();
 
   const products = useQuery({ queryKey: ["shop-products"], queryFn: () => apiGet("/shop/products") });
-  const settings = useQuery({ queryKey: ["shop-settings"], queryFn: () => apiGet("/shop/settings") });
 
   const [form, setForm] = useState({ name: "", email: "", phone: "", street: "", zip: "", city: "" });
   const set = (k: string) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
@@ -32,6 +31,7 @@ export default function Warenkorb() {
   const [promoMsg, setPromoMsg] = useState("");
   const [promoBusy, setPromoBusy] = useState(false);
   const [accepted, setAccepted] = useState(false);
+  const [subscription, setSubscription] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -85,20 +85,24 @@ export default function Warenkorb() {
     () => cart.items.map((i) => ({ ...i, p: pMap[i.productId] })).filter((l) => l.p),
     [cart.items, products.data],
   );
-  const subtotal = lines.reduce((a, l) => a + l.p.b2cPrice * l.qty, 0);
-  const discountPercent = promo?.percent ?? 0;
-  const discount = subtotal * (discountPercent / 100);
-  const discounted = subtotal - discount;
-  const threshold = settings.data?.freeShippingThreshold ?? 50;
-  const fee = settings.data?.shippingFee ?? 4.9;
-  const shipping = discounted >= threshold ? 0 : fee;
-  const total = discounted + shipping;
-  const vatByRate = lines.reduce((acc: Record<number, number>, l) => {
-    const rate = l.p.taxRate ?? 7;
-    const gross = l.p.b2cPrice * l.qty * (1 - discountPercent / 100);
-    acc[rate] = (acc[rate] ?? 0) + (gross - gross / (1 + rate / 100));
-    return acc;
-  }, {});
+  const quote = useQuery({
+    queryKey: ["shop-quote", cart.items, promo?.code ?? "", subscription],
+    queryFn: () => apiPost("/shop/quote", {
+      items: cart.items.map((i) => ({ productId: i.productId, qty: i.qty })),
+      promoCode: promo?.code, subscription,
+    }),
+    enabled: cart.items.length > 0,
+  });
+  const subtotal = quote.data?.merchandise ?? 0;
+  const discountPercent = quote.data?.discountPercent ?? 0;
+  const discount = quote.data?.discount ?? 0;
+  const discounted = quote.data?.subtotal ?? 0;
+  const threshold = quote.data?.freeShippingThreshold ?? 0;
+  const shipping = quote.data?.shipping ?? 0;
+  const total = quote.data?.total ?? 0;
+  const vatByRate = quote.data?.taxBreakdown ?? {};
+  const quoteLines: Record<string, any> = {};
+  (quote.data?.lines ?? []).forEach((line: any) => { quoteLines[line.productId] = line; });
 
   const checkout = async () => {
     if (!form.name.trim() || !form.email.includes("@")) {
@@ -115,6 +119,7 @@ export default function Warenkorb() {
         items: cart.items.map((i) => ({ productId: i.productId, qty: i.qty })),
         customer: form,
         promoCode: promo?.code,
+        subscription,
       });
       let paid = false;
       try {
@@ -181,7 +186,7 @@ export default function Warenkorb() {
                       <Text style={styles.lName} numberOfLines={1}>
                         {l.p.brand} {l.p.name}
                       </Text>
-                      <Muted>{euro(l.p.b2cPrice)} /{l.p.unit}</Muted>
+                      <Muted>{euro(quoteLines[l.productId]?.finalUnitPrice ?? l.p.b2cPrice)} /{l.p.unit} inkl. MwSt.</Muted>
                     </View>
                     <Pressable testID={`cart-minus-${l.productId}`} style={styles.step} onPress={() => cart.setQty(l.productId, l.qty - 1)} hitSlop={6}>
                       <Minus size={14} color={colors.onSurface} weight="bold" />
@@ -223,6 +228,11 @@ export default function Warenkorb() {
                   <Text style={styles.totalVal}>{euro(total)}</Text>
                 </View>
               </Card>
+
+              <Pressable testID="subscription-toggle" style={styles.termsRow} onPress={() => setSubscription((value) => !value)}>
+                {subscription ? <CheckSquare size={24} color={colors.brandPrimary} weight="fill" /> : <Square size={24} color={colors.muted} />}
+                <Text style={styles.termsText}>Als monatliches Abo bestellen. Der konfigurierte Abo-Rabatt wird serverseitig nach der Mengenstaffel berechnet.</Text>
+              </Pressable>
 
               <SectionTitle style={{ marginTop: 4 }}>Rabattcode</SectionTitle>
               <Card>
@@ -285,7 +295,8 @@ export default function Warenkorb() {
                 </Text>
               </Pressable>
 
-              <Button testID="shop-checkout" title={`Kostenpflichtig bestellen · ${euro(total)}`} loading={busy} disabled={!accepted} onPress={checkout} />
+              {quote.error ? <Text style={{ color: colors.error }}>{(quote.error as Error).message}</Text> : null}
+              <Button testID="shop-checkout" title={`Kostenpflichtig bestellen · ${euro(total)}`} loading={busy || quote.isLoading} disabled={!accepted || !quote.data} onPress={checkout} />
               <Muted>Kartenzahlung über Stripe. Im Vorschaumodus ist die Zahlung noch nicht aktiv.</Muted>
             </>
           )}

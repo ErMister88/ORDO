@@ -10,6 +10,7 @@ from ..deps import current_user, require_roles, tenant_business_access, visible_
 from ..models import OfferCreate, DecisionIn, AcceptOfferIn
 from ..emailer import send_email, email_shell, company_recipient, items_html
 from ..money import amount_minor, from_minor, line_total_minor, to_minor
+from ..pricing_engine import PricingEngine, PricingError
 from ..snapshots import clone_snapshot_items, items_total_minor, product_item_snapshot, redact_internal_snapshot_fields
 from ..tenant_access import TenantBusinessAccess
 
@@ -58,21 +59,31 @@ async def create_offer(
     currency = access.context.default_currency
     snapshots = []
     for it in body.items:
-        prod = await access.products.find_one({"id": it.productId})
-        if not prod:
-            raise HTTPException(status_code=400, detail="Produkt unbekannt")
+        try:
+            prod, base_quote = await PricingEngine(access).quote_b2b(
+                body.companyId, it.productId, it.qty
+            )
+        except PricingError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         offer_minor = to_minor(it.price)
         if offer_minor < amount_minor(prod, "absoluteFloor", expected_currency=currency):
             raise HTTPException(status_code=400, detail="Preis unter absoluter Grenze – nicht zulässig")
         if offer_minor < amount_minor(prod, "salesFloor", expected_currency=currency):
             needs_approval = True
-        snapshots.append(product_item_snapshot(
+        snapshot = product_item_snapshot(
             prod,
             quantity=it.qty,
             unit_price_minor=offer_minor,
             currency=currency,
             price_source="offer_manual",
-        ))
+        )
+        snapshot.update({
+            "pricingContext": "b2b", "priceSemantics": "net",
+            "baseUnitPriceMinor": base_quote.final_unit_price_minor,
+            "basePriceSource": base_quote.price_source,
+            "taxRate": base_quote.tax_rate,
+        })
+        snapshots.append(snapshot)
     now = datetime.now(timezone.utc)
     seq = await next_seq("offer")
     offer_no = f"A-{now.year}-{seq:04d}"

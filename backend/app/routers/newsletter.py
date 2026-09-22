@@ -25,7 +25,15 @@ def _safe_base(base: str | None) -> str:
 
 async def _shop_settings(access: TenantBusinessAccess):
     s = await access.settings.find_one({"key": "shop"})
-    return s or {}
+    if not s:
+        raise HTTPException(status_code=503, detail="Shop-Rabattkonfiguration fehlt")
+    percent = s.get("newsletterDiscountPercent")
+    enabled = s.get("newsletterDiscountEnabled")
+    if isinstance(percent, bool) or not isinstance(percent, int) or not 0 <= percent <= 100:
+        raise HTTPException(status_code=409, detail="Shop-Rabattkonfiguration ist ungültig")
+    if not isinstance(enabled, bool):
+        raise HTTPException(status_code=409, detail="Shop-Rabattkonfiguration ist ungültig")
+    return s
 
 
 def _new_code() -> str:
@@ -66,8 +74,8 @@ async def newsletter_subscribe(
         raise HTTPException(status_code=400, detail="Bitte eine gültige E-Mail-Adresse angeben")
 
     s = await _shop_settings(access)
-    percent = int(s.get("newsletterDiscountPercent", 10))
-    enabled = bool(s.get("newsletterDiscountEnabled", True))
+    percent = s["newsletterDiscountPercent"]
+    enabled = s["newsletterDiscountEnabled"]
 
     existing = await access.newsletter.find_one({"email": email})
 
@@ -143,7 +151,7 @@ async def newsletter_confirm(
         return _confirm_page("<h2 style='color:#0B1B3D'>Link ungültig</h2>"
                              "<p>Dieser Bestätigungslink ist ungültig oder wurde bereits verwendet.</p>", status=404)
     s = await _shop_settings(access)
-    percent = int(s.get("newsletterDiscountPercent", 10))
+    percent = s["newsletterDiscountPercent"]
     if not sub.get("confirmed"):
         code = _new_code()
         unsub_token = sub.get("unsubToken") or secrets.token_urlsafe(16)
@@ -192,12 +200,12 @@ async def validate_code(
     if not code:
         return {"valid": False, "percent": 0}
     s = await _shop_settings(access)
-    if not bool(s.get("newsletterDiscountEnabled", True)):
+    if not s["newsletterDiscountEnabled"]:
         return {"valid": False, "percent": 0, "detail": "Rabatt derzeit nicht aktiv"}
     sub = await access.newsletter.find_one({"code": code, "confirmed": True})
     if not sub:
         return {"valid": False, "percent": 0, "detail": "Code ungültig"}
-    return {"valid": True, "percent": int(s.get("newsletterDiscountPercent", 10))}
+    return {"valid": True, "percent": s["newsletterDiscountPercent"]}
 
 
 async def resolve_discount(code: str | None, access: TenantBusinessAccess) -> int:
@@ -206,9 +214,9 @@ async def resolve_discount(code: str | None, access: TenantBusinessAccess) -> in
         return 0
     code = code.strip().upper()
     s = await _shop_settings(access)
-    if not bool(s.get("newsletterDiscountEnabled", True)):
+    if not s["newsletterDiscountEnabled"]:
         return 0
     sub = await access.newsletter.find_one({"code": code, "confirmed": True})
     if not sub:
         return 0
-    return int(s.get("newsletterDiscountPercent", 10))
+    return s["newsletterDiscountPercent"]

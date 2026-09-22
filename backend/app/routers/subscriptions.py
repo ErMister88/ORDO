@@ -8,8 +8,8 @@ from ..core import api_router, strip_id, next_seq
 from ..deps import require_roles, tenant_business_access, visible_company_ids
 from ..models import SubscriptionIn
 from ..tenant_access import TenantBusinessAccess
-from ..money import to_minor
-from ..snapshots import clone_snapshot_items, items_total_minor, product_item_snapshot, redact_internal_snapshot_fields
+from ..pricing_engine import PricingEngine, PricingError
+from ..snapshots import clone_snapshot_items, items_total_minor, redact_internal_snapshot_fields
 
 
 async def _references_are_visible(access: TenantBusinessAccess, subscription: dict) -> bool:
@@ -46,16 +46,13 @@ async def create_subscription(
     currency = access.context.default_currency
     snapshots = []
     for item in body.items:
-        product = await access.products.find_one({"id": item.productId})
-        if not product:
-            raise HTTPException(status_code=404, detail="Abo-Referenz nicht gefunden")
-        snapshots.append(product_item_snapshot(
-            product,
-            quantity=item.qty,
-            unit_price_minor=to_minor(item.price),
-            currency=currency,
-            price_source="subscription_agreed",
-        ))
+        try:
+            product, quote = await PricingEngine(access).quote_b2b(
+                body.companyId, item.productId, item.qty
+            )
+        except PricingError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        snapshots.append(quote.snapshot(product))
     sub = {
         "id": "sub-" + secrets.token_hex(5),
         "companyId": body.companyId,

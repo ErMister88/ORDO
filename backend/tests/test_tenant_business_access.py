@@ -490,7 +490,7 @@ def test_customer_price_rejects_cross_tenant_references_without_disclosure(
     with pytest.raises(HTTPException) as exc:
         run(pricing.upsert_customer_price(
             CustomerPriceIn(companyId="c1", productId="p1", price=10.0),
-            {"id": "u-admin", "name": "Admin"},
+            principal(tenant_a),
             tenant_a,
         ))
 
@@ -512,7 +512,7 @@ def test_valid_customer_price_and_history_receive_the_same_tenant(monkeypatch):
     monkeypatch.setattr(pricing, "tenant_audit", no_audit)
     result = run(pricing.upsert_customer_price(
         CustomerPriceIn(companyId="c1", productId="p1", price=10.0),
-        {"id": "u-admin", "name": "Admin"},
+        principal(tenant_a),
         tenant_a,
     ))
 
@@ -527,6 +527,9 @@ def test_valid_customer_price_and_history_receive_the_same_tenant(monkeypatch):
 def test_fixed_customer_price_still_precedes_quantity_tiers():
     database = AsyncDatabase("tenant_access_pricing_regression")
     tenant_a = access(database, TENANT_A)
+    run(tenant_a.companies.insert_one({"id": "c1", "active": True}))
+    run(tenant_a.products.insert_one({"id": "p1", "standardPrice": 16.9, "taxRate": 7,
+                                      "active": True, "discountTiers": [{"minQty": 50, "price": 14.0}]}))
     run(tenant_a.customer_prices.insert_one({
         "companyId": "c1",
         "productId": "p1",
@@ -544,6 +547,9 @@ def test_fixed_customer_price_still_precedes_quantity_tiers():
 def test_contract_price_lookup_is_fail_closed_to_resolved_tenant():
     database = AsyncDatabase("tenant_access_contract_price_edge")
     tenant_a = access(database, TENANT_A)
+    run(tenant_a.companies.insert_one({"id": "c1", "active": True}))
+    run(tenant_a.products.insert_one({"id": "p1", "standardPrice": 16.9, "taxRate": 7,
+                                      "active": True, "discountTiers": [{"minQty": 50, "price": 14.0}]}))
     product = {
         "id": "p1",
         "standardPrice": 16.9,
@@ -565,7 +571,7 @@ def test_contract_price_lookup_is_fail_closed_to_resolved_tenant():
         },
     ])
 
-    assert run(orders._resolve_unit_price(tenant_a, "c1", product, 100)) == 14.0
+    assert run(orders._resolve_unit_price(tenant_a, "c1", product, 100)) == 16.9
 
     database.raw.contracts.insert_one({
         "id": "contract-a",
@@ -575,7 +581,7 @@ def test_contract_price_lookup_is_fail_closed_to_resolved_tenant():
         "price": 12.0,
     })
 
-    assert run(orders._resolve_unit_price(tenant_a, "c1", product, 100)) == 12.0
+    assert run(orders._resolve_unit_price(tenant_a, "c1", product, 100)) == 16.9
 
 
 def test_product_request_model_does_not_forward_client_tenant_id():
@@ -587,6 +593,7 @@ def test_product_request_model_does_not_forward_client_tenant_id():
         "salesFloor": 9.0,
         "absoluteFloor": 8.0,
         "cost": 5.0,
+        "taxRate": 7,
         "tenantId": TENANT_B,
     })
 
@@ -604,6 +611,7 @@ def test_product_create_ignores_client_tenant_and_uses_server_context(monkeypatc
         "salesFloor": 9.0,
         "absoluteFloor": 8.0,
         "cost": 5.0,
+        "taxRate": 7,
         "tenantId": TENANT_B,
     })
 
@@ -860,7 +868,7 @@ def test_order_create_rejects_cross_tenant_references(monkeypatch, foreign_refer
             tenant_a,
         ))
 
-    expected = 403 if foreign_reference == "company" else 400
+    expected = 403 if foreign_reference == "company" else 409
     assert exc.value.status_code == expected
     assert database.raw.orders.count_documents({}) == 0
 
@@ -907,7 +915,7 @@ def test_offer_create_is_tenant_scoped_and_rejects_foreign_product(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         run(offers.create_offer(body, principal(tenant_a), tenant_a))
 
-    assert (exc.value.status_code, exc.value.detail) == (400, "Produkt unbekannt")
+    assert (exc.value.status_code, exc.value.detail) == (409, "Produkt ist nicht verfügbar")
     assert database.raw.offers.count_documents({}) == 0
 
 
@@ -921,6 +929,7 @@ def test_offer_create_sets_server_tenant(monkeypatch):
         "name": "Product",
         "unit": "kg",
         "taxRate": 7,
+        "standardPrice": 10.0,
         "absoluteFloor": 5.0,
         "salesFloor": 8.0,
     }))
@@ -1128,13 +1137,13 @@ def test_subscription_create_rejects_foreign_product_reference():
         run(subscriptions.create_subscription(
             SubscriptionIn(
                 companyId="c1",
-                items=[OfferItemIn(productId="p1", qty=1, price=10)],
+                items=[OrderItemIn(productId="p1", qty=1)],
             ),
             principal(tenant_a),
             tenant_a,
         ))
 
-    assert (exc.value.status_code, exc.value.detail) == (404, "Abo-Referenz nicht gefunden")
+    assert (exc.value.status_code, exc.value.detail) == (409, "Produkt ist nicht verfügbar")
     assert database.raw.subscriptions.count_documents({}) == 0
 
 
@@ -1142,12 +1151,13 @@ def test_subscription_create_sets_server_tenant():
     database = AsyncDatabase("tenant_access_subscription_valid_create")
     tenant_a = access(database, TENANT_A)
     run(tenant_a.companies.insert_one({"id": "c1", "active": True}))
-    run(tenant_a.products.insert_one({"id": "p1"}))
+    run(tenant_a.products.insert_one({"id": "p1", "brand": "B", "name": "P", "unit": "kg",
+                                      "standardPrice": 10.0, "taxRate": 7, "active": True}))
 
     response = run(subscriptions.create_subscription(
         SubscriptionIn(
             companyId="c1",
-            items=[OfferItemIn(productId="p1", qty=1, price=10)],
+            items=[OrderItemIn(productId="p1", qty=1)],
         ),
         principal(tenant_a),
         tenant_a,
@@ -1280,7 +1290,7 @@ def test_machine_catalog_create_list_update_and_delete_are_tenant_scoped(monkeyp
         return None
 
     monkeypatch.setattr(machines, "tenant_audit", no_audit)
-    body = MachineIn(name="Machine A", price=1000)
+    body = MachineIn(name="Machine A", price=1000, taxRate=19)
     created = run(machines.create_machine(body, {"id": "admin-a"}, tenant_a))
     machine_id = created["id"]
     run(tenant_b.machines.insert_one({"id": machine_id, "name": "Machine B", "price": 2000}))
@@ -1288,7 +1298,7 @@ def test_machine_catalog_create_list_update_and_delete_are_tenant_scoped(monkeyp
     assert "tenantId" not in created
     assert database.raw.machines.find_one({"tenantId": TENANT_A})["name"] == "Machine A"
     assert [row["name"] for row in run(machines.list_machines({"role": "admin"}, tenant_a))] == ["Machine A"]
-    run(machines.update_machine(machine_id, MachineIn(name="Machine A2", price=1100), {"id": "admin-a"}, tenant_a))
+    run(machines.update_machine(machine_id, MachineIn(name="Machine A2", price=1100, taxRate=19), {"id": "admin-a"}, tenant_a))
     assert database.raw.machines.find_one({"tenantId": TENANT_A})["name"] == "Machine A2"
     assert database.raw.machines.find_one({"tenantId": TENANT_B})["name"] == "Machine B"
     run(machines.delete_machine(machine_id, {"id": "admin-a"}, tenant_a))
@@ -1317,8 +1327,8 @@ def test_machine_request_create_sets_tenant_and_rejects_foreign_machine(monkeypa
     database = AsyncDatabase("tenant_edge_machine_request_create")
     tenant_a = access(database, TENANT_A)
     tenant_b = access(database, TENANT_B)
-    run(tenant_a.machines.insert_one({"id": "own", "name": "Own", "price": 100, "active": True}))
-    run(tenant_b.machines.insert_one({"id": "foreign", "name": "Foreign", "price": 100, "active": True}))
+    run(tenant_a.machines.insert_one({"id": "own", "name": "Own", "price": 100, "taxRate": 19, "active": True}))
+    run(tenant_b.machines.insert_one({"id": "foreign", "name": "Foreign", "price": 100, "taxRate": 19, "active": True}))
 
     async def fixed_sequence(_name):
         return 4
@@ -1406,6 +1416,9 @@ def test_shop_order_create_sets_tenant_and_rejects_foreign_product(monkeypatch):
 
     monkeypatch.setattr(shop, "next_seq", fixed_sequence)
     monkeypatch.setattr(shop, "send_email", no_email)
+    run(tenant_a.settings.insert_one({"key": "shop", "currency": "EUR",
+                                      "freeShippingThreshold": 59.0, "shippingFee": 4.9,
+                                      "newsletterDiscountPercent": 10, "newsletterDiscountEnabled": True}))
     created = run(shop.create_shop_order(_shop_order_input("own"), tenant_a))
     stored = database.raw.shop_orders.find_one({"id": created["id"]})
     assert stored["tenantId"] == TENANT_A
@@ -1414,7 +1427,7 @@ def test_shop_order_create_sets_tenant_and_rejects_foreign_product(monkeypatch):
 
     with pytest.raises(HTTPException) as exc:
         run(shop.create_shop_order(_shop_order_input("foreign"), tenant_a))
-    assert (exc.value.status_code, exc.value.detail) == (400, "Ein Produkt ist nicht mehr verfügbar")
+    assert (exc.value.status_code, exc.value.detail) == (409, "Produkt ist nicht verfügbar")
     assert database.raw.shop_orders.count_documents({}) == 1
 
 
@@ -1450,15 +1463,19 @@ def test_shop_settings_ignore_legacy_and_are_separate_per_tenant(monkeypatch):
     tenant_b = access(database, TENANT_B)
     database.raw.settings.insert_one({"_id": "shop", "shippingFee": 999})
 
-    assert run(shop.shop_settings_get(tenant_a))["shippingFee"] == 4.90
+    with pytest.raises(HTTPException) as missing:
+        run(shop.shop_settings_get(tenant_a))
+    assert missing.value.status_code == 503
     assert database.raw.settings.count_documents({}) == 1
 
     async def no_audit(*_args, **_kwargs):
         return None
 
     monkeypatch.setattr(shop, "tenant_audit", no_audit)
-    run(shop.shop_settings_put(ShopSettingsIn(shippingFee=4.5), {"id": "admin"}, tenant_a))
-    run(shop.shop_settings_put(ShopSettingsIn(shippingFee=8.5), {"id": "admin"}, tenant_b))
+    run(shop.shop_settings_put(ShopSettingsIn(freeShippingThreshold=59, shippingFee=4.5,
+        newsletterDiscountPercent=10), {"id": "admin"}, tenant_a))
+    run(shop.shop_settings_put(ShopSettingsIn(freeShippingThreshold=59, shippingFee=8.5,
+        newsletterDiscountPercent=10), {"id": "admin"}, tenant_b))
     assert run(shop.shop_settings_get(tenant_a))["shippingFee"] == 4.5
     assert run(shop.shop_settings_get(tenant_b))["shippingFee"] == 8.5
     assert database.raw.settings.count_documents({"tenantId": {"$exists": True}}) == 2
@@ -1468,6 +1485,11 @@ def test_newsletter_tokens_and_codes_cannot_cross_tenants(monkeypatch):
     database = AsyncDatabase("tenant_edge_newsletter")
     tenant_a = access(database, TENANT_A)
     tenant_b = access(database, TENANT_B)
+    for scoped_access in (tenant_a, tenant_b):
+        run(scoped_access.settings.insert_one({
+            "key": "shop", "newsletterDiscountPercent": 10,
+            "newsletterDiscountEnabled": True,
+        }))
 
     async def no_email(**_kwargs):
         return True
@@ -1668,6 +1690,8 @@ def test_audit_callsites_are_explicitly_classified():
         ("offers.py", "offer.approve"),
         ("orders.py", "order.status"),
         ("pricing.py", "price.set"),
+        ("pricing.py", "pricing.promotion.create"),
+        ("pricing.py", "pricing.promotion.delete"),
         ("products.py", "product.stock"),
         ("shop.py", "shop.settings"),
         ("shop.py", "shop_order_status"),

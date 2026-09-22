@@ -36,6 +36,10 @@ def _product_payload(body: ProductIn, currency: str) -> dict:
             {**tier.model_dump(), "priceMinor": to_minor(tier.price), "currency": currency}
             for tier in body.discountTiers
         ],
+        "b2cTiers": [
+            {**tier.model_dump(), "priceMinor": to_minor(tier.price), "currency": currency}
+            for tier in body.b2cTiers
+        ],
     })
     return payload
 

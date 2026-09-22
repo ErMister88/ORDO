@@ -9,7 +9,6 @@ import { makeStyles, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
 import { apiGet, apiPost, fileUrl } from "@/src/api/client";
 import { euro, num, dateDE } from "@/src/lib/format";
-import { applicableTier } from "@/src/lib/pricing";
 import { ScreenHeader } from "@/src/components/screen-header";
 import { Card, Button, Input, StatusBadge, SectionTitle, EmptyState, Muted } from "@/src/components/ui";
 
@@ -23,17 +22,9 @@ export default function Bestellungen() {
 
   const orders = useQuery({ queryKey: ["orders"], queryFn: () => apiGet("/orders") });
   const products = useQuery({ queryKey: ["products"], queryFn: () => apiGet("/products") });
-  const prices = useQuery({
-    queryKey: ["prices", companyId],
-    queryFn: () => apiGet(`/companies/${companyId}/prices`),
-    enabled: !!companyId,
-  });
 
   const prodMap: Record<string, any> = {};
   (products.data ?? []).forEach((p: any) => (prodMap[p.id] = p));
-  const priceOf = (pid: string) =>
-    (prices.data ?? []).find((cp: any) => cp.productId === pid)?.price ?? prodMap[pid]?.standardPrice ?? 0;
-
   const activeProducts = (products.data ?? []).filter((p: any) => p.active !== false);
   const [selId, setSelId] = useState<string>("");
   const [qty, setQty] = useState(18);
@@ -44,11 +35,18 @@ export default function Bestellungen() {
 
   const selProduct = activeProducts.find((p: any) => p.id === selId) ?? activeProducts[0];
 
-  const unitPriceFor = (pid: string, q: number) => {
-    const base = priceOf(pid);
-    const t = applicableTier(prodMap[pid]?.discountTiers, q);
-    return t && t.price < base ? t.price : base;
-  };
+  const selectedQuote = useQuery({
+    queryKey: ["b2b-quote", companyId, selProduct?.id, qty],
+    queryFn: () => apiPost("/pricing/b2b/quote", { companyId, items: [{ productId: selProduct.id, qty }] }),
+    enabled: !!companyId && !!selProduct,
+  });
+  const cartQuote = useQuery({
+    queryKey: ["b2b-cart-quote", companyId, cart],
+    queryFn: () => apiPost("/pricing/b2b/quote", { companyId, items: cart }),
+    enabled: !!companyId && cart.length > 0,
+  });
+  const quoteMap: Record<string, any> = {};
+  (cartQuote.data?.lines ?? []).forEach((line: any) => { quoteMap[line.productId] = line; });
 
   const addToCart = () => {
     if (!selProduct) return;
@@ -59,16 +57,13 @@ export default function Bestellungen() {
     });
   };
   const removeItem = (pid: string) => setCart((c) => c.filter((i) => i.productId !== pid));
-  const cartTotal = cart.reduce((a, i) => a + unitPriceFor(i.productId, i.qty) * i.qty, 0);
-
-  const selTier = selProduct ? applicableTier(selProduct.discountTiers, qty) : null;
-  const selBase = selProduct ? priceOf(selProduct.id) : 0;
+  const cartTotal = cartQuote.data?.total ?? 0;
 
   const create = useMutation({
     mutationFn: () =>
       apiPost("/orders", {
         companyId,
-        items: cart.map((i) => ({ productId: i.productId, qty: i.qty, price: unitPriceFor(i.productId, i.qty) })),
+        items: cart.map((i) => ({ productId: i.productId, qty: i.qty })),
       }),
     onSuccess: () => {
       setCart([]);
@@ -98,7 +93,7 @@ export default function Bestellungen() {
                     <Text style={styles.prodTitle}>
                       {selProduct.brand} {selProduct.name}
                     </Text>
-                    <Muted>Ihr Preis: {euro(unitPriceFor(selProduct.id, qty))}/{selProduct.unit}</Muted>
+                    <Muted>Ihr Preis: {selectedQuote.data ? euro(selectedQuote.data.lines[0].finalUnitPrice) : "wird berechnet"}/{selProduct.unit} netto</Muted>
                   </View>
                   <CaretDown size={18} color={colors.muted} weight="bold" />
                 </View>
@@ -120,11 +115,7 @@ export default function Bestellungen() {
                   </Pressable>
                 ))}
 
-              {selTier && selTier.price < selBase ? (
-                <Text testID="tier-active" style={styles.tierActive}>
-                  Mengenrabatt aktiv · ab {num(selTier.minQty)} {selProduct.unit} statt {euro(selBase)}
-                </Text>
-              ) : null}
+              <Muted>Alle Preise netto zzgl. gesetzlicher MwSt.</Muted>
               {selProduct.stock != null && qty > selProduct.stock ? (
                 <Text testID="stock-warning" style={styles.stockWarn}>
                   Hinweis: nur noch {num(selProduct.stock)} {selProduct.unit} auf Lager – Bestellung dennoch möglich.
@@ -150,7 +141,7 @@ export default function Bestellungen() {
                 <View style={styles.cartBox} testID="cart">
                   {cart.map((i) => {
                     const p = prodMap[i.productId];
-                    const up = unitPriceFor(i.productId, i.qty);
+                    const up = quoteMap[i.productId]?.finalUnitPrice ?? 0;
                     return (
                       <View key={i.productId} style={styles.cartRow} testID={`cart-row-${i.productId}`}>
                         <Text style={styles.cartName} numberOfLines={1}>
@@ -170,7 +161,8 @@ export default function Bestellungen() {
                     <Text style={styles.totalLabel}>Netto gesamt</Text>
                     <Text style={styles.totalValue}>{euro(cartTotal)}</Text>
                   </View>
-                  <Button testID="submit-order" title="Bestellung aufgeben" loading={create.isPending} onPress={() => create.mutate()} />
+                  {cartQuote.error ? <Text style={{ color: colors.error }}>{(cartQuote.error as Error).message}</Text> : null}
+                  <Button testID="submit-order" title="Bestellung aufgeben" loading={create.isPending || cartQuote.isLoading} disabled={!cartQuote.data} onPress={() => create.mutate()} />
                 </View>
               )}
             </Card>

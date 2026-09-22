@@ -25,6 +25,7 @@ type Form = {
   description: string;
   imageUrl: string;
   discountTiers: Tier[];
+  b2cTiers: Tier[];
   taxRate: string;
   stock: string;
   b2cPrice: string;
@@ -41,6 +42,7 @@ const EMPTY: Form = {
   description: "",
   imageUrl: "",
   discountTiers: [],
+  b2cTiers: [],
   taxRate: "7",
   stock: "",
   b2cPrice: "",
@@ -99,6 +101,7 @@ export default function Produkte() {
         minQty: String(t.minQty),
         price: String(t.price),
       })),
+      b2cTiers: (p.b2cTiers ?? []).map((t: any) => ({ minQty: String(t.minQty), price: String(t.price) })),
       taxRate: String(p.taxRate ?? 7),
       stock: p.stock != null ? String(p.stock) : "",
       b2cPrice: p.b2cPrice != null ? String(p.b2cPrice) : "",
@@ -147,14 +150,14 @@ export default function Produkte() {
   const setTier = (idx: number, key: keyof Tier) => (v: string) => {
     setForm((f) => ({
       ...f,
-      discountTiers: f.discountTiers.map((t, i) => (i === idx ? { ...t, [key]: v } : t)),
+      b2cTiers: f.b2cTiers.map((t, i) => (i === idx ? { ...t, [key]: v } : t)),
     }));
     if (ok) setOk("");
   };
   const addTier = () =>
-    setForm((f) => ({ ...f, discountTiers: [...f.discountTiers, { minQty: "", price: "" }] }));
+    setForm((f) => ({ ...f, b2cTiers: [...f.b2cTiers, { minQty: "", price: "" }] }));
   const removeTier = (idx: number) =>
-    setForm((f) => ({ ...f, discountTiers: f.discountTiers.filter((_, i) => i !== idx) }));
+    setForm((f) => ({ ...f, b2cTiers: f.b2cTiers.filter((_, i) => i !== idx) }));
 
   const save = useMutation({
     mutationFn: () => {
@@ -172,7 +175,11 @@ export default function Produkte() {
           .map((t) => ({ minQty: num(t.minQty), price: num(t.price) }))
           .filter((t) => t.minQty > 0 && t.price > 0)
           .sort((a, b) => a.minQty - b.minQty),
-        taxRate: Number(form.taxRate) === 19 ? 19 : 7,
+        b2cTiers: form.b2cTiers
+          .map((t) => ({ minQty: num(t.minQty), price: num(t.price) }))
+          .filter((t) => t.minQty > 0 && t.price > 0)
+          .sort((a, b) => a.minQty - b.minQty),
+        taxRate: Math.round(num(form.taxRate)),
         stock: form.stock.trim() === "" ? null : num(form.stock),
         b2cPrice: form.b2cPrice.trim() === "" ? null : num(form.b2cPrice),
         active: true,
@@ -299,21 +306,8 @@ export default function Produkte() {
                 </View>
               </View>
 
-              <Text style={styles.label}>MwSt-Satz</Text>
-              <View style={styles.row}>
-                {[7, 19].map((r) => (
-                  <Pressable
-                    key={r}
-                    testID={`tax-${r}`}
-                    style={[styles.taxBtn, Number(form.taxRate) === r && styles.taxBtnActive]}
-                    onPress={() => setForm((f) => ({ ...f, taxRate: String(r) }))}
-                  >
-                    <Text style={[styles.taxText, Number(form.taxRate) === r && styles.taxTextActive]}>
-                      {r}% {r === 7 ? "(Kaffee)" : "(Maschine)"}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
+              <Text style={styles.label}>MwSt-Satz (%)</Text>
+              <Input testID="p-tax" value={form.taxRate} onChangeText={set("taxRate")} keyboardType="number-pad" placeholder="z. B. 7" />
 
               <Text style={styles.label}>Lagerbestand (optional, leer = unbegrenzt)</Text>
               <Input testID="p-stock" value={form.stock} onChangeText={set("stock")} keyboardType="numeric" placeholder="z. B. 120" />
@@ -321,9 +315,9 @@ export default function Produkte() {
               <Text style={styles.label}>B2C-Shop-Preis € (brutto, leer = nicht im Shop)</Text>
               <Input testID="p-b2cprice" value={form.b2cPrice} onChangeText={set("b2cPrice")} keyboardType="decimal-pad" placeholder="z. B. 19,90" />
 
-              <Text style={styles.label}>Mengenrabatt-Staffeln (optional)</Text>
-              <Muted>Ab welcher Menge gilt welcher Stückpreis? Greift automatisch in Angeboten & Nachbestellungen.</Muted>
-              {form.discountTiers.map((t, idx) => (
+              <Text style={styles.label}>B2C-Mengenstaffeln (optional)</Text>
+              <Muted>Ab welcher B2C-Menge gilt welcher Bruttopreis? B2B-Preise bleiben davon unberührt.</Muted>
+              {form.b2cTiers.map((t, idx) => (
                 <View key={idx} style={styles.tierRow} testID={`tier-row-${idx}`}>
                   <View style={{ flex: 1 }}>
                     <Input
@@ -413,9 +407,9 @@ export default function Produkte() {
                           Standard {euro(p.standardPrice)} · Limit {euro(p.salesFloor)} · Grenze {euro(p.absoluteFloor)} · EK{" "}
                           {euro(p.cost)}
                         </Muted>
-                        {p.discountTiers?.length ? (
+                        {p.b2cTiers?.length ? (
                           <Muted>
-                            Staffel: {p.discountTiers.map((t: any) => `ab ${t.minQty} → ${euro(t.price)}`).join(" · ")}
+                            B2C-Staffel: {p.b2cTiers.map((t: any) => `ab ${t.minQty} → ${euro(t.price)}`).join(" · ")}
                           </Muted>
                         ) : null}
                         <Muted>

@@ -15,6 +15,24 @@ import { Card, Button, Input, SectionTitle, Muted, EmptyState, InfoRow, StatusBa
 
 const TERMS = [24, 36, 48];
 
+type RequestPanel = {
+  id: string;
+  type: "finanzierung" | "leasing" | "bereitstellung";
+  term: number;
+  productId: string;
+  expectedKg: string;
+  companyName: string;
+  contactName: string;
+  contactEmail: string;
+  contactPhone: string;
+  message: string;
+};
+
+const requestPanel = (id: string, type: RequestPanel["type"]): RequestPanel => ({
+  id, type, term: 48, productId: "", expectedKg: "", companyName: "",
+  contactName: "", contactEmail: "", contactPhone: "", message: "",
+});
+
 export default function Maschinen() {
   const styles = useStyles();
   const { colors } = useTheme();
@@ -24,8 +42,9 @@ export default function Maschinen() {
 
   const machines = useQuery({ queryKey: ["machines"], queryFn: () => apiGet("/machines") });
   const requests = useQuery({ queryKey: ["machine-requests"], queryFn: () => apiGet("/machine-requests") });
+  const products = useQuery({ queryKey: ["products"], queryFn: () => apiGet("/products") });
 
-  const [panel, setPanel] = useState<{ id: string; type: "finanzierung" | "leasing"; term: number } | null>(null);
+  const [panel, setPanel] = useState<RequestPanel | null>(null);
   const [payingId, setPayingId] = useState<string | null>(null);
 
   const refresh = () => {
@@ -33,7 +52,7 @@ export default function Maschinen() {
   };
 
   const requestOffer = useMutation({
-    mutationFn: (b: { machineId: string; type: string; termMonths: number }) => apiPost("/machine-requests", b),
+    mutationFn: (b: { machineId: string; type: string; termMonths: number; productId?: string; expectedCoffeeKgMonth?: number; companyName?: string; contactName?: string; contactEmail?: string; contactPhone?: string; message?: string }) => apiPost("/machine-requests", b),
     onSuccess: () => {
       setPanel(null);
       refresh();
@@ -130,7 +149,7 @@ export default function Maschinen() {
                 <View style={{ flex: 1 }}>
                   <Text style={styles.mName}>{m.name}</Text>
                   {m.description ? <Muted>{m.description}</Muted> : null}
-                  <Text style={styles.mPrice}>{euro(m.price)} <Text style={styles.mVat}>inkl. 19% MwSt</Text></Text>
+                  <Text style={styles.mPrice}>{euro(m.price)} <Text style={styles.mVat}>inkl. {m.taxRate}% MwSt</Text></Text>
                 </View>
               </View>
 
@@ -143,17 +162,24 @@ export default function Maschinen() {
                   style={{ flex: 1 }}
                 />
                 <Button
+                  testID={`provision-${m.id}`}
+                  title="Bereitstellung"
+                  kind="secondary"
+                  onPress={() => setPanel(requestPanel(m.id, "bereitstellung"))}
+                  style={{ flex: 1 }}
+                />
+                <Button
                   testID={`finance-${m.id}`}
                   title="Finanzieren"
                   kind="secondary"
-                  onPress={() => setPanel({ id: m.id, type: "finanzierung", term: 48 })}
+                  onPress={() => setPanel(requestPanel(m.id, "finanzierung"))}
                   style={{ flex: 1 }}
                 />
                 <Button
                   testID={`lease-${m.id}`}
                   title="Leasing"
                   kind="secondary"
-                  onPress={() => setPanel({ id: m.id, type: "leasing", term: 48 })}
+                  onPress={() => setPanel(requestPanel(m.id, "leasing"))}
                   style={{ flex: 1 }}
                 />
               </View>
@@ -163,11 +189,13 @@ export default function Maschinen() {
                   <View style={styles.panelHead}>
                     {panel.type === "leasing" ? <Coffee size={18} color={colors.brandPrimary} weight="fill" /> : <CurrencyEur size={18} color={colors.brandPrimary} weight="fill" />}
                     <Text style={styles.panelTitle}>
-                      {panel.type === "leasing" ? "Leasing mit Kaffeebindung" : "Finanzierung anfragen"}
+                      {panel.type === "leasing" ? "Leasing mit Kaffeebindung" : panel.type === "bereitstellung" ? "Bereitstellung anfragen" : "Finanzierung anfragen"}
                     </Text>
                   </View>
                   {panel.type === "leasing" ? (
                     <Muted>Monatliche Leasingrate + Mindestabnahme Kaffee. Übernahme am Laufzeitende möglich.</Muted>
+                  ) : panel.type === "bereitstellung" ? (
+                    <Muted>Wir prüfen Maschine, Kaffeeabnahme, Laufzeit und Konditionen individuell.</Muted>
                   ) : (
                     <Muted>Wir erstellen Ihnen ein individuelles Finanzierungsangebot (Anzahlung, Rate, Schlussrate).</Muted>
                   )}
@@ -187,17 +215,38 @@ export default function Maschinen() {
                       );
                     })}
                   </View>
-                  <View style={styles.calc} testID={`calc-${m.id}`}>
-                    <Text style={styles.calcLabel}>Beispiel-Monatsrate</Text>
-                    <Text style={styles.calcValue}>ca. {euro(m.price / panel.term)}</Text>
-                    <Text style={styles.calcNote}>{m.price > 0 ? `${euro(m.price)} ÷ ${panel.term} Monate` : ""} · unverbindlich, ohne Anzahlung/Zins. Ihr individuelles Angebot erhalten Sie vom Team.</Text>
+                  <Text style={styles.panelLabel}>Gewünschte Kaffeesorte (optional)</Text>
+                  <View style={styles.chips}>
+                    {(products.data ?? []).filter((p: any) => p.active !== false).map((p: any) => (
+                      <Pressable key={p.id} onPress={() => setPanel({ ...panel, productId: panel.productId === p.id ? "" : p.id })}
+                        style={[styles.chip, panel.productId === p.id && styles.chipActive]}>
+                        <Text style={[styles.chipTxt, panel.productId === p.id && styles.chipTxtActive]}>{p.brand} {p.name}</Text>
+                      </Pressable>
+                    ))}
                   </View>
+                  <Text style={styles.panelLabel}>Erwartete Kaffeeabnahme kg/Monat (optional)</Text>
+                  <Input value={panel.expectedKg} onChangeText={(expectedKg) => setPanel({ ...panel, expectedKg })} keyboardType="decimal-pad" />
+                  <Text style={styles.panelLabel}>Unternehmen und Ansprechpartner (optional)</Text>
+                  <Input value={panel.companyName} onChangeText={(companyName) => setPanel({ ...panel, companyName })} placeholder="Unternehmen" />
+                  <Input value={panel.contactName} onChangeText={(contactName) => setPanel({ ...panel, contactName })} placeholder="Ansprechpartner" />
+                  <Input value={panel.contactEmail} onChangeText={(contactEmail) => setPanel({ ...panel, contactEmail })} placeholder="E-Mail" keyboardType="email-address" autoCapitalize="none" />
+                  <Input value={panel.contactPhone} onChangeText={(contactPhone) => setPanel({ ...panel, contactPhone })} placeholder="Telefon" keyboardType="phone-pad" />
+                  <Text style={styles.panelLabel}>Anforderungen (optional)</Text>
+                  <Input value={panel.message} onChangeText={(message) => setPanel({ ...panel, message })} multiline />
+                  <Muted>Preis und Vertragskonditionen werden individuell durch Admin oder Vertrieb festgelegt. Es erfolgt keine automatische Ratenberechnung.</Muted>
                   <View style={styles.actions}>
                     <Button
                       testID={`submit-request-${m.id}`}
                       title="Angebot anfordern"
                       loading={requestOffer.isPending}
-                      onPress={() => requestOffer.mutate({ machineId: m.id, type: panel.type, termMonths: panel.term })}
+                      onPress={() => requestOffer.mutate({ machineId: m.id, type: panel.type, termMonths: panel.term,
+                        productId: panel.productId || undefined,
+                        expectedCoffeeKgMonth: panel.expectedKg ? Number(panel.expectedKg.replace(",", ".")) : undefined,
+                        companyName: panel.companyName.trim() || undefined,
+                        contactName: panel.contactName.trim() || undefined,
+                        contactEmail: panel.contactEmail.trim() || undefined,
+                        contactPhone: panel.contactPhone.trim() || undefined,
+                        message: panel.message || undefined })}
                       style={{ flex: 1 }}
                     />
                     <Button title="Abbrechen" kind="secondary" onPress={() => setPanel(null)} style={{ flex: 1 }} />
@@ -219,7 +268,10 @@ export default function Maschinen() {
                 <StatusBadge status={r.status} />
               </View>
               <Text style={styles.reqMachine}>{r.machineName}</Text>
-              <Muted>{r.type === "kauf" ? "Kauf" : r.type === "finanzierung" ? "Finanzierung" : "Leasing (Kaffeebindung)"} · {euro(r.machinePrice)}</Muted>
+              <Muted>
+                {r.type === "kauf" ? "Kauf" : r.type === "finanzierung" ? "Finanzierung" : r.type === "bereitstellung" ? "Bereitstellung" : "Leasing (Kaffeebindung)"}
+                {r.machinePrice != null ? ` · ${euro(r.machinePrice)}` : " · Konditionen werden individuell erstellt"}
+              </Muted>
 
               {r.terms ? (
                 <View style={styles.termsBox}>
