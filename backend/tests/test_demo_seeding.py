@@ -262,7 +262,7 @@ def test_explicit_demo_seed_populates_all_declared_documents():
     report = run(seed_test_database(database))
 
     expected_count = sum(len(documents) for documents in manifest.values())
-    assert expected_count == 56
+    assert expected_count == 59
     assert report["inserted"] == expected_count
     assert report["unchanged"] == 0
     assert sum(database.raw[name].count_documents({}) for name in manifest) == expected_count
@@ -295,6 +295,7 @@ def test_all_business_demo_documents_are_tenant_scoped_and_global_documents_are_
         "offers",
         "orders",
         "products",
+        "tenant_memberships",
     }
     for collection in TENANT_SCOPED_COLLECTIONS:
         documents = list(database.raw[collection].find({}))
@@ -408,9 +409,9 @@ def test_repeated_demo_seed_is_idempotent_and_does_not_rehash_passwords():
         now=FIXED_NOW,
     ))
 
-    assert first_report["inserted"] == 56
+    assert first_report["inserted"] == 59
     assert second_report["inserted"] == 0
-    assert second_report["unchanged"] == 56
+    assert second_report["unchanged"] == 59
     assert hash_calls == [PASSWORDS["admin"], PASSWORDS["sales"], PASSWORDS["customer"]]
     assert all_documents(database) == before
 
@@ -533,12 +534,12 @@ def test_concurrent_identical_insert_is_treated_as_unchanged():
 
     report = run(seed_test_database(database))
 
-    assert report["inserted"] == 55
+    assert report["inserted"] == 58
     assert report["unchanged"] == 1
     assert sum(
         database.raw[name].count_documents({})
         for name in build_demo_manifest(FIXED_NOW)
-    ) == 56
+    ) == 59
 
 
 def test_concurrent_foreign_unique_key_insert_fails_without_overwrite_and_can_retry():
@@ -562,7 +563,7 @@ def test_concurrent_foreign_unique_key_insert_fails_without_overwrite_and_can_re
 
     database.raw.users.delete_one({"_id": "foreign-user"})
     report = run(seed_test_database(database))
-    assert report["inserted"] == 56
+    assert report["inserted"] == 59
 
 
 def test_concurrent_foreign_non_unique_identity_is_detected_after_insert():
@@ -588,7 +589,7 @@ def test_non_conflicting_business_documents_are_left_unchanged():
 
     report = run(seed_test_database(database))
 
-    assert report["inserted"] == 56
+    assert report["inserted"] == 59
     assert database.raw.products.find_one({"_id": "foreign-product"}) == foreign
 
 
@@ -629,7 +630,7 @@ def test_missing_demo_passwords_fail_before_writes():
     assert database.raw.list_collection_names() == []
 
 
-@pytest.mark.parametrize("failure_at", [1, 7, 56])
+@pytest.mark.parametrize("failure_at", [1, 7, 59])
 def test_partial_operational_failure_is_not_reported_successful_and_retry_is_safe(
     failure_at,
 ):
@@ -644,11 +645,11 @@ def test_partial_operational_failure_is_not_reported_successful_and_retry_is_saf
 
     database.fail_on_attempt = None
     report = run(seed_test_database(database))
-    assert report["inserted"] + report["unchanged"] == 56
+    assert report["inserted"] + report["unchanged"] == 59
     after_retry = all_documents(database)
-    assert sum(len(documents) for documents in after_retry.values()) == 56
+    assert sum(len(documents) for documents in after_retry.values()) == 59
     all_ids = [document["_id"] for documents in after_retry.values() for document in documents]
-    assert len(all_ids) == len(set(all_ids)) == 56
+    assert len(all_ids) == len(set(all_ids)) == 59
     for collection, existing_documents in before_retry.items():
         for existing in existing_documents:
             assert database.raw[collection].find_one({"_id": existing["_id"]}) == existing
@@ -828,7 +829,7 @@ def test_cli_explicit_success_reports_only_after_seed_completion(monkeypatch, ca
         assert app_env == "test"
         assert target_confirmation == "test:ordo_test_cli_success"
         assert passwords == PASSWORDS
-        return {"seedVersion": DEMO_SEED_VERSION, "inserted": 56, "unchanged": 0}
+        return {"seedVersion": DEMO_SEED_VERSION, "inserted": 59, "unchanged": 0}
 
     monkeypatch.setenv("APP_ENV", "test")
     monkeypatch.setenv("DB_NAME", "ordo_test_cli_success")

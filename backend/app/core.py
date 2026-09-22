@@ -66,14 +66,17 @@ def gen_reset_code() -> tuple:
     return code, digest
 
 
-def create_token(user: dict) -> str:
+def create_token(user: dict, context=None) -> str:
     now = datetime.now(timezone.utc)
     payload = {
         "sub": user["id"],
-        "role": user["role"],
+        "role": context.role if context is not None else user["role"],
         "iat": now,
         "exp": now + timedelta(minutes=TOKEN_MINUTES),
     }
+    if context is not None:
+        payload["tenant_id"] = context.tenant_id
+        payload["membership_id"] = context.membership_id
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 

@@ -467,11 +467,11 @@ def test_successful_migration_is_idempotent_and_second_run_writes_nothing():
     assert database[MIGRATION_COLLECTION].find_one({"version": 2})["attempts"] == 1
 
 
-def test_registry_executes_baseline_then_tenant_expansion():
+def test_registry_executes_baseline_tenant_expansion_and_membership_schema():
     database = isolated_database("full_registry")
 
     report = runner(database, migrations=None).run().as_dict()
 
-    assert [item["version"] for item in report["executedMigrations"]] == [1, 2]
+    assert [item["version"] for item in report["executedMigrations"]] == [1, 2, 3]
     assert database.tenants.count_documents({"id": SS_TENANT_ID}) == 1
     assert all(rows == [] for rows in business_documents(database).values())

@@ -1,7 +1,7 @@
 """Auth: login, me, password forgot/reset/change."""
 import hashlib
 from html import escape
-from fastapi import Depends, HTTPException
+from fastapi import Depends, Header, HTTPException
 from fastapi.security import OAuth2PasswordRequestForm
 from typing import Annotated
 from datetime import datetime, timedelta, timezone
@@ -9,9 +9,10 @@ from datetime import datetime, timedelta, timezone
 from ..core import (api_router, db, hash_pw, verify_pw, create_token, DUMMY_HASH,
                     strip_id, gen_reset_code, logger)
 from ..audit_service import global_audit
-from ..deps import current_user
+from ..deps import current_user, membership_principal, resolve_membership_context
 from ..models import Token, PublicUser, ForgotPwIn, ResetPwIn, ChangePwIn
 from ..emailer import send_email, email_shell
+from ..tenancy import TenantResolutionError
 
 
 # Simple in-memory brute-force protection: lock an email after repeated failures.
@@ -40,7 +41,10 @@ def _register_fail(email: str):
 
 
 @api_router.post("/auth/login", response_model=Token)
-async def login(form: Annotated[OAuth2PasswordRequestForm, Depends()]):
+async def login(
+    form: Annotated[OAuth2PasswordRequestForm, Depends()],
+    requested_tenant_id: Annotated[str | None, Header(alias="X-Tenant-ID")] = None,
+):
     email = form.username.strip().lower()
     mins = _login_locked(email)
     if mins:
@@ -51,9 +55,23 @@ async def login(form: Annotated[OAuth2PasswordRequestForm, Depends()]):
             verify_pw(form.password, DUMMY_HASH)
         _register_fail(email)
         raise HTTPException(status_code=401, detail="E-Mail oder Passwort falsch")
+    try:
+        context = await resolve_membership_context(
+            user["id"],
+            requested_tenant_id=requested_tenant_id,
+        )
+    except (TenantResolutionError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=403,
+            detail="Keine eindeutige aktive Tenant-Mitgliedschaft",
+        ) from exc
     _LOGIN_FAILS.pop(email, None)
-    await global_audit(user, "login")
-    return {"access_token": create_token(user), "user": PublicUser(**strip_id(user))}
+    principal = membership_principal(user, context)
+    await global_audit(principal, "login")
+    return {
+        "access_token": create_token(principal, context),
+        "user": PublicUser(**strip_id(principal)),
+    }
 
 
 @api_router.get("/auth/me", response_model=PublicUser)

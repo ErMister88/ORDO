@@ -19,7 +19,7 @@ from pymongo.errors import DuplicateKeyError
 from .tenancy import SS_TENANT, SS_TENANT_ID, tenant_to_document
 
 
-DEMO_SEED_VERSION = "ordo-demo-v2"
+DEMO_SEED_VERSION = "ordo-demo-v3"
 DEMO_FINGERPRINT_FIELD = "_demoSeedFingerprint"
 DEMO_REFERENCE_TIME = datetime(2026, 9, 18, 12, 0, tzinfo=timezone.utc)
 PASSWORD_KEYS = ("admin", "sales", "customer")
@@ -32,6 +32,7 @@ TENANT_SCOPED_COLLECTIONS = frozenset({
     "offers",
     "orders",
     "products",
+    "tenant_memberships",
 })
 GLOBAL_SEED_COLLECTIONS = frozenset({"users", "counters"})
 PRODUCTION_ENVIRONMENTS = {"prod", "production", "live"}
@@ -131,6 +132,24 @@ def build_demo_manifest(now: datetime | None = None) -> dict[str, list[dict]]:
             "id": "u-customer", "name": "Ristorante Roma", "email": "kunde@ss-coffee.de",
             "role": "customer", "companyId": "c1", "createdAt": created_at,
             "_passwordKey": "customer",
+        }),
+    ]
+
+    tenant_memberships = [
+        _with_metadata("tenant_memberships", "mbr-demo-admin", {
+            "id": "mbr-demo-admin", "userId": "u-admin", "role": "admin",
+            "status": "active", "companyId": None,
+            "createdAt": created_at, "updatedAt": created_at,
+        }),
+        _with_metadata("tenant_memberships", "mbr-demo-sales", {
+            "id": "mbr-demo-sales", "userId": "u-sales", "role": "sales",
+            "status": "active", "companyId": None,
+            "createdAt": created_at, "updatedAt": created_at,
+        }),
+        _with_metadata("tenant_memberships", "mbr-demo-customer", {
+            "id": "mbr-demo-customer", "userId": "u-customer", "role": "customer",
+            "status": "active", "companyId": "c1",
+            "createdAt": created_at, "updatedAt": created_at,
         }),
     ]
 
@@ -296,6 +315,7 @@ def build_demo_manifest(now: datetime | None = None) -> dict[str, list[dict]]:
 
     manifest = {
         "users": users,
+        "tenant_memberships": tenant_memberships,
         "companies": companies,
         "products": products,
         "customer_prices": customer_prices,
@@ -358,6 +378,29 @@ def _validate_manifest(manifest: Mapping[str, list[Mapping]]) -> None:
             require(document["companyId"], companies, "users.companyId")
         if document.get("salesRepId"):
             require(document["salesRepId"], users, "users.salesRepId")
+    membership_users: set[str] = set()
+    for document in manifest["tenant_memberships"]:
+        require(document["userId"], users, "tenant_memberships.userId")
+        if document["userId"] in membership_users:
+            raise DemoSeedConfigurationError(
+                "Demo manifest contains duplicate tenant memberships"
+            )
+        membership_users.add(document["userId"])
+        if document["role"] not in {"admin", "sales", "customer"}:
+            raise DemoSeedConfigurationError("Demo membership has an invalid role")
+        if document["status"] != "active":
+            raise DemoSeedConfigurationError("Demo membership must be active")
+        company_id = document.get("companyId")
+        if document["role"] == "customer":
+            require(company_id, companies, "tenant_memberships.companyId")
+        elif company_id is not None:
+            raise DemoSeedConfigurationError(
+                "Only a customer demo membership may reference a company"
+            )
+    if membership_users != users:
+        raise DemoSeedConfigurationError(
+            "Every internal demo identity must have one tenant membership"
+        )
     for document in manifest["companies"]:
         require(document["assignedSalesRepId"], users, "companies.assignedSalesRepId")
     for document in manifest["customer_prices"]:

@@ -25,6 +25,7 @@ TENANT_SCOPED_BUSINESS_COLLECTIONS = frozenset({
     "settings",
     "shop_orders",
     "subscriptions",
+    "tenant_memberships",
     "uploads",
 })
 
@@ -145,4 +146,5 @@ class TenantBusinessAccess:
         self.settings = TenantScopedCollection(database, "settings", context)
         self.shop_orders = TenantScopedCollection(database, "shop_orders", context)
         self.subscriptions = TenantScopedCollection(database, "subscriptions", context)
+        self.tenant_memberships = TenantScopedCollection(database, "tenant_memberships", context)
         self.uploads = TenantScopedCollection(database, "uploads", context)

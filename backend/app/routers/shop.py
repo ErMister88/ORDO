@@ -12,7 +12,7 @@ from ..core import (api_router, db, strip_id, next_seq, logger,
                     JWT_SECRET, JWT_ALGORITHM, create_token, hash_pw, verify_pw)
 from ..audit_service import tenant_audit
 from ..deps import (
-    current_user,
+    authenticated_identity,
     public_tenant_business_access,
     require_roles,
     tenant_business_access,
@@ -411,12 +411,15 @@ async def shop_login(body: ShopLoginIn):
 
 
 @api_router.get("/shop/me")
-async def shop_me(user: Annotated[dict, Depends(current_user)]):
+async def shop_me(user: Annotated[dict, Depends(authenticated_identity)]):
     return _shop_user_public(user)
 
 
 @api_router.put("/shop/me/address")
-async def shop_save_address(body: ShopAddressIn, user: Annotated[dict, Depends(current_user)]):
+async def shop_save_address(
+    body: ShopAddressIn,
+    user: Annotated[dict, Depends(authenticated_identity)],
+):
     addr = body.model_dump()
     await db.users.update_one({"id": user["id"]}, {"$set": {"address": addr}})
     return {"address": addr}
@@ -424,8 +427,8 @@ async def shop_save_address(body: ShopAddressIn, user: Annotated[dict, Depends(c
 
 @api_router.get("/shop/my-orders")
 async def shop_my_orders(
-    user: Annotated[dict, Depends(current_user)],
-    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    user: Annotated[dict, Depends(authenticated_identity)],
+    access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
 ):
     rows = await access.shop_orders.find({"userId": user["id"]}).sort("createdAt", -1).to_list(1000)
     return [strip_id(r) for r in rows]

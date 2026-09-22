@@ -86,12 +86,18 @@ ausdrücklich global. Sie besitzen keine `tenantId` und werden deshalb im
 Tenant-Admin-Endpunkt nicht angezeigt. Das gilt auch für historische
 Audit-Einträge ohne `tenantId`. Es gibt keinen S&S-Legacy-Fallback.
 
-## Noch nicht vollständig umgestellte Bereiche
+## Globale Identitäten und Tenant-Memberships
 
 `users` bleibt entsprechend dem Zielmodell eine globale Identitäts-Collection.
-Tenant-Memberships, tenantbezogene Rollen und tenantbezogene Benutzerlisten
-folgen erst im dafür freigegebenen Arbeitspaket. Die Tenant-Isolation der
-Audit-Persistenz ersetzt diese noch fehlende Benutzerautorisierung nicht.
+Tenant-Zugehörigkeit, Rolle und B2B-Company-Zuordnung stammen für
+authentifizierte Business-Zugriffe aus einer aktiven `tenant_memberships`-
+Membership. Tenant-Admins sehen ausschließlich globale Identitäten, die über
+eine Membership ihrem Tenant zugeordnet sind. Legacy-Felder wie `users.role`,
+`users.companyId` und `users.salesRepId` bleiben vorerst kompatibel gespeichert,
+sind aber keine Autorisierungsquelle mehr.
+
+Die vollständige Membership- und Rollout-Strategie ist in
+`docs/operations/tenant-memberships.md` dokumentiert.
 
 ## Verbindliche Sicherheitsregel für spätere KI-Funktionen
 

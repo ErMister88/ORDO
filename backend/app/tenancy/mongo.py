@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from .domain import Tenant, TenantStatus
+from .domain import (
+    Tenant,
+    TenantMembership,
+    TenantMembershipStatus,
+    TenantRole,
+    TenantStatus,
+)
 from .resolver import TenantResolutionError
 
 
@@ -31,3 +37,31 @@ class MongoTenantDirectory:
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise TenantResolutionError("Tenant directory contains an invalid document") from exc
+
+
+class MongoMembershipDirectory:
+    """Read memberships by global identity without assuming a tenant first."""
+
+    def __init__(self, database) -> None:
+        self._database = database
+
+    async def list_memberships_for_user(self, user_id: str):
+        documents = await self._database.tenant_memberships.find(
+            {"userId": user_id}
+        ).to_list(length=None)
+        try:
+            return tuple(
+                TenantMembership(
+                    membership_id=document["id"],
+                    tenant_id=document["tenantId"],
+                    user_id=document["userId"],
+                    role=TenantRole(document["role"]),
+                    status=TenantMembershipStatus(document["status"]),
+                    company_id=document.get("companyId"),
+                )
+                for document in documents
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise TenantResolutionError(
+                "Membership directory contains an invalid document"
+            ) from exc

@@ -128,16 +128,50 @@ def run(coroutine):
     return asyncio.run(coroutine)
 
 
-def context(tenant_id: str) -> TenantContext:
+def context(
+    tenant_id: str,
+    *,
+    actor_user_id: str = "u1",
+    role: str = "admin",
+    company_id: str | None = None,
+) -> TenantContext:
     return TenantContext(
         tenant_id=tenant_id,
-        actor_user_id="synthetic-user",
-        resolution_source=TenantResolutionSource.SINGLE_TENANT_CONFIGURATION,
+        actor_user_id=actor_user_id,
+        membership_id=f"mbr-{tenant_id}-{actor_user_id}",
+        role=role,
+        company_id=company_id,
+        resolution_source=TenantResolutionSource.MEMBERSHIP,
     )
 
 
-def access(database: AsyncDatabase, tenant_id: str) -> TenantBusinessAccess:
-    return TenantBusinessAccess(database, context(tenant_id))
+def access(
+    database: AsyncDatabase,
+    tenant_id: str,
+    *,
+    actor_user_id: str = "u1",
+    role: str = "admin",
+    company_id: str | None = None,
+) -> TenantBusinessAccess:
+    return TenantBusinessAccess(
+        database,
+        context(
+            tenant_id,
+            actor_user_id=actor_user_id,
+            role=role,
+            company_id=company_id,
+        ),
+    )
+
+
+def principal(scoped_access: TenantBusinessAccess) -> dict:
+    membership_context = scoped_access.context
+    return {
+        "id": membership_context.actor_user_id,
+        "role": membership_context.role,
+        "companyId": membership_context.company_id,
+        "_tenant_context": membership_context,
+    }
 
 
 def unscoped_collection_accesses(source: str, filename: str = "<source>") -> list[str]:
@@ -174,7 +208,7 @@ def unscoped_collection_accesses(source: str, filename: str = "<source>") -> lis
             isinstance(node, ast.Name)
             and node.id in database_names
             or isinstance(node, ast.Attribute)
-            and node.attr == "db"
+            and node.attr in {"db", "_database"}
         )
 
     violations = []
@@ -599,18 +633,25 @@ def test_cross_tenant_company_and_upload_look_like_missing_resources():
 
 def test_customer_company_visibility_requires_company_in_resolved_tenant():
     database = AsyncDatabase("tenant_access_customer_company_visibility")
-    tenant_a = access(database, TENANT_A)
-    tenant_b = access(database, TENANT_B)
+    tenant_a = access(
+        database, TENANT_A,
+        actor_user_id="u-customer", role="customer", company_id="c1",
+    )
+    tenant_b = access(
+        database, TENANT_B,
+        actor_user_id="u-customer", role="customer", company_id="c1",
+    )
     run(tenant_b.companies.insert_one({"id": "c1", "name": "Other tenant"}))
-    user = {"id": "u-customer", "role": "customer", "companyId": "c1"}
-
-    assert run(deps.visible_company_ids(user, tenant_a)) == []
-    assert run(deps.visible_company_ids(user, tenant_b)) == ["c1"]
+    assert run(deps.visible_company_ids(principal(tenant_a), tenant_a)) == []
+    assert run(deps.visible_company_ids(principal(tenant_b), tenant_b)) == ["c1"]
 
 
 def test_customer_company_visibility_rejects_non_string_database_value():
     database = AsyncDatabase("tenant_access_customer_company_injection")
-    tenant_a = access(database, TENANT_A)
+    tenant_a = access(
+        database, TENANT_A,
+        actor_user_id="u-corrupt", role="customer", company_id="c1",
+    )
     run(tenant_a.companies.insert_one({"id": "c1", "name": "Tenant A"}))
     user = {
         "id": "u-corrupt",
@@ -618,7 +659,9 @@ def test_customer_company_visibility_rejects_non_string_database_value():
         "companyId": {"$ne": None},
     }
 
-    assert run(deps.visible_company_ids(user, tenant_a)) == []
+    with pytest.raises(HTTPException) as exc:
+        run(deps.visible_company_ids(user, tenant_a))
+    assert exc.value.status_code == 403
 
 
 def test_machine_customer_snapshot_rejects_company_from_other_tenant():
@@ -699,6 +742,9 @@ def test_application_has_no_direct_unscoped_access_to_converted_collections():
         Path("database_setup.py"),
         Path("demo_seed.py"),
         Path("tenant_access.py"),
+        # Membership resolution starts from a global identity and must inspect
+        # that identity's memberships before it can choose a tenant.
+        Path("tenancy/mongo.py"),
     }
     violations = []
     for path in app_dir.rglob("*.py"):
@@ -721,9 +767,20 @@ def test_application_has_no_direct_unscoped_access_to_converted_collections():
     "import app.core as core\ncore.db.price_history.aggregate([])",
     "import app.core as core\nraw = core.db\nraw.orders.find({})",
     "from app import core\nraw: object = core.db\nraw.offers.find({})",
+    "self._database.tenant_memberships.find({'userId': 'u1'})",
 ])
 def test_static_guard_detects_direct_access_bypass_shapes(source):
     assert unscoped_collection_accesses(source)
+
+
+def test_membership_directory_is_the_only_controlled_unscoped_membership_read():
+    app_dir = Path(__file__).resolve().parents[1] / "app"
+    source = (app_dir / "tenancy" / "mongo.py").read_text(encoding="utf-8")
+    violations = unscoped_collection_accesses(source, "tenancy/mongo.py")
+
+    assert len(violations) == 1
+    assert violations[0].endswith(":attribute:tenant_memberships")
+    assert '.find(\n            {"userId": user_id}\n        )' in source
 
 
 @pytest.mark.parametrize(
@@ -764,7 +821,7 @@ def test_order_create_sets_server_tenant_and_ignores_client_tenant(monkeypatch):
         "items": [{"productId": "p1", "qty": 2}],
         "tenantId": TENANT_B,
     })
-    response = run(orders.create_order(body, {"id": "u1", "role": "admin"}, tenant_a))
+    response = run(orders.create_order(body, principal(tenant_a), tenant_a))
 
     assert "tenantId" not in body.model_dump()
     assert "tenantId" not in response
@@ -793,7 +850,7 @@ def test_order_create_rejects_cross_tenant_references(monkeypatch, foreign_refer
     with pytest.raises(HTTPException) as exc:
         run(orders.create_order(
             OrderCreate(companyId="c1", items=[OrderItemIn(productId="p1", qty=1)]),
-            {"id": "u1", "role": "admin"},
+            principal(tenant_a),
             tenant_a,
         ))
 
@@ -818,7 +875,7 @@ def test_foreign_and_missing_order_have_identical_status_response():
             run(orders.set_order_status(
                 order_id,
                 OrderStatusIn(status="Bestätigt"),
-                {"id": "u1", "role": "admin"},
+                principal(tenant_a),
                 tenant_a,
             ))
         assert (exc.value.status_code, exc.value.detail) == (404, "Bestellung nicht gefunden")
@@ -842,7 +899,7 @@ def test_offer_create_is_tenant_scoped_and_rejects_foreign_product(monkeypatch):
     monkeypatch.setattr(offers, "next_seq", sequence_must_not_run)
     body = OfferCreate(companyId="c1", items=[OfferItemIn(productId="p1", qty=1, price=10)])
     with pytest.raises(HTTPException) as exc:
-        run(offers.create_offer(body, {"id": "u1", "role": "admin"}, tenant_a))
+        run(offers.create_offer(body, principal(tenant_a), tenant_a))
 
     assert (exc.value.status_code, exc.value.detail) == (400, "Produkt unbekannt")
     assert database.raw.offers.count_documents({}) == 0
@@ -867,7 +924,7 @@ def test_offer_create_sets_server_tenant(monkeypatch):
             companyId="c1",
             items=[OfferItemIn(productId="p1", qty=1, price=10)],
         ),
-        {"id": "u1", "role": "admin"},
+        principal(tenant_a),
         tenant_a,
     ))
 
@@ -897,7 +954,7 @@ def test_accept_offer_revalidates_product_tenant_before_order(monkeypatch):
         run(offers.accept_offer(
             "offer-1",
             AcceptOfferIn(),
-            {"id": "u1", "role": "admin"},
+            principal(tenant_a),
             tenant_a,
         ))
 
@@ -932,7 +989,7 @@ def test_invoice_creation_is_scoped_to_order_and_company_tenant(monkeypatch):
         raise AssertionError("counter advanced before reference validation")
 
     monkeypatch.setattr(billing, "next_seq", sequence_must_not_run)
-    user = {"id": "u1", "role": "admin"}
+    user = principal(tenant_a)
     for order_id in ("foreign", "own-with-foreign-company"):
         with pytest.raises(HTTPException) as exc:
             run(billing.create_invoice_for_order(order_id, user, tenant_a))
@@ -963,7 +1020,7 @@ def test_invoice_creation_sets_tenant_and_keeps_order_reference_local(monkeypatc
     monkeypatch.setattr(billing, "next_seq", fixed_sequence)
     response = run(billing.create_invoice_for_order(
         "order-1",
-        {"id": "u1", "role": "admin"},
+        principal(tenant_a),
         tenant_a,
     ))
 
@@ -984,7 +1041,7 @@ def test_foreign_and_missing_invoice_have_identical_pay_response():
         with pytest.raises(HTTPException) as exc:
             run(invoices.mark_invoice_paid(
                 invoice_id,
-                {"id": "u1", "role": "admin"},
+                principal(tenant_a),
                 tenant_a,
             ))
         assert (exc.value.status_code, exc.value.detail) == (404, "Rechnung nicht gefunden")
@@ -1007,7 +1064,7 @@ def test_invoice_with_foreign_order_reference_is_fail_closed():
     with pytest.raises(HTTPException) as exc:
         run(invoices.mark_invoice_paid(
             "invoice-a",
-            {"id": "u1", "role": "admin"},
+            principal(tenant_a),
             tenant_a,
         ))
 
@@ -1029,7 +1086,7 @@ def test_invoice_list_hides_cross_tenant_order_reference():
     }))
 
     response = run(invoices.get_invoices(
-        {"id": "u1", "role": "admin"},
+        principal(tenant_a),
         tenant_a,
     ))
 
@@ -1049,7 +1106,7 @@ def test_contract_list_hides_cross_tenant_product_reference():
     }))
 
     response = run(invoices.get_contracts(
-        {"id": "u1", "role": "admin"},
+        principal(tenant_a),
         tenant_a,
     ))
 
@@ -1069,7 +1126,7 @@ def test_subscription_create_rejects_foreign_product_reference():
                 companyId="c1",
                 items=[OfferItemIn(productId="p1", qty=1, price=10)],
             ),
-            {"id": "u1", "role": "admin"},
+            principal(tenant_a),
             tenant_a,
         ))
 
@@ -1088,7 +1145,7 @@ def test_subscription_create_sets_server_tenant():
             companyId="c1",
             items=[OfferItemIn(productId="p1", qty=1, price=10)],
         ),
-        {"id": "u1", "role": "admin"},
+        principal(tenant_a),
         tenant_a,
     ))
 
@@ -1118,7 +1175,7 @@ def test_subscription_run_processes_only_resolved_tenant(monkeypatch):
 
     monkeypatch.setattr(subscriptions, "next_seq", fixed_sequence)
     response = run(subscriptions.run_due_subscriptions(
-        {"id": "u1", "role": "admin"},
+        principal(tenant_a),
         tenant_a,
     ))
 
@@ -1155,7 +1212,7 @@ def test_machine_contract_write_rejects_cross_tenant_references(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         run(machines.accept_machine_offer(
             "mr-1",
-            {"id": "u1", "role": "admin"},
+            principal(tenant_a),
             tenant_a,
         ))
 
@@ -1192,7 +1249,7 @@ def test_machine_contract_write_sets_server_tenant(monkeypatch):
     monkeypatch.setattr(machines, "tenant_audit", no_audit)
     run(machines.accept_machine_offer(
         "mr-1",
-        {"id": "u1", "role": "admin"},
+        principal(tenant_a),
         tenant_a,
     ))
 
@@ -1620,11 +1677,13 @@ def test_audit_callsites_are_explicitly_classified():
         ("products.py", "product.stock"),
         ("shop.py", "shop.settings"),
         ("shop.py", "shop_order_status"),
+        ("users.py", "membership.create"),
+        ("users.py", "membership.identity_reset"),
     ])
     assert sorted(global_calls) == sorted([
         ("auth.py", "login"),
-        ("users.py", "user.create"),
-        ("users.py", "user.reset"),
+        ("users.py", "identity.create"),
+        ("users.py", "identity.reset"),
     ])
     assert legacy_calls == []
 

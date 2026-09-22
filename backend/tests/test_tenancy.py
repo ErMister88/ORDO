@@ -183,7 +183,11 @@ def test_client_cannot_override_tenant_context_through_resolver_api():
 def test_resolution_contract_is_not_coupled_to_legacy_user_role_or_company():
     subject_fields = set(TenantResolutionSubject.__dataclass_fields__)
 
-    assert subject_fields == {"actor_user_id"}
+    assert subject_fields == {
+        "actor_user_id",
+        "requested_tenant_id",
+        "requested_membership_id",
+    }
     assert "companyId" not in subject_fields
     assert "role" not in subject_fields
 

@@ -21,6 +21,49 @@ class TenantResolutionSource(str, Enum):
     MEMBERSHIP = "membership"
 
 
+class TenantMembershipStatus(str, Enum):
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+
+
+class TenantRole(str, Enum):
+    ADMIN = "admin"
+    SALES = "sales"
+    CUSTOMER = "customer"
+
+
+@dataclass(frozen=True, slots=True)
+class TenantMembership:
+    """A global identity's authorization inside exactly one tenant."""
+
+    membership_id: str
+    tenant_id: str
+    user_id: str
+    role: TenantRole
+    status: TenantMembershipStatus
+    company_id: str | None = None
+
+    def __post_init__(self) -> None:
+        for field_name in ("membership_id", "tenant_id", "user_id"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or not value or value != value.strip():
+                raise ValueError(f"TenantMembership {field_name} must be normalized")
+        if not isinstance(self.role, TenantRole):
+            raise ValueError("TenantMembership role must be a TenantRole")
+        if not isinstance(self.status, TenantMembershipStatus):
+            raise ValueError("TenantMembership status must be a TenantMembershipStatus")
+        if self.company_id is not None and (
+            not isinstance(self.company_id, str)
+            or not self.company_id
+            or self.company_id != self.company_id.strip()
+        ):
+            raise ValueError("TenantMembership company_id must be null or normalized")
+        if self.role is TenantRole.CUSTOMER and self.company_id is None:
+            raise ValueError("Customer memberships require a company_id")
+        if self.role is not TenantRole.CUSTOMER and self.company_id is not None:
+            raise ValueError("Only customer memberships may carry company_id")
+
+
 @dataclass(frozen=True, slots=True)
 class Tenant:
     """A business operating ORDO, distinct from its B2B customer companies."""
@@ -63,9 +106,9 @@ SS_TENANT = Tenant(
 class TenantContext:
     """Server-resolved tenant scope carried through one request or job.
 
-    ``membership_id`` and ``role`` intentionally remain optional. Work package
-    4 can populate them from a validated membership without changing the
-    context contract or adding tenant ownership to the global user identity.
+    Authenticated business requests populate membership fields from a validated
+    membership. They remain optional because public shop requests resolve only
+    a tenant and do not represent a tenant membership.
     """
 
     tenant_id: str
@@ -73,13 +116,34 @@ class TenantContext:
     actor_user_id: str | None = None
     membership_id: str | None = None
     role: str | None = None
+    company_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.tenant_id or self.tenant_id != self.tenant_id.strip():
             raise ValueError("TenantContext tenant_id must be a non-empty normalized string")
         if not isinstance(self.resolution_source, TenantResolutionSource):
             raise ValueError("TenantContext resolution_source must be a TenantResolutionSource")
-        for field_name in ("actor_user_id", "membership_id", "role"):
+        for field_name in ("actor_user_id", "membership_id", "role", "company_id"):
             value = getattr(self, field_name)
             if value is not None and (not value or value != value.strip()):
                 raise ValueError(f"TenantContext {field_name} must be null or a normalized string")
+        if self.resolution_source is TenantResolutionSource.MEMBERSHIP:
+            if self.actor_user_id is None or self.membership_id is None or self.role is None:
+                raise ValueError(
+                    "Membership TenantContext requires actor, membership, and role"
+                )
+            try:
+                membership_role = TenantRole(self.role)
+            except ValueError as exc:
+                raise ValueError("Membership TenantContext has an invalid role") from exc
+            if membership_role is TenantRole.CUSTOMER and self.company_id is None:
+                raise ValueError("Customer TenantContext requires a company_id")
+            if membership_role is not TenantRole.CUSTOMER and self.company_id is not None:
+                raise ValueError("Only customer TenantContext may carry company_id")
+        elif any(
+            value is not None
+            for value in (self.membership_id, self.role, self.company_id)
+        ):
+            raise ValueError(
+                "Public single-tenant context cannot carry membership authorization"
+            )

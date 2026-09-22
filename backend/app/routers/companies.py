@@ -5,7 +5,13 @@ from datetime import datetime, timezone
 
 from ..core import api_router, strip_id
 from ..audit_service import tenant_audit
-from ..deps import current_user, require_roles, tenant_business_access, visible_company_ids
+from ..deps import (
+    active_staff_membership,
+    current_user,
+    require_roles,
+    tenant_business_access,
+    visible_company_ids,
+)
 from ..models import CompanyUpdateIn
 from ..tenant_access import TenantBusinessAccess
 
@@ -59,6 +65,11 @@ async def update_company(
     c = await access.companies.find_one({"id": company_id})
     if not c:
         raise HTTPException(status_code=404, detail="Kunde nicht gefunden")
+    if body.assignedSalesRepId and not await active_staff_membership(
+        access,
+        body.assignedSalesRepId,
+    ):
+        raise HTTPException(status_code=400, detail="Vertrieb ist für diesen Tenant nicht verfügbar")
     await access.companies.update_one({"id": company_id}, {"$set": body.model_dump()})
     updated = await access.companies.find_one({"id": company_id})
     await tenant_audit(access, user, "company.update", company_id, {"name": body.name})
