@@ -1,6 +1,7 @@
 """App assembly: mount routers, CORS, startup/shutdown."""
 from starlette.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
+from starlette.responses import JSONResponse
 
 from .core import app, api_router, db, client, logger
 from .database_setup import ensure_required_indexes
@@ -26,6 +27,30 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/api/health", tags=["operations"])
+async def health():
+    environment = (os.getenv("APP_ENV") or "unknown").strip().lower() or "unknown"
+    version = (
+        os.getenv("RENDER_GIT_COMMIT")
+        or os.getenv("APP_VERSION")
+        or "unknown"
+    ).strip() or "unknown"
+    payload = {
+        "service": "ordo-api",
+        "environment": environment,
+        "version": version,
+    }
+    try:
+        await db.command("ping")
+    except Exception:
+        logger.warning("Health check failed: database unavailable")
+        return JSONResponse(
+            status_code=503,
+            content={**payload, "status": "unhealthy", "database": "unavailable"},
+        )
+    return {**payload, "status": "ok", "database": "connected"}
 
 
 @app.on_event("startup")
