@@ -29,6 +29,7 @@ from app.demo_seed import (  # noqa: E402
     DemoSeedConfigurationError,
     DemoSeedConflictError,
     _document_fingerprint,
+    _legacy_expected_subset,
     _validate_manifest,
     build_demo_manifest,
     seed_demo,
@@ -93,6 +94,12 @@ class AsyncCollection:
     async def update_one(self, *args, **kwargs):
         return self.collection.update_one(*args, **kwargs)
 
+    async def replace_one(self, *args, **kwargs):
+        self.database.total_replace_attempts += 1
+        if self.database.fail_on_replace_attempt == self.database.total_replace_attempts:
+            raise RuntimeError("simulated replacement failure")
+        return self.collection.replace_one(*args, **kwargs)
+
     async def create_index(self, *args, **kwargs):
         return self.collection.create_index(*args, **kwargs)
 
@@ -104,7 +111,9 @@ class AsyncDatabase:
         self.name = name
         self.commands = []
         self.total_insert_attempts = 0
+        self.total_replace_attempts = 0
         self.fail_on_attempt = None
+        self.fail_on_replace_attempt = None
         self.race_insert = None
         self.race_document = {}
 
@@ -160,6 +169,37 @@ def all_documents(database):
         for name in sorted(manifest_collections)
         if database.raw[name].count_documents({})
     }
+
+
+def prepare_known_legacy_inventory(database):
+    prepare_tenant(database)
+    manifest = build_demo_manifest(FIXED_NOW)
+    for collection in (
+        "users", "companies", "products", "customer_prices", "offers",
+        "orders", "contracts", "invoices", "counters", "tenant_memberships",
+    ):
+        documents = []
+        for expected in manifest[collection]:
+            if collection == "counters" and expected["_id"] not in {
+                "offer", "order", "product", "invoice",
+            }:
+                continue
+            document = deepcopy(_legacy_expected_subset(collection, expected))
+            if collection == "users":
+                document["hashed_password"] = bcrypt.hashpw(
+                    PASSWORDS[expected["_passwordKey"]].encode("utf-8"),
+                    bcrypt.gensalt(),
+                ).decode("utf-8")
+                document["createdAt"] = "2026-01-01T00:00:00+00:00"
+            elif collection == "orders":
+                document["createdAt"] = "2026-01-01T00:00:00+00:00"
+            elif collection == "tenant_memberships":
+                document["id"] = f"legacy-{expected['userId']}"
+                document["createdAt"] = "2026-01-01T00:00:00+00:00"
+                document["updatedAt"] = "2026-01-01T00:00:00+00:00"
+            documents.append(document)
+        database.raw[collection].delete_many({})
+        database.raw[collection].insert_many(documents)
 
 
 @pytest.mark.parametrize("enable_demo_seed", [None, "true", "false"])
@@ -525,6 +565,153 @@ def test_legacy_demo_document_without_tenant_id_requires_explicit_upgrade():
     assert database.raw.products.find_one({"_id": legacy["_id"]}) == legacy
 
 
+def test_explicit_known_legacy_upgrade_replaces_only_documented_inventory():
+    database = AsyncDatabase("ordo_test_known_legacy_upgrade")
+    prepare_known_legacy_inventory(database)
+
+    report = run(seed_demo(
+        database,
+        app_env="test",
+        target_confirmation=f"test:{database.name}",
+        passwords=PASSWORDS,
+        now=FIXED_NOW,
+        upgrade_known_legacy=True,
+    ))
+
+    assert report["upgraded"] == 56
+    assert report["inserted"] == 9
+    assert report["unchanged"] == 0
+    assert sum(
+        database.raw[name].count_documents({})
+        for name in build_demo_manifest(FIXED_NOW)
+    ) == 65
+    assert all(
+        document["_demoSeed"] == DEMO_SEED_VERSION
+        and document[DEMO_FINGERPRINT_FIELD]
+        for name in build_demo_manifest(FIXED_NOW)
+        for document in database.raw[name].find({})
+    )
+
+    repeated = run(seed_demo(
+        database,
+        app_env="test",
+        target_confirmation=f"test:{database.name}",
+        passwords=PASSWORDS,
+        now=FIXED_NOW,
+        upgrade_known_legacy=True,
+    ))
+    assert repeated["inserted"] == 0
+    assert repeated["upgraded"] == 0
+    assert repeated["unchanged"] == 65
+
+
+def test_known_legacy_upgrade_dry_run_performs_full_preflight_without_writes():
+    database = AsyncDatabase("ordo_test_known_legacy_upgrade_dry_run")
+    prepare_known_legacy_inventory(database)
+    before = all_documents(database)
+
+    report = run(seed_demo(
+        database,
+        app_env="test",
+        target_confirmation=f"test:{database.name}",
+        passwords=PASSWORDS,
+        now=FIXED_NOW,
+        upgrade_known_legacy=True,
+        dry_run=True,
+    ))
+
+    assert report["dryRun"] is True
+    assert report["wouldUpgrade"] == 56
+    assert report["wouldInsert"] == 9
+    assert report["unchanged"] == 0
+    assert all_documents(database) == before
+
+
+def test_interrupted_known_legacy_upgrade_is_retryable_without_false_success():
+    database = AsyncDatabase("ordo_test_known_legacy_upgrade_retry")
+    prepare_known_legacy_inventory(database)
+    database.fail_on_replace_attempt = 10
+
+    with pytest.raises(RuntimeError, match="simulated replacement failure"):
+        run(seed_demo(
+            database,
+            app_env="test",
+            target_confirmation=f"test:{database.name}",
+            passwords=PASSWORDS,
+            now=FIXED_NOW,
+            upgrade_known_legacy=True,
+        ))
+
+    assert sum(
+        database.raw[name].count_documents({"_demoSeed": DEMO_SEED_VERSION})
+        for name in build_demo_manifest(FIXED_NOW)
+    ) == 9
+
+    database.fail_on_replace_attempt = None
+    report = run(seed_demo(
+        database,
+        app_env="test",
+        target_confirmation=f"test:{database.name}",
+        passwords=PASSWORDS,
+        now=FIXED_NOW,
+        upgrade_known_legacy=True,
+    ))
+    assert report["upgraded"] == 47
+    assert report["unchanged"] == 9
+    assert report["inserted"] == 9
+
+
+@pytest.mark.parametrize(
+    "collection, mutation",
+    [
+        ("products", {"$set": {"cost": 0.01}}),
+        ("companies", {"$set": {"email": "changed@example.test"}}),
+        ("orders", {"$set": {"items.0.price": 0.01}}),
+    ],
+)
+def test_known_legacy_upgrade_rejects_changed_data_before_any_write(collection, mutation):
+    database = AsyncDatabase(f"ordo_test_changed_legacy_{collection}")
+    prepare_known_legacy_inventory(database)
+    database.raw[collection].update_one({}, mutation)
+    before = all_documents(database)
+
+    with pytest.raises(DemoSeedConflictError, match="differs from known inventory"):
+        run(seed_demo(
+            database,
+            app_env="test",
+            target_confirmation=f"test:{database.name}",
+            passwords=PASSWORDS,
+            now=FIXED_NOW,
+            upgrade_known_legacy=True,
+        ))
+
+    assert all_documents(database) == before
+
+
+@pytest.mark.parametrize("collection", ["products", "machines"])
+def test_known_legacy_upgrade_rejects_extra_document_before_any_write(collection):
+    database = AsyncDatabase(f"ordo_test_extra_legacy_document_{collection}")
+    prepare_known_legacy_inventory(database)
+    database.raw[collection].insert_one({
+        "id": "customer-created-product",
+        "tenantId": SS_TENANT_ID,
+        "name": "Must survive",
+    })
+    before = all_documents(database)
+
+    with pytest.raises(DemoSeedConflictError, match="unexpected document"):
+        run(seed_demo(
+            database,
+            app_env="test",
+            target_confirmation=f"test:{database.name}",
+            passwords=PASSWORDS,
+            now=FIXED_NOW,
+            upgrade_known_legacy=True,
+        ))
+
+    assert all_documents(database) == before
+
+
 def test_existing_demo_document_with_wrong_tenant_id_is_rejected():
     database = AsyncDatabase("ordo_test_wrong_demo_tenant")
     prepare_tenant(database)
@@ -881,6 +1068,52 @@ def test_cli_explicit_success_reports_only_after_seed_completion(monkeypatch, ca
     assert DEMO_SEED_VERSION in output.out
     assert all(password not in output.out for password in PASSWORDS.values())
     assert all(password not in output.err for password in PASSWORDS.values())
+
+
+def test_cli_passes_legacy_upgrade_only_with_explicit_flag(monkeypatch, capsys):
+    async def successful_run_seed(
+        _url,
+        database_name,
+        app_env,
+        target_confirmation,
+        passwords,
+        *,
+        upgrade_known_legacy=False,
+    ):
+        assert database_name == "ordo_test_cli_upgrade"
+        assert app_env == "test"
+        assert target_confirmation == "test:ordo_test_cli_upgrade"
+        assert passwords == PASSWORDS
+        assert upgrade_known_legacy is True
+        return {
+            "seedVersion": DEMO_SEED_VERSION,
+            "inserted": 9,
+            "upgraded": 56,
+            "unchanged": 0,
+        }
+
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("DB_NAME", "ordo_test_cli_upgrade")
+    monkeypatch.setenv("MONGO_URL", "mongodb://127.0.0.1:1")
+    monkeypatch.setenv("SEED_ADMIN_PASSWORD", PASSWORDS["admin"])
+    monkeypatch.setenv("SEED_SALES_PASSWORD", PASSWORDS["sales"])
+    monkeypatch.setenv("SEED_CUSTOMER_PASSWORD", PASSWORDS["customer"])
+    monkeypatch.setattr(seed_cli, "run_seed", successful_run_seed)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "seed_demo.py",
+            "--confirm-target",
+            "test:ordo_test_cli_upgrade",
+            "--upgrade-known-legacy",
+        ],
+    )
+
+    assert seed_cli.main() == 0
+    output = capsys.readouterr()
+    assert '"upgraded": 56' in output.out
+    assert all(password not in output.out for password in PASSWORDS.values())
 
 
 def test_cli_failure_never_prints_success_report(monkeypatch, capsys):

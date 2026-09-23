@@ -37,6 +37,36 @@ python scripts/seed_demo.py --confirm-target test:ordo_local_demo
 
 Die benötigten übrigen Variablen müssen dabei bereits sicher in der lokalen Umgebung gesetzt sein. Zielbestätigung, `APP_ENV` und `DB_NAME` müssen exakt übereinstimmen. Fehlende oder unbekannte Umgebungen werden vor dem Aufbau einer Datenbankverbindung abgewiesen.
 
+### Einmaliges Upgrade des dokumentierten ersten Staging-Demobestands
+
+Der ursprüngliche ORDO-Staging-Demobestand wurde angelegt, bevor Seed-Versionen
+und Integritätsfingerabdrücke eingeführt wurden. Ausschließlich für diesen
+dokumentierten Bestand kann der Betreiber den zusätzlichen Schalter
+`--upgrade-known-legacy` verwenden:
+
+```bash
+python scripts/seed_demo.py \
+  --confirm-target staging:ordo_staging \
+  --upgrade-known-legacy \
+  --dry-run
+```
+
+Der erste Aufruf erfolgt mit `--dry-run`. Erst wenn dessen Plan exakt den
+erwarteten Bestand ausweist, wird derselbe Befehl ohne `--dry-run` ausgeführt.
+Der Dry Run prüft Ziel, Tenant, Passwörter, sämtliche Konflikte und den
+vollständigen Legacy-Bestand, schreibt aber keine Dokumente oder Collections.
+
+Der Schalter ist kein allgemeiner Import- oder Überschreibmodus. Vor dem ersten
+Write müssen Anzahl, fachliche Identitäten, Tenant-Zuordnung, Kerninhalte und
+Demo-Zugangsdaten sämtlicher 53 ursprünglicher Dokumente sowie der drei durch
+die Membership-Migration erzeugten Zuordnungen exakt dem bekannten Bestand
+entsprechen. Zusätzliche, fehlende oder veränderte Dokumente blockieren den
+gesamten Preflight. Das Upgrade erhält vorhandene technische MongoDB-IDs,
+ersetzt die eindeutig erkannten Demo-Dokumente durch das v6-Manifest und fügt
+nur die neuen v6-Demobereiche hinzu. Ein abgebrochener Lauf ist wiederholbar;
+bereits vollständig auf v6 aktualisierte Dokumente werden beim nächsten Lauf
+unverändert akzeptiert.
+
 ## Verhalten bei vorhandenen Daten
 
 Vor jedem Lauf muss Migration 2 bereits den aktiven, unveränderten S&S-Tenant `tnt_ss_0001` angelegt haben. Der Seed führt keine Migration aus und legt keinen Tenant an. Fehlt der Tenant oder weicht sein kanonisches Dokument ab, endet der Lauf vor dem ersten Business-Write.
@@ -47,7 +77,9 @@ Jedes erzeugte Dokument besitzt eine technische Demo-Markierung, eine determinis
 - Bei einer Wiederholung müssen die gespeicherten Demo-Benutzer weiterhin zu den ausdrücklich übergebenen `SEED_*_PASSWORD`-Werten passen. Eine Abweichung wird als Konflikt behandelt; der Seed rotiert oder überschreibt Passwörter nicht.
 - Spätere Änderungen, fehlende Felder oder ein beschädigter Fingerabdruck werden als Konflikt erkannt. Das Script setzt solche Dokumente niemals eigenständig zurück.
 - Der gespeicherte Inhalt wird zusätzlich gegen das feste Manifest der Seed-Version geprüft. Ein neu berechneter Fingerabdruck legitimiert deshalb kein verändertes Dokument.
-- Alte `ordo-demo-v1`-Dokumente ohne `tenantId` werden nicht aktualisiert oder neu markiert. Sie blockieren den tenant-aware V2-Seed bis zu einer ausdrücklich freigegebenen Upgrade- oder Bereinigungsstrategie.
+- Unbekannte alte Demo-Versionen werden nicht aktualisiert oder neu markiert.
+  Nur der oben beschriebene, ausdrücklich aktivierte und streng geprüfte erste
+  ORDO-Staging-Bestand besitzt einen Upgrade-Pfad.
 - Nicht kollidierende fremde Dokumente bleiben unverändert.
 - Verwendet ein nicht markiertes Dokument bereits eine reservierte Demo-ID, E-Mail-Adresse oder Kundenpreis-Kombination, bricht der vollständige Preflight vor dem ersten Schreibvorgang ab.
 - Es werden keine Collections geleert, gelöscht oder zurückgesetzt.

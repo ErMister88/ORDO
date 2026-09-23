@@ -29,6 +29,19 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="Exact confirmation in the form <APP_ENV>:<DB_NAME>",
     )
+    parser.add_argument(
+        "--upgrade-known-legacy",
+        action="store_true",
+        help=(
+            "Upgrade only the exact documented first ORDO demo inventory; "
+            "fails before writes for any unknown or changed document"
+        ),
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Run all target, tenant, conflict and inventory checks without writing",
+    )
     return parser.parse_args()
 
 
@@ -38,6 +51,8 @@ async def run_seed(
     app_env: str,
     target_confirmation: str,
     passwords: dict[str, str],
+    upgrade_known_legacy: bool = False,
+    dry_run: bool = False,
 ) -> dict:
     client = AsyncIOMotorClient(
         mongo_url,
@@ -52,6 +67,8 @@ async def run_seed(
             app_env=app_env,
             target_confirmation=target_confirmation,
             passwords=passwords,
+            upgrade_known_legacy=upgrade_known_legacy,
+            dry_run=dry_run,
         )
     finally:
         client.close()
@@ -88,6 +105,8 @@ def main() -> int:
             normalized_env,
             args.confirm_target.strip(),
             passwords,
+            **({"upgrade_known_legacy": True} if args.upgrade_known_legacy else {}),
+            **({"dry_run": True} if args.dry_run else {}),
         ))
         print(json.dumps(result, indent=2, sort_keys=True))
         return 0

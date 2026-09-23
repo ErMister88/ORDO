@@ -52,6 +52,34 @@ KNOWN_ENVIRONMENTS = {
     *PRODUCTION_ENVIRONMENTS,
 }
 
+# The first ORDO staging data set predates explicit demo ownership metadata.
+# These values are the narrow, documented signature of that one data set.  They
+# are used only when an operator opts into the legacy upgrade path; normal seed
+# runs remain insert-only and fail on unmarked identities.
+LEGACY_DEMO_COUNTS = {
+    "users": 3,
+    "companies": 4,
+    "products": 4,
+    "customer_prices": 5,
+    "offers": 2,
+    "orders": 25,
+    "contracts": 2,
+    "invoices": 4,
+    "counters": 4,
+    "tenant_memberships": 3,
+}
+LEGACY_USER_IDENTITIES = {
+    "u-admin": ("Sergio (Admin)", "admin@ss-coffee.de", "admin"),
+    "u-sales": ("Marco Vertrieb", "vertrieb@ss-coffee.de", "sales"),
+    "u-customer": ("Ristorante Roma", "kunde@ss-coffee.de", "customer"),
+}
+LEGACY_COMPANY_CONTACTS = {
+    "c1": ("info@roma.de", "0911 123456", "DE123456789"),
+    "c2": ("ciao@milano.de", "0911 987654", "DE987654321"),
+    "c3": ("info@venezia.de", "0841 555123", "DE555444333"),
+    "c4": ("hallo@torino.de", "09131 44556", "DE444555666"),
+}
+
 
 class DemoSeedError(RuntimeError):
     """Base class for expected demo-seed failures."""
@@ -626,6 +654,12 @@ def _identity_query(collection: str, document: Mapping) -> dict:
         ]}
     if collection == "counters":
         return {"_id": document["_id"]}
+    if collection == "tenant_memberships":
+        return {"$or": [
+            {"_id": document["_id"]},
+            {"id": document["id"]},
+            {"tenantId": document["tenantId"], "userId": document["userId"]},
+        ]}
     return {"$or": [{"_id": document["_id"]}, {"id": document["id"]}]}
 
 
@@ -639,6 +673,11 @@ def _identity_matches(collection: str, existing: Mapping, expected: Mapping) -> 
         )
     if collection == "counters":
         return existing.get("_id") == expected["_id"]
+    if collection == "tenant_memberships":
+        return (
+            existing.get("tenantId") == expected["tenantId"]
+            and existing.get("userId") == expected["userId"]
+        )
     return existing.get("id") == expected["id"]
 
 
@@ -649,6 +688,7 @@ def _document_fingerprint(document: Mapping) -> str:
         payload,
         ensure_ascii=False,
         allow_nan=False,
+        default=str,
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")
@@ -664,6 +704,10 @@ def _stored_document_matches_expected(
     actual = dict(existing)
     actual.pop(DEMO_FINGERPRINT_FIELD, None)
     expected_payload = dict(expected)
+    # A controlled legacy upgrade preserves MongoDB's existing technical _id.
+    # Business identity is validated separately and is the stable seed key.
+    actual.pop("_id", None)
+    expected_payload.pop("_id", None)
 
     if collection != "users":
         return _strict_equal(actual, expected_payload)
@@ -684,6 +728,194 @@ def _stored_document_matches_expected(
     except (KeyError, TypeError, ValueError):
         return False
     return _strict_equal(actual, expected_payload)
+
+
+def _contains_expected(actual, expected) -> bool:
+    """Return whether ``actual`` contains the recursively specified legacy shape."""
+
+    if isinstance(expected, Mapping):
+        return isinstance(actual, Mapping) and all(
+            key in actual and _contains_expected(actual[key], value)
+            for key, value in expected.items()
+        )
+    if isinstance(expected, list):
+        return isinstance(actual, list) and len(actual) == len(expected) and all(
+            _contains_expected(actual_item, expected_item)
+            for actual_item, expected_item in zip(actual, expected)
+        )
+    return type(actual) is type(expected) and actual == expected
+
+
+def _legacy_order_expected(document: Mapping) -> dict:
+    order_id = document["id"]
+    if order_id == "B-2026-00987":
+        return {
+            "id": order_id,
+            "companyId": "c1",
+            "createdBy": "u-customer",
+            "status": "Neu",
+            "items": [{"productId": "p1", "qty": 18, "price": 15.90}],
+            "tenantId": SS_TENANT_ID,
+        }
+    number = int(order_id.rsplit("-", 1)[1])
+    if not 1 <= number <= 24:
+        raise DemoSeedConflictError("Legacy demo order identity is outside the known inventory")
+    company_index = (number - 1) // 6
+    month = 6 - ((number - 1) % 6)
+    company_id, product_id, base_quantity, price = (
+        ("c1", "p1", 18, 15.90),
+        ("c2", "p2", 24, 18.20),
+        ("c3", "p1", 38, 15.50),
+        ("c4", "p1", 12, 16.20),
+    )[company_index]
+    return {
+        "id": order_id,
+        "companyId": company_id,
+        "createdBy": "u-sales",
+        "status": "Abgeschlossen",
+        "items": [{
+            "productId": product_id,
+            "qty": base_quantity + (month % 3) * 3,
+            "price": price,
+        }],
+        "tenantId": SS_TENANT_ID,
+    }
+
+
+def _legacy_expected_subset(collection: str, expected: Mapping) -> dict:
+    if collection == "users":
+        name, email, role = LEGACY_USER_IDENTITIES[expected["id"]]
+        subset = {"id": expected["id"], "name": name, "email": email, "role": role}
+        if role == "sales":
+            subset["salesRepId"] = "u-sales"
+        if role == "customer":
+            subset["companyId"] = "c1"
+        return subset
+    if collection == "companies":
+        email, phone, vat_id = LEGACY_COMPANY_CONTACTS[expected["id"]]
+        return {
+            key: expected[key]
+            for key in (
+                "id", "name", "city", "assignedSalesRepId", "active",
+                "monthlyKg", "orderCycleDays", "tenantId",
+            )
+        } | {"email": email, "phone": phone, "vatId": vat_id}
+    if collection == "products":
+        return {
+            key: expected[key]
+            for key in (
+                "id", "name", "brand", "unit", "standardPrice", "salesFloor",
+                "absoluteFloor", "cost", "active", "taxRate", "stock",
+                "tenantId",
+            )
+        } | ({"discountTiers": [
+            {"minQty": tier["minQty"], "price": tier["price"]}
+            for tier in expected.get("discountTiers", [])
+        ]} if expected.get("discountTiers") else {})
+    if collection == "customer_prices":
+        return {
+            key: expected[key]
+            for key in ("companyId", "productId", "price", "tenantId")
+        }
+    if collection in {"offers", "contracts"}:
+        keys = (
+            "id", "companyId", "createdBy", "status", "items", "reason",
+            "termMonths", "createdAt", "tenantId",
+        ) if collection == "offers" else (
+            "id", "companyId", "productId", "start", "termMonths", "minQtyMonth",
+            "price", "machine", "machineRate", "serviceRate", "tenantId",
+        )
+        subset = {key: expected[key] for key in keys}
+        if collection == "offers":
+            subset["items"] = [
+                {key: item[key] for key in ("productId", "qty", "price")}
+                for item in expected["items"]
+            ]
+        return subset
+    if collection == "orders":
+        return _legacy_order_expected(expected)
+    if collection == "invoices":
+        return {
+            key: expected[key]
+            for key in ("id", "companyId", "date", "amount", "status", "tenantId")
+        }
+    if collection == "counters":
+        return {"_id": expected["_id"], "seq": expected["seq"]}
+    if collection == "tenant_memberships":
+        return {
+            key: expected[key]
+            for key in ("tenantId", "userId", "role", "status", "companyId")
+        }
+    raise DemoSeedConflictError(
+        f"Legacy demo upgrade is not allowed for collection {collection}"
+    )
+
+
+def _assert_known_legacy_match(
+    collection: str,
+    existing: Mapping,
+    expected: Mapping,
+    passwords: Mapping[str, str],
+) -> None:
+    if collection not in LEGACY_DEMO_COUNTS or existing.get("_demoSeed") is not None:
+        raise DemoSeedConflictError(
+            f"Demo seed conflict in {collection}: document is not eligible for legacy upgrade"
+        )
+    if not _contains_expected(existing, _legacy_expected_subset(collection, expected)):
+        raise DemoSeedConflictError(
+            f"Demo seed conflict in {collection}: legacy document differs from known inventory"
+        )
+    if collection == "users":
+        password_key = expected.get("_passwordKey")
+        hashed_password = existing.get("hashed_password")
+        try:
+            password_matches = isinstance(hashed_password, str) and bcrypt.checkpw(
+                passwords[password_key].encode("utf-8"),
+                hashed_password.encode("utf-8"),
+            )
+        except (KeyError, TypeError, ValueError):
+            password_matches = False
+        if not password_matches:
+            raise DemoSeedConflictError(
+                "Demo seed conflict in users: legacy credentials do not match configured demo credentials"
+            )
+
+
+async def _assert_upgrade_inventory(database, matched_ids: Mapping[str, set]) -> None:
+    for collection, matched in matched_ids.items():
+        expected_count = LEGACY_DEMO_COUNTS.get(collection, 0)
+        documents = await database[collection].find({}).to_list(length=100)
+        document_ids = {document.get("_id") for document in documents}
+        if len(matched) < expected_count:
+            raise DemoSeedConflictError(
+                f"Demo seed conflict in {collection}: legacy inventory is incomplete"
+            )
+        if collection == "counters" and not {
+            "offer", "order", "product", "invoice",
+        }.issubset(matched):
+            raise DemoSeedConflictError(
+                "Demo seed conflict in counters: legacy inventory is incomplete"
+            )
+        if document_ids != matched:
+            raise DemoSeedConflictError(
+                f"Demo seed conflict in {collection}: unexpected document outside known inventory"
+            )
+
+
+def _replacement_document(
+    collection: str,
+    expected: Mapping,
+    existing: Mapping,
+    passwords: Mapping[str, str],
+    password_hasher: Callable[[str], str],
+) -> dict:
+    replacement = dict(expected)
+    replacement["_id"] = existing["_id"]
+    password_key = replacement.pop("_passwordKey", None)
+    if password_key:
+        replacement["hashed_password"] = password_hasher(passwords[password_key])
+    replacement[DEMO_FINGERPRINT_FIELD] = _document_fingerprint(replacement)
+    return replacement
 
 
 async def _require_canonical_ss_tenant(database) -> None:
@@ -783,26 +1015,95 @@ async def seed_demo(
     passwords: Mapping[str, str],
     password_hasher: Callable[[str], str] = hash_demo_password,
     now: datetime | None = None,
+    upgrade_known_legacy: bool = False,
+    dry_run: bool = False,
 ) -> dict:
-    """Insert only missing demo documents and never overwrite existing data."""
+    """Seed demo data, optionally upgrading only the known first staging inventory."""
 
     validate_demo_target(app_env, database.name, target_confirmation)
     _validate_passwords(passwords)
     await _require_canonical_ss_tenant(database)
     manifest = build_demo_manifest(now)
     pending: list[tuple[str, dict]] = []
+    replacements: list[tuple[str, dict, dict]] = []
+    matched_ids = {name: set() for name in manifest}
     unchanged = 0
-    per_collection = {name: {"inserted": 0, "unchanged": 0} for name in manifest}
+    upgraded = 0
+    per_collection = {
+        name: {"inserted": 0, "upgraded": 0, "unchanged": 0}
+        for name in manifest
+    }
 
     # Complete the conflict check before the first write.
     for collection, documents in manifest.items():
         for expected in documents:
             matches = await _find_matches(database, collection, expected)
-            if _assert_owned_match(collection, expected, matches, passwords):
+            if matches and matches[0].get("_demoSeed") == DEMO_SEED_VERSION:
+                if len(matches) != 1:
+                    raise DemoSeedConflictError(
+                        f"Demo seed conflict in {collection}: multiple documents use the same demo identity"
+                    )
+                _assert_owned_match(collection, expected, matches, passwords)
                 unchanged += 1
                 per_collection[collection]["unchanged"] += 1
+                matched_ids[collection].add(matches[0]["_id"])
+            elif matches and upgrade_known_legacy:
+                if len(matches) != 1:
+                    raise DemoSeedConflictError(
+                        f"Demo seed conflict in {collection}: multiple documents use the same demo identity"
+                    )
+                existing = matches[0]
+                _assert_known_legacy_match(collection, existing, expected, passwords)
+                replacements.append((collection, expected, existing))
+                matched_ids[collection].add(existing["_id"])
+            elif matches:
+                _assert_owned_match(collection, expected, matches, passwords)
             else:
                 pending.append((collection, expected))
+
+    if upgrade_known_legacy:
+        # This dedicated upgrade is intentionally all-or-nothing at preflight:
+        # no write begins unless every historical identity is accounted for and
+        # none of the owned collections contains an unexpected document.
+        await _assert_upgrade_inventory(database, matched_ids)
+
+    if dry_run:
+        return {
+            "seedVersion": DEMO_SEED_VERSION,
+            "dryRun": True,
+            "wouldInsert": len(pending),
+            "wouldUpgrade": len(replacements),
+            "unchanged": unchanged,
+            "collections": {
+                name: {
+                    "wouldInsert": sum(1 for item in pending if item[0] == name),
+                    "wouldUpgrade": sum(1 for item in replacements if item[0] == name),
+                    "unchanged": values["unchanged"],
+                }
+                for name, values in per_collection.items()
+            },
+        }
+
+    for collection, expected, existing in replacements:
+        replacement = _replacement_document(
+            collection,
+            expected,
+            existing,
+            passwords,
+            password_hasher,
+        )
+        result = await database[collection].replace_one(
+            {"_id": existing["_id"], "_demoSeed": {"$exists": False}},
+            replacement,
+        )
+        if result.matched_count != 1:
+            matches = await _find_matches(database, collection, expected)
+            _assert_owned_match(collection, expected, matches, passwords)
+        else:
+            matches = await _find_matches(database, collection, expected)
+            _assert_owned_match(collection, expected, matches, passwords)
+            upgraded += 1
+            per_collection[collection]["upgraded"] += 1
 
     inserted = 0
     for collection, expected in pending:
@@ -828,6 +1129,7 @@ async def seed_demo(
     return {
         "seedVersion": DEMO_SEED_VERSION,
         "inserted": inserted,
+        "upgraded": upgraded,
         "unchanged": unchanged,
         "collections": per_collection,
     }
