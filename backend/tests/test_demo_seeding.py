@@ -33,8 +33,10 @@ from app.demo_seed import (  # noqa: E402
     build_demo_manifest,
     seed_demo,
 )
-from app.migrations.registry import get_migrations  # noqa: E402
 from app.migrations.runner import MIGRATION_COLLECTION, MigrationRunner  # noqa: E402
+from app.migrations.versions.v0002_tenant_schema_expansion import (  # noqa: E402
+    MIGRATION as TENANT_SCHEMA_MIGRATION,
+)
 from app.routers import machines as machines_router  # noqa: E402
 from app.tenant_access import TenantBusinessAccess  # noqa: E402
 from app.tenancy import SS_TENANT_ID, TenantContext, TenantResolutionSource  # noqa: E402
@@ -135,7 +137,7 @@ def prepare_tenant(database):
             database.raw,
             app_env="test",
             application_version="tenant-aware-seed-test",
-            migrations=get_migrations(),
+            migrations=(TENANT_SCHEMA_MIGRATION,),
             lease_seconds=3,
         ).run()
 

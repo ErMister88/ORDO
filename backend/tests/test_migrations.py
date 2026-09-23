@@ -638,6 +638,33 @@ def test_registry_rejects_duplicate_versions_names_and_wrong_order():
         )
 
 
+def test_registry_rejects_missing_unordered_and_implicit_dependencies():
+    database = isolated_database("invalid_dependencies")
+    first = make_migration(1, "first")
+    missing = Migration(
+        version=2,
+        name="missing",
+        checksum="b" * 64,
+        inspect=lambda _database: MigrationPlan(),
+        apply=lambda _database, _context: {},
+        depends_on=(99,),
+    )
+    with pytest.raises(MigrationDefinitionError, match="missing or unordered"):
+        runner(database, migrations=(first, missing))
+
+    implicit = make_migration(3, "implicit")
+    linked = Migration(
+        version=2,
+        name="linked",
+        checksum="c" * 64,
+        inspect=lambda _database: MigrationPlan(),
+        apply=lambda _database, _context: {},
+        depends_on=(1,),
+    )
+    with pytest.raises(MigrationDefinitionError, match="must declare"):
+        runner(database, migrations=(first, linked, implicit))
+
+
 def test_running_record_left_by_crashed_process_is_retried():
     database = isolated_database("crashed_process")
     migration = make_migration()

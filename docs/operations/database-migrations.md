@@ -24,7 +24,7 @@ Lock- und Migrationsmetadaten verwenden explizit MongoDB `majority` Read/Write C
 | Pfad | Aufgabe |
 | --- | --- |
 | `app/migrations/models.py` | Definitionen, Checksummen und Fehlerklassen |
-| `app/migrations/registry.py` | Explizite, aufsteigend sortierte Migrationsliste |
+| `app/migrations/registry.py` | Explizite, abhängigkeitsgeordnete Migrationsliste |
 | `app/migrations/runner.py` | Planung, Ausführung, Status und Recovery |
 | `app/migrations/lock.py` | MongoDB-Lease gegen parallele Runner |
 | `app/migrations/versions/` | Unveränderliche versionierte Migrationen |
@@ -47,7 +47,7 @@ Geschrieben werden bei einem echten Lauf nur:
 3. Eine vollständig lesende `inspect()`-Funktion bereitstellen. Sie liefert Preconditions und erwartete Änderungen als `MigrationPlan`.
 4. `apply(database, context)` idempotent und wiederaufnehmbar implementieren. Das Ergebnis muss eine knappe, nicht sensible Zusammenfassung liefern.
 5. Bei längeren, in Batches ausgeführten Änderungen regelmäßig `context.checkpoint()` aufrufen. Der Aufruf bricht ab, wenn der Runner seine Lease verloren hat.
-6. Die Migration in `app/migrations/registry.py` in aufsteigender Reihenfolge registrieren.
+6. Die Migration in `app/migrations/registry.py` registrieren und ihre direkte Abhängigkeit angeben. Die Versionsnummer bleibt die unveränderliche Identität; die geprüfte Abhängigkeitsreihenfolge bestimmt die Ausführung.
 7. Nach der ersten Anwendung die Migrationsdatei nicht mehr verändern. Eine Änderung führt absichtlich zu einem Checksum-Fehler; Korrekturen erfolgen über eine neue Version.
 
 Die Checksumme umfasst den vollständigen Dateiinhalt. Unterschiedliche Zeilenenden (`LF`, `CRLF`, `CR`) werden vor dem Hashing auf `LF` normalisiert; Dateipfad und Laufzeitumgebung fließen nicht ein.
@@ -68,7 +68,7 @@ Vom Verzeichnis `backend`:
 python scripts/migrate.py --dry-run
 ```
 
-Der Dry Run ist vollständig read-only. Er erzeugt weder Collections noch Indizes oder Lock-Dokumente. Ausgegeben werden:
+Der Dry Run ist gegenüber der Zieldatenbank vollständig read-only. Er kopiert Dokumente und Indexdefinitionen in eine ausschließlich im Prozess gehaltene In-Memory-Sandbox und führt dort die ausstehenden Migrationen in ihrer echten Abhängigkeitsreihenfolge aus. Dadurch sieht Migration N+1 die simulierten Ergebnisse von Migration N, ohne Collections, Indizes, Lock- oder Statusdokumente in der Zieldatenbank anzulegen. Ausgegeben werden:
 
 - `APP_ENV`
 - Ziel-Datenbank
@@ -80,7 +80,9 @@ Der Dry Run ist vollständig read-only. Er erzeugt weder Collections noch Indize
 
 Connection String und Secrets werden nicht ausgegeben. Ein Dry Run verwendet bewusst keine Lease; der Zustand kann sich deshalb zwischen Vorschau und späterer Ausführung ändern und wird beim echten Lauf unter der Lease erneut geprüft.
 
-`inspect()` erhält eine eingeschränkte Datenbankansicht, die Schreibmethoden blockiert. Aggregationen mit `$out` oder `$merge` werden ebenfalls abgewiesen.
+`inspect()` erhält weiterhin eine eingeschränkte Datenbankansicht, die Schreibmethoden blockiert. Aggregationen mit `$out` oder `$merge` werden ebenfalls abgewiesen. `apply()` läuft beim Dry Run nur gegen die In-Memory-Sandbox. Vor und nach der Simulation wird ein BSON-typisierter Fingerprint der Quelldaten und Indizes verglichen; eine parallele Änderung lässt den Dry Run fehlschlagen.
+
+Die Simulation verwendet bewusst dieselben Migrationen und dieselbe Registry wie der echte Lauf. Sie ersetzt keinen abschließenden Test gegen eine isolierte echte MongoDB, verhindert aber den früheren Fehler, spätere Migrationen gegen den unveränderten Ausgangszustand zu prüfen.
 
 Die Sperre schützt gegen versehentliche Schreibzugriffe über die bereitgestellte Python-Schnittstelle. Python-Code im selben Prozess könnte eine solche Laufzeitsperre absichtlich umgehen. Für zusätzliche Absicherung sollte ein Dry Run in CI/CD und Production nach Möglichkeit mit einem MongoDB-Benutzer ausgeführt werden, der ausschließlich Leserechte besitzt.
 

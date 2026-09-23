@@ -45,6 +45,7 @@ class Migration:
     checksum: str
     inspect: InspectMigration
     apply: ApplyMigration
+    depends_on: tuple[int, ...] = ()
 
     def validate(self) -> None:
         if type(self.version) is not int or self.version < 1:
@@ -56,6 +57,14 @@ class Migration:
         if not re.fullmatch(r"[0-9a-f]{64}", self.checksum):
             raise MigrationDefinitionError(
                 f"Migration {self.version} has an invalid SHA-256 checksum"
+            )
+        if any(type(version) is not int or version < 1 for version in self.depends_on):
+            raise MigrationDefinitionError(
+                f"Migration {self.version} has invalid dependency versions"
+            )
+        if self.version in self.depends_on:
+            raise MigrationDefinitionError(
+                f"Migration {self.version} cannot depend on itself"
             )
 
 

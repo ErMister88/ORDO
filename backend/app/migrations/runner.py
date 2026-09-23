@@ -5,10 +5,12 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from hmac import compare_digest
+from hashlib import sha256
 import time
 from typing import Any, Iterable, Mapping
 
 from pymongo import ASCENDING, ReturnDocument
+from bson import BSON
 from pymongo.errors import DuplicateKeyError
 from pymongo.read_concern import ReadConcern
 from pymongo.write_concern import WriteConcern
@@ -177,18 +179,66 @@ class MigrationRunner:
         self._validate_registry()
 
     def preview(self) -> RunReport:
-        """Build a completely read-only migration plan."""
+        """Simulate the complete chain while keeping the source database read-only."""
 
         existing = self._read_existing()
         self._validate_existing(existing)
-        report = self._new_report(dry_run=True)
-        for migration in self.migrations:
-            document = existing.get(migration.version)
-            if document and document["status"] == "completed":
-                report.appliedMigrations.append(self._record_summary(document))
-                continue
-            report.plannedMigrations.append(self._planned_summary(migration, document))
-        return report
+        if not any(migration.depends_on for migration in self.migrations):
+            report = self._new_report(dry_run=True)
+            for migration in self.migrations:
+                document = existing.get(migration.version)
+                if document and document["status"] == "completed":
+                    report.appliedMigrations.append(self._record_summary(document))
+                    continue
+                report.plannedMigrations.append(
+                    self._planned_summary(migration, document)
+                )
+            return report
+        before = self._source_fingerprint()
+        sandbox = self._clone_for_preview()
+        try:
+            report = self._new_report(dry_run=True)
+            for migration in self.migrations:
+                document = existing.get(migration.version)
+                if document and document["status"] == "completed":
+                    report.appliedMigrations.append(self._record_summary(document))
+
+            simulated = MigrationRunner(
+                sandbox,
+                app_env="test",
+                application_version=f"{self.application_version}-dry-run",
+                migrations=self.migrations,
+                lease_seconds=self.lease_seconds,
+            )
+            sandbox_existing = simulated._read_existing()
+            simulated._validate_existing(sandbox_existing)
+            lease = MigrationLease(
+                sandbox,
+                application_version=simulated.application_version,
+                lease_seconds=simulated.lease_seconds,
+            )
+            with lease:
+                simulated._ensure_metadata_index()
+                for migration in simulated.migrations:
+                    document = sandbox_existing.get(migration.version)
+                    if document and document["status"] == "completed":
+                        continue
+                    plan = simulated._planned_summary(migration, document)
+                    result = simulated._apply_one(migration, lease)
+                    if result is not None:
+                        plan["simulatedResult"] = {
+                            key: value
+                            for key, value in result.items()
+                            if key not in {"durationMs", "message", "attempt"}
+                        }
+                    report.plannedMigrations.append(plan)
+                    sandbox_existing = simulated._read_existing()
+            return report
+        finally:
+            if before != self._source_fingerprint():
+                raise MigrationStateError(
+                    "Source database changed while building the dry-run simulation"
+                )
 
     def run(self, *, dry_run: bool = False) -> RunReport:
         if dry_run:
@@ -351,10 +401,67 @@ class MigrationRunner:
             appEnv=self.app_env,
             databaseName=self.database_name,
             detectedMigrations=[
-                {"version": m.version, "name": m.name, "checksum": m.checksum}
+                {
+                    "version": m.version,
+                    "name": m.name,
+                    "checksum": m.checksum,
+                    "dependsOn": list(m.depends_on),
+                }
                 for m in self.migrations
             ],
         )
+
+    def _source_fingerprint(self) -> str:
+        """Detect source writes or concurrent changes during a dry-run snapshot."""
+
+        state: list[dict[str, Any]] = []
+        for name in sorted(
+            item
+            for item in self.database.list_collection_names()
+            if item != "schema_migration_lock"
+        ):
+            documents = [sha256(BSON.encode(document)).hexdigest()
+                         for document in self.database[name].find({})]
+            indexes = [sha256(BSON.encode(dict(index))).hexdigest()
+                       for index in self.database[name].list_indexes()]
+            state.append({
+                "name": name,
+                "documents": sorted(documents),
+                "indexes": sorted(indexes),
+            })
+        return sha256(BSON.encode({"collections": state})).hexdigest()
+
+    def _clone_for_preview(self):
+        """Copy source data and indexes into an in-memory migration sandbox."""
+
+        try:
+            import mongomock
+        except ImportError as exc:  # pragma: no cover - deployment packaging guard
+            raise MigrationDefinitionError(
+                "Full-chain dry-run requires the mongomock runtime dependency"
+            ) from exc
+
+        client = mongomock.MongoClient(tz_aware=True)
+        sandbox = client["ordo_migration_dry_run"]
+        for name in sorted(
+            item
+            for item in self.database.list_collection_names()
+            if item != "schema_migration_lock"
+        ):
+            documents = list(self.database[name].find({}))
+            if documents:
+                sandbox[name].insert_many(documents)
+            else:
+                sandbox.create_collection(name)
+            for raw_index in self.database[name].list_indexes():
+                index = dict(raw_index)
+                if index.get("name") == "_id_":
+                    continue
+                keys = list(index.pop("key").items())
+                for unsupported in ("v", "ns"):
+                    index.pop(unsupported, None)
+                sandbox[name].create_index(keys, **index)
+        return sandbox
 
     def _planned_summary(self, migration: Migration, document: Mapping[str, Any] | None) -> dict[str, Any]:
         plan = migration.inspect(ReadOnlyDatabase(self.database))
@@ -433,14 +540,25 @@ class MigrationRunner:
         versions: set[int] = set()
         names: set[str] = set()
         previous = 0
-        for migration in self.migrations:
+        has_dependencies = any(migration.depends_on for migration in self.migrations)
+        for position, migration in enumerate(self.migrations):
             migration.validate()
             if migration.version in versions:
                 raise MigrationDefinitionError(f"Duplicate migration version {migration.version}")
             if migration.name in names:
                 raise MigrationDefinitionError(f"Duplicate migration name {migration.name}")
-            if migration.version <= previous:
+            if not has_dependencies and migration.version <= previous:
                 raise MigrationDefinitionError("Migrations must be registered in ascending order")
+            if has_dependencies and position and not migration.depends_on:
+                raise MigrationDefinitionError(
+                    f"Migration {migration.version} must declare its execution dependency"
+                )
+            missing = set(migration.depends_on) - versions
+            if missing:
+                raise MigrationDefinitionError(
+                    f"Migration {migration.version} has missing or unordered dependencies: "
+                    + ", ".join(map(str, sorted(missing)))
+                )
             versions.add(migration.version)
             names.add(migration.name)
             previous = migration.version
