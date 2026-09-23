@@ -4,14 +4,14 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as WebBrowser from "expo-web-browser";
-import { ArrowLeft, Phone, EnvelopeSimple, MapPin, Check, PencilSimple, Export, CreditCard } from "phosphor-react-native";
+import { ArrowLeft, Phone, EnvelopeSimple, MapPin, Check, PencilSimple, Export, FileText, Package } from "phosphor-react-native";
 
-import { makeStyles, useTheme } from "@/src/theme";
+import { makeStyles, tokens, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
 import { apiGet, apiPost, apiPut } from "@/src/api/client";
 import { euro, num, dateDE } from "@/src/lib/format";
 import { shareInvoicePdf, shareCollectivePdf } from "@/src/lib/pdf";
-import { Card, InfoRow, Button, Input, StatusBadge, EmptyState, Muted } from "@/src/components/ui";
+import { Card, InfoRow, Button, Input, StatusBadge, EmptyState, Muted, LoadingState, ErrorState, PageContainer, KPICard, SectionTitle } from "@/src/components/ui";
 
 export default function KundeDetail() {
   const styles = useStyles();
@@ -21,7 +21,7 @@ export default function KundeDetail() {
   const { user } = useAuth();
   const qc = useQueryClient();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const [tab, setTab] = useState<"konditionen" | "rechnungen" | "historie">("konditionen");
+  const [tab, setTab] = useState<"uebersicht" | "konditionen" | "vorgaenge" | "rechnungen">("uebersicht");
   const [editing, setEditing] = useState(false);
   const isAdmin = user?.role === "admin";
 
@@ -30,9 +30,13 @@ export default function KundeDetail() {
   const products = useQuery({ queryKey: ["products"], queryFn: () => apiGet("/products") });
   const orders = useQuery({ queryKey: ["orders"], queryFn: () => apiGet("/orders") });
   const invoices = useQuery({ queryKey: ["invoices"], queryFn: () => apiGet("/invoices") });
+  const offers = useQuery({ queryKey: ["offers"], queryFn: () => apiGet("/offers") });
+  const contracts = useQuery({ queryKey: ["contracts"], queryFn: () => apiGet("/contracts") });
+  const machineRequests = useQuery({ queryKey: ["machine-requests"], queryFn: () => apiGet("/machine-requests") });
   const history = useQuery({
     queryKey: ["price-history", id],
     queryFn: () => apiGet(`/companies/${id}/price-history`),
+    enabled: isAdmin || user?.role === "sales",
   });
 
   const c = company.data;
@@ -40,6 +44,16 @@ export default function KundeDetail() {
   (products.data ?? []).forEach((p: any) => (prodMap[p.id] = p));
   const custOrders = (orders.data ?? []).filter((o: any) => o.companyId === id);
   const custInvoices = (invoices.data ?? []).filter((i: any) => i.companyId === id);
+  const custOffers = (offers.data ?? []).filter((o: any) => o.companyId === id);
+  const custContracts = (contracts.data ?? []).filter((ct: any) => ct.companyId === id);
+  const custMachines = (machineRequests.data ?? []).filter((request: any) => request.customer?.companyId === id);
+  const pricingQuote = useQuery({
+    queryKey: ["customer-360-pricing", id, (products.data ?? []).map((p: any) => p.id)],
+    queryFn: () => apiPost("/pricing/b2b/quote", { companyId: id, items: (products.data ?? []).filter((p: any) => p.active !== false).map((p: any) => ({ productId: p.id, qty: 1 })) }),
+    enabled: !!id && (products.data ?? []).length > 0,
+  });
+  const quoteMap: Record<string, any> = {};
+  (pricingQuote.data?.lines ?? []).forEach((line: any) => { quoteMap[line.productId] = line; });
 
   const payInvoice = useMutation({
     mutationFn: (invId: string) => apiPut(`/invoices/${invId}/pay`, {}),
@@ -102,6 +116,8 @@ export default function KundeDetail() {
       </View>
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <PageContainer narrow style={styles.page}>
+        {company.isLoading ? <LoadingState label="Kundenprofil wird geladen…" /> : company.isError ? <ErrorState onRetry={() => company.refetch()} /> : null}
         {c && (
           <Card testID="company-info-card">
             <View style={styles.metaRow}>
@@ -142,7 +158,7 @@ export default function KundeDetail() {
         )}
 
         <View style={styles.segment}>
-          {(["konditionen", "rechnungen", "historie"] as const).map((t) => (
+          {(["uebersicht", "konditionen", "vorgaenge", "rechnungen"] as const).map((t) => (
             <Pressable
               key={t}
               testID={`segment-${t}`}
@@ -150,57 +166,93 @@ export default function KundeDetail() {
               onPress={() => setTab(t)}
             >
               <Text style={[styles.segText, tab === t && styles.segTextActive]}>
-                {t === "konditionen" ? "Konditionen" : t === "rechnungen" ? "Rechnungen" : "Historie"}
+                {t === "uebersicht" ? "Übersicht" : t === "konditionen" ? "Preise" : t === "vorgaenge" ? "Vorgänge" : "Rechnungen"}
               </Text>
             </Pressable>
           ))}
         </View>
 
-        {tab === "konditionen" ? (
+        {tab === "uebersicht" ? (
           <>
-            {isAdmin ? (
+            <View style={styles.kpiGrid}>
+              <KPICard label="Angebote" value={num(custOffers.length)} accent="warning" />
+              <KPICard label="Bestellungen" value={num(custOrders.length)} />
+              <KPICard label="Rechnungen" value={num(custInvoices.length)} accent="success" />
+              <KPICard label="Verträge" value={num(custContracts.length)} accent="success" />
+            </View>
+            <SectionTitle>Verträge & Maschinen</SectionTitle>
+            {custContracts.length === 0 && custMachines.length === 0 ? <EmptyState title="Keine Verträge oder Maschinen" /> : null}
+            {custContracts.map((ct: any) => (
+              <Card key={ct.id} testID={`customer-contract-${ct.id}`}>
+                <View style={styles.orderTop}><View><Text style={styles.prodTitle}>{ct.machine || "Kaffeeliefervertrag"}</Text><Muted>{ct.id}</Muted></View><FileText size={19} color={colors.brandPrimary} /></View>
+                <InfoRow label="Mindestabnahme" value={`${num(ct.minQtyMonth)} kg/Monat`} />
+                <InfoRow label="Laufzeit" value={`${ct.termMonths} Monate`} />
+                <InfoRow label="Vertragspreis" value={`${euro(ct.price)}/kg netto`} />
+              </Card>
+            ))}
+            {custMachines.map((request: any) => (
+              <Card key={request.id} testID={`customer-machine-${request.id}`}>
+                <View style={styles.orderTop}><View><Text style={styles.prodTitle}>{request.machineName}</Text><Muted>{request.id} · {request.type}</Muted></View><StatusBadge status={request.status} /></View>
+                {request.expectedCoffeeKgMonth ? <InfoRow label="Geplante Kaffeeabnahme" value={`${num(request.expectedCoffeeKgMonth)} kg/Monat`} /> : null}
+              </Card>
+            ))}
+            <SectionTitle>Letzte Kundenaktivität</SectionTitle>
+            {[...custOrders.map((row: any) => ({ ...row, kind: "Bestellung" })), ...custOffers.map((row: any) => ({ ...row, kind: "Angebot" }))]
+              .sort((a: any, b: any) => String(b.createdAt).localeCompare(String(a.createdAt))).slice(0, 5).map((row: any) => (
+                <Pressable key={`${row.kind}-${row.id}`} onPress={() => row.kind === "Bestellung" ? router.push(`/bestellung/${row.id}`) : setTab("vorgaenge")}>
+                  <Card style={styles.activityCard}><View style={styles.activityKind}>{row.kind === "Bestellung" ? <Package size={16} color={colors.brandPrimary} /> : <FileText size={16} color={colors.brandPrimary} />}</View><View style={{ flex: 1 }}><Text style={styles.prodTitle}>{row.id}</Text><Muted>{dateDE(row.createdAt)}</Muted></View><StatusBadge status={row.status} /></Card>
+                </Pressable>
+              ))}
+          </>
+        ) : tab === "konditionen" ? (
+          <>
+            {isAdmin || user?.role === "sales" ? (
               <AdminConditions
                 companyId={id!}
                 products={products.data ?? []}
                 prices={prices.data ?? []}
+                quoteMap={quoteMap}
               />
-            ) : (prices.data ?? []).length === 0 ? (
-              <Muted>Keine individuellen Konditionen hinterlegt.</Muted>
+            ) : pricingQuote.isLoading ? (
+              <LoadingState label="Verbindliche Preise werden ermittelt…" />
+            ) : pricingQuote.isError ? (
+              <ErrorState message="Die Preise sind aktuell nicht verfügbar." onRetry={() => pricingQuote.refetch()} />
             ) : (
-              (prices.data ?? []).map((cp: any) => {
-                const p = prodMap[cp.productId];
+              (pricingQuote.data?.lines ?? []).map((quote: any) => {
+                const p = prodMap[quote.productId];
                 return (
-                  <Card key={cp.productId} testID={`price-${cp.productId}`}>
+                  <Card key={quote.productId} testID={`price-${quote.productId}`}>
                     <Text style={styles.prodTitle}>
-                      {p ? `${p.brand} ${p.name}` : cp.productId}
+                      {p ? `${p.brand} ${p.name}` : quote.productId}
                     </Text>
-                    <InfoRow label="Kundenpreis" value={`${euro(cp.price)}/${p?.unit ?? "kg"}`} />
-                    {p ? <InfoRow label="Standardpreis" value={euro(p.standardPrice)} /> : null}
-                    {p?.salesFloor ? <InfoRow label="Vertriebslimit" value={euro(p.salesFloor)} /> : null}
+                    <InfoRow label={quote.basePriceSource === "customer_price" ? "Individueller Kundenpreis" : "B2B-Standardpreis"} value={`${euro(quote.finalUnitPrice)}/${p?.unit ?? "kg"} netto`} />
+                    {quote.promotion ? <Muted>Aktion „{quote.promotion.name}“ bis {dateDE(quote.promotion.endsAt)}</Muted> : null}
                   </Card>
                 );
               })
             )}
-            <Text style={styles.histTitle}>Preisänderungen</Text>
-            {(history.data ?? []).length === 0 ? (
-              <Muted>Noch keine Preisänderungen erfasst.</Muted>
-            ) : (
-              (history.data ?? []).map((h: any, idx: number) => {
-                const p = prodMap[h.productId];
-                return (
-                  <Card key={idx} testID={`history-${idx}`}>
-                    <Text style={styles.prodTitle}>{p ? `${p.brand} ${p.name}` : h.productId}</Text>
-                    <Muted>
-                      {h.oldPrice != null ? `${euro(h.oldPrice)} → ` : "Neu: "}
-                      {euro(h.newPrice)}
-                    </Muted>
-                    <Muted>
-                      {dateDE(h.changedAt)} · {h.changedByName}
-                    </Muted>
-                  </Card>
-                );
-              })
-            )}
+            {(isAdmin || user?.role === "sales") ? <>
+              <Text style={styles.histTitle}>Preisänderungen</Text>
+              {(history.data ?? []).length === 0 ? (
+                <Muted>Noch keine Preisänderungen erfasst.</Muted>
+              ) : (
+                (history.data ?? []).map((h: any, idx: number) => {
+                  const p = prodMap[h.productId];
+                  return (
+                    <Card key={idx} testID={`history-${idx}`}>
+                      <Text style={styles.prodTitle}>{p ? `${p.brand} ${p.name}` : h.productId}</Text>
+                      <Muted>
+                        {h.oldPrice != null ? `${euro(h.oldPrice)} → ` : "Neu: "}
+                        {euro(h.newPrice)}
+                      </Muted>
+                      <Muted>
+                        {dateDE(h.changedAt)} · {h.changedByName}
+                      </Muted>
+                    </Card>
+                  );
+                })
+              )}
+            </> : null}
           </>
         ) : tab === "rechnungen" ? (
           <>
@@ -236,25 +288,32 @@ export default function KundeDetail() {
                         onPress={() => payOnline(inv.id)}
                         style={{ marginTop: 8 }}
                       />
-                      <Button
-                        testID={`pay-invoice-${inv.id}`}
-                        title="Als bezahlt markieren"
-                        kind="secondary"
-                        loading={payInvoice.isPending && payInvoice.variables === inv.id}
-                        onPress={() => payInvoice.mutate(inv.id)}
-                        style={{ marginTop: 8 }}
-                      />
+                      {(isAdmin || user?.role === "sales") ? <Button
+                          testID={`pay-invoice-${inv.id}`}
+                          title="Als bezahlt markieren"
+                          kind="secondary"
+                          loading={payInvoice.isPending && payInvoice.variables === inv.id}
+                          onPress={() => payInvoice.mutate(inv.id)}
+                          style={{ marginTop: 8 }}
+                        /> : null}
                     </>
                   ) : null}
                 </Card>
               ))
             )}
           </>
-        ) : custOrders.length === 0 ? (
-          <EmptyState title="Keine Bestellungen" subtitle="Für diesen Kunden liegen keine Bestellungen vor" />
+        ) : custOrders.length === 0 && custOffers.length === 0 ? (
+          <EmptyState title="Keine Vorgänge" subtitle="Für diesen Kunden liegen keine Angebote oder Bestellungen vor" />
         ) : (
-          custOrders.map((o: any) => {
-            const total = o.items.reduce((a: number, i: any) => a + i.price * i.qty, 0);
+          <>
+          {custOffers.map((offer: any) => (
+            <Card key={offer.id} testID={`offer-${offer.id}`}>
+              <View style={styles.orderTop}><View><Text style={styles.prodTitle}>{offer.id}</Text><Muted>Angebot · {dateDE(offer.createdAt)}</Muted></View><StatusBadge status={offer.status} /></View>
+              <InfoRow label="Positionen" value={num(offer.items?.length ?? 0)} />
+            </Card>
+          ))}
+          {custOrders.map((o: any) => {
+            const total = o.netTotalMinor != null ? o.netTotalMinor / 100 : o.items.reduce((a: number, i: any) => a + i.price * i.qty, 0);
             return (
               <Pressable key={o.id} testID={`order-${o.id}`} onPress={() => router.push(`/bestellung/${o.id}`)}>
                 <Card>
@@ -267,17 +326,19 @@ export default function KundeDetail() {
                 </Card>
               </Pressable>
             );
-          })
+          })}
+          </>
         )}
+        </PageContainer>
       </ScrollView>
 
-      <View style={[styles.footer, { paddingBottom: insets.bottom + 12 }]}>
+      {(isAdmin || user?.role === "sales") ? <View style={[styles.footer, { paddingBottom: insets.bottom + 12 }]}>
         <Button
           testID="create-offer-cta"
           title="Neues Angebot erstellen"
           onPress={() => router.push({ pathname: "/(tabs)/angebote", params: { companyId: id } })}
         />
-      </View>
+      </View> : null}
     </View>
   );
 }
@@ -286,10 +347,12 @@ function AdminConditions({
   companyId,
   products,
   prices,
+  quoteMap,
 }: {
   companyId: string;
   products: any[];
   prices: any[];
+  quoteMap: Record<string, any>;
 }) {
   const qc = useQueryClient();
   const priceMap: Record<string, number> = {};
@@ -304,6 +367,7 @@ function AdminConditions({
           product={p}
           companyId={companyId}
           initial={priceMap[p.id]}
+          quote={quoteMap[p.id]}
           onSaved={() => {
             qc.invalidateQueries({ queryKey: ["prices", companyId] });
             qc.invalidateQueries({ queryKey: ["price-history", companyId] });
@@ -318,11 +382,13 @@ function PriceEditorRow({
   product,
   companyId,
   initial,
+  quote,
   onSaved,
 }: {
   product: any;
   companyId: string;
   initial?: number;
+  quote?: any;
   onSaved: () => void;
 }) {
   const styles = useStyles();
@@ -353,8 +419,9 @@ function PriceEditorRow({
         {product.brand} {product.name}
       </Text>
       <Muted>
-        Standard {euro(product.standardPrice)} · Grenze {euro(product.absoluteFloor)}
+        {quote?.basePriceSource === "customer_price" ? `Aktuell individuell ${euro(quote.finalUnitPrice)}` : `Aktuell B2B-Standard ${euro(quote?.finalUnitPrice ?? product.standardPrice)}`} netto · Grenze {euro(product.absoluteFloor)}
       </Muted>
+      {quote?.promotion ? <Muted>Temporäre Aktion bis {dateDE(quote.promotion.endsAt)}</Muted> : null}
       <View style={styles.priceRow}>
         <Input
           testID={`price-input-${product.id}`}
@@ -451,7 +518,8 @@ const useStyles = makeStyles((c) => ({
   },
   title: { fontSize: 24, fontWeight: "800", color: c.onSurface, letterSpacing: -0.5 },
   subtitle: { fontSize: 14, color: c.muted, marginTop: 2 },
-  content: { padding: 20, gap: 12, paddingBottom: 24 },
+  content: { padding: tokens.spacing.lg, paddingBottom: 24 },
+  page: { gap: 12 },
   metaRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   metaText: { fontSize: 14, color: c.onSurfaceSecondary },
   divider: { height: 1, backgroundColor: c.divider, marginVertical: 6 },
@@ -462,8 +530,11 @@ const useStyles = makeStyles((c) => ({
     padding: 4,
     gap: 4,
   },
+  kpiGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  activityCard: { flexDirection: "row", alignItems: "center" },
+  activityKind: { width: 34, height: 34, borderRadius: 9, alignItems: "center", justifyContent: "center", backgroundColor: c.brandTertiary },
   segItem: { flex: 1, paddingVertical: 10, borderRadius: 9, alignItems: "center" },
-  segItemActive: { backgroundColor: c.surface, shadowColor: "#000", shadowOpacity: 0.06, shadowRadius: 4, elevation: 1 },
+  segItemActive: { backgroundColor: c.surface, shadowColor: c.onSurface, shadowOpacity: 0.06, shadowRadius: 4, elevation: 1 },
   segText: { fontSize: 14, fontWeight: "700", color: c.muted },
   segTextActive: { color: c.onSurface },
   prodTitle: { fontSize: 15, fontWeight: "800", color: c.onSurface },

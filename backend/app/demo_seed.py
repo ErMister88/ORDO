@@ -21,7 +21,7 @@ from .money import to_minor
 from .snapshots import items_total_minor, product_item_snapshot
 
 
-DEMO_SEED_VERSION = "ordo-demo-v5"
+DEMO_SEED_VERSION = "ordo-demo-v6"
 DEMO_FINGERPRINT_FIELD = "_demoSeedFingerprint"
 DEMO_REFERENCE_TIME = datetime(2026, 9, 18, 12, 0, tzinfo=timezone.utc)
 PASSWORD_KEYS = ("admin", "sales", "customer")
@@ -30,10 +30,14 @@ TENANT_SCOPED_COLLECTIONS = frozenset({
     "contracts",
     "customer_prices",
     "invoices",
+    "machine_requests",
     "machines",
     "offers",
     "orders",
+    "pricing_promotions",
     "products",
+    "shop_orders",
+    "subscriptions",
     "tenant_memberships",
 })
 GLOBAL_SEED_COLLECTIONS = frozenset({"users", "counters"})
@@ -122,18 +126,18 @@ def build_demo_manifest(now: datetime | None = None) -> dict[str, list[dict]]:
 
     users = [
         _with_metadata("users", "u-admin", {
-            "id": "u-admin", "name": "Sergio (Admin)", "email": "admin@ss-coffee.de",
+            "id": "u-admin", "name": "Demo Administration", "email": "admin@ordo.example.test",
             "role": "admin", "active": True, "authVersion": 0,
             "must_change_password": False, "createdAt": created_at, "_passwordKey": "admin",
         }),
         _with_metadata("users", "u-sales", {
-            "id": "u-sales", "name": "Marco Vertrieb", "email": "vertrieb@ss-coffee.de",
+            "id": "u-sales", "name": "Lea Vertrieb", "email": "vertrieb@ordo.example.test",
             "role": "sales", "salesRepId": "u-sales", "active": True,
             "authVersion": 0, "must_change_password": False, "createdAt": created_at,
             "_passwordKey": "sales",
         }),
         _with_metadata("users", "u-customer", {
-            "id": "u-customer", "name": "Ristorante Roma", "email": "kunde@ss-coffee.de",
+            "id": "u-customer", "name": "Demo Kundenkonto", "email": "kunde@ordo.example.test",
             "role": "customer", "companyId": "c1", "active": True,
             "authVersion": 0, "must_change_password": False, "createdAt": created_at,
             "_passwordKey": "customer",
@@ -161,25 +165,25 @@ def build_demo_manifest(now: datetime | None = None) -> dict[str, list[dict]]:
     companies = [
         _with_metadata("companies", "c1", {
             "id": "c1", "name": "Ristorante Roma GmbH", "city": "Nürnberg",
-            "email": "info@roma.de", "phone": "0911 123456", "vatId": "DE123456789",
+            "email": "einkauf@roma.example.test", "phone": "+49 911 000 0101", "vatId": "DE000000001",
             "assignedSalesRepId": "u-sales", "active": True, "monthlyKg": 48,
             "orderCycleDays": 14,
         }),
         _with_metadata("companies", "c2", {
             "id": "c2", "name": "Bar Milano GmbH", "city": "Fürth",
-            "email": "ciao@milano.de", "phone": "0911 987654", "vatId": "DE987654321",
+            "email": "buero@milano.example.test", "phone": "+49 911 000 0102", "vatId": "DE000000002",
             "assignedSalesRepId": "u-admin", "active": True, "monthlyKg": 72,
             "orderCycleDays": 21,
         }),
         _with_metadata("companies", "c3", {
             "id": "c3", "name": "Eis Venezia", "city": "Ingolstadt",
-            "email": "info@venezia.de", "phone": "0841 555123", "vatId": "DE555444333",
+            "email": "betrieb@venezia.example.test", "phone": "+49 841 000 0103", "vatId": "DE000000003",
             "assignedSalesRepId": "u-sales", "active": True, "monthlyKg": 110,
             "orderCycleDays": 30,
         }),
         _with_metadata("companies", "c4", {
             "id": "c4", "name": "Caffè Torino", "city": "Erlangen",
-            "email": "hallo@torino.de", "phone": "09131 44556", "vatId": "DE444555666",
+            "email": "kontakt@torino.example.test", "phone": "+49 9131 000 0104", "vatId": "DE000000004",
             "assignedSalesRepId": "u-sales", "active": True, "monthlyKg": 35,
             "orderCycleDays": 14,
         }),
@@ -191,22 +195,30 @@ def build_demo_manifest(now: datetime | None = None) -> dict[str, list[dict]]:
             "standardPrice": 16.90, "salesFloor": 15.90, "absoluteFloor": 14.90,
             "cost": 11.50, "active": True, "taxRate": 7, "stock": None,
             "discountTiers": [{"minQty": 50, "price": 16.20}, {"minQty": 100, "price": 15.50}],
+            "b2cPrice": 24.90, "b2cTiers": [{"minQty": 3, "price": 23.90}, {"minQty": 6, "price": 22.90}],
+            "description": "Ausgewogener Espresso mit dichter Crema und Noten von Kakao und Haselnuss.",
         }),
         _with_metadata("products", "p2", {
             "id": "p2", "name": "Strong", "brand": "Caffè Aiello", "unit": "kg",
             "standardPrice": 18.90, "salesFloor": 17.90, "absoluteFloor": 16.90,
             "cost": 15.35, "active": True, "taxRate": 7, "stock": None,
             "discountTiers": [{"minQty": 50, "price": 18.20}, {"minQty": 100, "price": 17.50}],
+            "b2cPrice": 26.90, "b2cTiers": [{"minQty": 3, "price": 25.90}, {"minQty": 6, "price": 24.90}],
+            "description": "Kräftige italienische Röstung für Espresso, Cappuccino und Latte Macchiato.",
         }),
         _with_metadata("products", "p3", {
             "id": "p3", "name": "Crema Mousse", "brand": "S&S", "unit": "Stk.",
             "standardPrice": 12.90, "salesFloor": 11.90, "absoluteFloor": 10.90,
             "cost": 7.40, "active": True, "taxRate": 7, "stock": None,
+            "b2cPrice": 18.90, "b2cTiers": [{"minQty": 4, "price": 17.90}],
+            "description": "Feine Spezialität für cremige Kaffeegetränke und den Einsatz in der Gastronomie.",
         }),
         _with_metadata("products", "p4", {
             "id": "p4", "name": "Decaf Gold", "brand": "Caffè Aiello", "unit": "kg",
             "standardPrice": 21.50, "salesFloor": 19.90, "absoluteFloor": 18.50,
             "cost": 14.20, "active": True, "taxRate": 7, "stock": None,
+            "b2cPrice": 29.90, "b2cTiers": [{"minQty": 3, "price": 28.50}, {"minQty": 6, "price": 27.50}],
+            "description": "Entkoffeinierter Espresso mit vollem Körper und langem, weichem Abgang.",
         }),
     ]
 
@@ -216,6 +228,15 @@ def build_demo_manifest(now: datetime | None = None) -> dict[str, list[dict]]:
         _with_metadata("customer_prices", "c2:p2", {"companyId": "c2", "productId": "p2", "price": 18.20}),
         _with_metadata("customer_prices", "c3:p1", {"companyId": "c3", "productId": "p1", "price": 15.50}),
         _with_metadata("customer_prices", "c4:p1", {"companyId": "c4", "productId": "p1", "price": 16.20}),
+    ]
+
+    pricing_promotions = [
+        _with_metadata("pricing_promotions", "promo-c1-p2-september", {
+            "id": "promo-c1-p2-september", "name": "Herbstkondition",
+            "productId": "p2", "companyId": "c1", "price": 17.40,
+            "startsAt": "2026-09-01T00:00:00+00:00", "endsAt": "2026-10-15T00:00:00+00:00",
+            "active": True, "createdBy": "u-admin", "createdAt": created_at,
+        }),
     ]
 
     offers = [
@@ -311,11 +332,64 @@ def build_demo_manifest(now: datetime | None = None) -> dict[str, list[dict]]:
         }),
     ]
 
+    machine_requests = [
+        _with_metadata("machine_requests", "M-2026-00142", {
+            "id": "M-2026-00142", "machineId": "demo-wmf-1500",
+            "machineName": "Vollautomat WMF 1500 S+",
+            "machineDescription": "Kaffeevollautomat für hohe Volumen, bis zu 250 Tassen/Tag.",
+            "snapshotVersion": 1, "type": "leasing", "termMonths": 48,
+            "message": "Lösung für den neuen Frühstücksbereich.",
+            "requestedCoffeeProductId": "p2", "expectedCoffeeKgMonth": 42,
+            "requestContact": {"companyName": "Ristorante Roma GmbH", "name": "Demo Kundenkonto",
+                               "email": "kunde@ordo.example.test", "phone": "+49 911 000 0101"},
+            "customer": {"userId": "u-customer", "companyId": "c1",
+                         "userName": "Demo Kundenkonto", "email": "kunde@ordo.example.test",
+                         "companyName": "Ristorante Roma GmbH"},
+            "status": "Angebot", "paymentStatus": "Offen",
+            "terms": {"monthlyRate": 189.00, "termMonths": 48,
+                      "minCoffeeKgMonth": 36, "productId": "p2",
+                      "coffeeName": "Caffè Aiello Strong", "coffeePricePerKg": 17.40,
+                      "note": "Inklusive Wartung und jährlicher Einweisung."},
+            "createdAt": "2026-09-12T10:30:00+00:00",
+        }),
+    ]
+
+    subscriptions = [
+        _with_metadata("subscriptions", "sub-demo-c1-p1", {
+            "id": "sub-demo-c1-p1", "companyId": "c1",
+            "items": [{"productId": "p1", "qty": 18, "price": 15.90}],
+            "intervalDays": 28, "active": True, "createdBy": "u-sales",
+            "salesAttribution": {"actorUserId": "u-sales", "actorName": "Lea Vertrieb", "actorRole": "sales"},
+            "createdAt": "2026-08-20T08:00:00+00:00", "lastRun": "2026-09-01",
+            "nextRun": "2026-09-29",
+        }),
+    ]
+
+    shop_orders = [
+        _with_metadata("shop_orders", "S-2026-00128", {
+            "id": "S-2026-00128", "items": [{"productId": "p1", "qty": 3, "price": 23.90}],
+            "customer": {"name": "Demo Shopkunde", "email": "shopkunde@ordo.example.test",
+                         "phone": "", "street": "Musterweg 1", "zip": "00000", "city": "Demostadt"},
+            "subtotal": 71.70, "shipping": 0.0, "total": 71.70,
+            "grossSubtotalMinor": 7170, "discount": 0.0, "discountMinor": 0,
+            "discountPercent": 0, "promoCode": None,
+            "taxBreakdown": {"7": 4.69}, "taxBreakdownMinor": {"7": 469}, "taxTotal": 4.69,
+            "taxTotalMinor": 469, "pricingContext": "b2c", "priceSemantics": "gross",
+            "subscription": False, "subscriptionInterval": None,
+            "status": "In Bearbeitung", "paymentStatus": "Bezahlt", "userId": None,
+            "statusHistory": [{"status": "Neu", "at": "2026-09-16T09:15:00+00:00"},
+                              {"status": "In Bearbeitung", "at": "2026-09-16T10:00:00+00:00"}],
+            "createdAt": "2026-09-16T09:15:00+00:00",
+        }),
+    ]
+
     counters = [
         {"_id": "offer", "_demoSeed": DEMO_SEED_VERSION, "seq": 200},
         {"_id": "order", "_demoSeed": DEMO_SEED_VERSION, "seq": 1000},
         {"_id": "product", "_demoSeed": DEMO_SEED_VERSION, "seq": 4},
         {"_id": "invoice", "_demoSeed": DEMO_SEED_VERSION, "seq": 1000},
+        {"_id": "machinereq", "_demoSeed": DEMO_SEED_VERSION, "seq": 142},
+        {"_id": "shop", "_demoSeed": DEMO_SEED_VERSION, "seq": 128},
     ]
 
     manifest = {
@@ -324,11 +398,15 @@ def build_demo_manifest(now: datetime | None = None) -> dict[str, list[dict]]:
         "companies": companies,
         "products": products,
         "customer_prices": customer_prices,
+        "pricing_promotions": pricing_promotions,
         "offers": offers,
         "orders": orders,
         "contracts": contracts,
         "invoices": invoices,
         "machines": machines,
+        "machine_requests": machine_requests,
+        "subscriptions": subscriptions,
+        "shop_orders": shop_orders,
         "counters": counters,
     }
     _add_money_snapshots(manifest)
@@ -343,12 +421,16 @@ def _add_money_snapshots(manifest: dict[str, list[dict]]) -> None:
     companies = {company["id"]: company for company in manifest["companies"]}
     for product in products.values():
         product["currency"] = currency
-        for field in ("standardPrice", "salesFloor", "absoluteFloor", "cost"):
+        for field in ("standardPrice", "salesFloor", "absoluteFloor", "cost", "b2cPrice"):
             product[f"{field}Minor"] = to_minor(product[field])
         for tier in product.get("discountTiers", []):
             tier.update({"priceMinor": to_minor(tier["price"]), "currency": currency})
+        for tier in product.get("b2cTiers", []):
+            tier.update({"priceMinor": to_minor(tier["price"]), "currency": currency})
     for customer_price in manifest["customer_prices"]:
         customer_price.update({"priceMinor": to_minor(customer_price["price"]), "currency": currency})
+    for promotion in manifest["pricing_promotions"]:
+        promotion.update({"priceMinor": to_minor(promotion["price"]), "currency": currency})
     for collection in ("offers", "orders"):
         for document in manifest[collection]:
             snapshots = [
@@ -383,6 +465,35 @@ def _add_money_snapshots(manifest: dict[str, list[dict]]) -> None:
         invoice.update({"currency": currency, "amountMinor": to_minor(invoice["amount"])})
     for machine in manifest["machines"]:
         machine.update({"currency": currency, "priceMinor": to_minor(machine["price"])})
+    for subscription in manifest["subscriptions"]:
+        snapshots = [
+            product_item_snapshot(
+                products[item["productId"]], quantity=item["qty"],
+                unit_price_minor=to_minor(item["price"]), currency=currency,
+                price_source="customer_price",
+            )
+            for item in subscription["items"]
+        ]
+        subscription.update({"items": snapshots, "currency": currency, "snapshotVersion": 1})
+    for shop_order in manifest["shop_orders"]:
+        snapshots = [
+            product_item_snapshot(
+                products[item["productId"]], quantity=item["qty"],
+                unit_price_minor=to_minor(item["price"]), currency=currency,
+                price_source="b2c_quantity_tier",
+            )
+            for item in shop_order["items"]
+        ]
+        for item in snapshots:
+            item.pop("costMinor", None)
+            item["name"] = item["productName"]
+            item["taxMinor"] = 469
+        shop_order.update({
+            "items": snapshots, "currency": currency, "snapshotVersion": 1,
+            "subtotalMinor": to_minor(shop_order["subtotal"]),
+            "shippingMinor": to_minor(shop_order["shipping"]),
+            "totalMinor": to_minor(shop_order["total"]),
+        })
 
 
 def _strict_equal(actual, expected) -> bool:
@@ -461,6 +572,10 @@ def _validate_manifest(manifest: Mapping[str, list[Mapping]]) -> None:
     for document in manifest["customer_prices"]:
         require(document["companyId"], companies, "customer_prices.companyId")
         require(document["productId"], products, "customer_prices.productId")
+    for document in manifest["pricing_promotions"]:
+        if document.get("companyId") is not None:
+            require(document["companyId"], companies, "pricing_promotions.companyId")
+        require(document["productId"], products, "pricing_promotions.productId")
     for collection in ("offers", "orders"):
         for document in manifest[collection]:
             require(document["companyId"], companies, f"{collection}.companyId")
@@ -472,6 +587,29 @@ def _validate_manifest(manifest: Mapping[str, list[Mapping]]) -> None:
         require(document["productId"], products, "contracts.productId")
     for document in manifest["invoices"]:
         require(document["companyId"], companies, "invoices.companyId")
+    for document in manifest["subscriptions"]:
+        require(document["companyId"], companies, "subscriptions.companyId")
+        require(document["createdBy"], users, "subscriptions.createdBy")
+        for item in document["items"]:
+            require(item["productId"], products, "subscriptions.items.productId")
+    machine_ids = {document["id"] for document in manifest["machines"]}
+    for document in manifest["machine_requests"]:
+        require(document["machineId"], machine_ids, "machine_requests.machineId")
+        customer = document.get("customer") or {}
+        require(customer.get("userId"), users, "machine_requests.customer.userId")
+        if customer.get("companyId") is not None:
+            require(customer["companyId"], companies, "machine_requests.customer.companyId")
+        for product_id in (
+            document.get("requestedCoffeeProductId"),
+            (document.get("terms") or {}).get("productId"),
+        ):
+            if product_id is not None:
+                require(product_id, products, "machine_requests.productId")
+    for document in manifest["shop_orders"]:
+        if document.get("pricingContext") != "b2c":
+            raise DemoSeedConfigurationError("Demo shop order must use B2C pricing context")
+        for item in document["items"]:
+            require(item["productId"], products, "shop_orders.items.productId")
 
 
 def _identity_query(collection: str, document: Mapping) -> dict:

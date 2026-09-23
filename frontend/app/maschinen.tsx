@@ -7,11 +7,11 @@ import { Image } from "expo-image";
 import * as WebBrowser from "expo-web-browser";
 import { ArrowLeft, Coffee, CurrencyEur, ImageSquare, Receipt, FileText } from "phosphor-react-native";
 
-import { makeStyles, useTheme } from "@/src/theme";
+import { makeStyles, tokens, useTheme } from "@/src/theme";
 import { apiGet, apiPost, fileUrl } from "@/src/api/client";
 import { euro } from "@/src/lib/format";
 import { shareMachineContractPdf, shareMachineInvoicePdf } from "@/src/lib/pdf";
-import { Card, Button, Input, SectionTitle, Muted, EmptyState, InfoRow, StatusBadge } from "@/src/components/ui";
+import { Card, Button, Input, SectionTitle, Muted, EmptyState, InfoRow, StatusBadge, PageContainer, LoadingState, ErrorState } from "@/src/components/ui";
 
 const TERMS = [24, 36, 48];
 
@@ -127,17 +127,21 @@ export default function Maschinen() {
         <View style={{ width: 24 }} />
       </View>
 
-      <ScrollView contentContainerStyle={{ padding: 16, gap: 12, paddingBottom: insets.bottom + 32 }}>
+      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]}>
+        <PageContainer style={styles.page}>
         <Muted>Kaufen Sie Ihre Maschine direkt oder fordern Sie ein Finanzierungs- bzw. Leasing-Angebot (mit Kaffeebindung) an.</Muted>
 
         <SectionTitle>Katalog</SectionTitle>
         {machines.isLoading ? (
-          <Muted>Lädt…</Muted>
+          <LoadingState label="Maschinen werden geladen…" />
+        ) : machines.isError ? (
+          <ErrorState message="Der Maschinenkatalog ist aktuell nicht verfügbar." onRetry={() => machines.refetch()} />
         ) : (machines.data ?? []).length === 0 ? (
           <EmptyState title="Keine Maschinen" subtitle="Aktuell sind keine Maschinen verfügbar." />
         ) : (
-          (machines.data ?? []).map((m: any) => (
-            <Card key={m.id} testID={`machine-${m.id}`}>
+          <View style={styles.machineGrid}>
+          {(machines.data ?? []).map((m: any) => (
+            <Card key={m.id} testID={`machine-${m.id}`} style={styles.machineCard}>
               <View style={styles.mRow}>
                 {fileUrl(m.imageUrl) ? (
                   <Image source={{ uri: fileUrl(m.imageUrl) }} style={styles.mImg} contentFit="cover" />
@@ -159,28 +163,28 @@ export default function Maschinen() {
                   title="Kaufen"
                   loading={payingId === m.id}
                   onPress={() => buy(m.id)}
-                  style={{ flex: 1 }}
+                  style={styles.catalogAction}
                 />
                 <Button
                   testID={`provision-${m.id}`}
                   title="Bereitstellung"
                   kind="secondary"
                   onPress={() => setPanel(requestPanel(m.id, "bereitstellung"))}
-                  style={{ flex: 1 }}
+                  style={styles.catalogAction}
                 />
                 <Button
                   testID={`finance-${m.id}`}
                   title="Finanzieren"
                   kind="secondary"
                   onPress={() => setPanel(requestPanel(m.id, "finanzierung"))}
-                  style={{ flex: 1 }}
+                  style={styles.catalogAction}
                 />
                 <Button
                   testID={`lease-${m.id}`}
                   title="Leasing"
                   kind="secondary"
                   onPress={() => setPanel(requestPanel(m.id, "leasing"))}
-                  style={{ flex: 1 }}
+                  style={styles.catalogAction}
                 />
               </View>
 
@@ -254,11 +258,16 @@ export default function Maschinen() {
                 </View>
               ) : null}
             </Card>
-          ))
+          ))}
+          </View>
         )}
 
         <SectionTitle style={{ marginTop: 8 }}>Meine Anfragen</SectionTitle>
-        {(requests.data ?? []).length === 0 ? (
+        {requests.isLoading ? (
+          <LoadingState label="Anfragen werden geladen…" />
+        ) : requests.isError ? (
+          <ErrorState message="Die Anfragen sind aktuell nicht verfügbar." onRetry={() => requests.refetch()} />
+        ) : (requests.data ?? []).length === 0 ? (
           <EmptyState title="Noch keine Anfragen" subtitle="Ihre Käufe und Angebote erscheinen hier." />
         ) : (
           (requests.data ?? []).map((r: any) => (
@@ -349,6 +358,7 @@ export default function Maschinen() {
             </Card>
           ))
         )}
+        </PageContainer>
       </ScrollView>
     </View>
   );
@@ -356,15 +366,20 @@ export default function Maschinen() {
 
 const useStyles = makeStyles((c) => ({
   root: { flex: 1, backgroundColor: c.surfaceSecondary },
-  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingBottom: 12, backgroundColor: c.surface, borderBottomWidth: 1, borderBottomColor: c.border },
+  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: tokens.spacing.lg, paddingBottom: 12, backgroundColor: c.surface, borderBottomWidth: 1, borderBottomColor: c.border },
   headerTitle: { fontSize: 18, fontWeight: "800", color: c.onSurface },
+  content: { padding: tokens.spacing.lg },
+  page: { gap: tokens.spacing.sm },
+  machineGrid: { flexDirection: "row", flexWrap: "wrap", gap: tokens.spacing.sm },
+  machineCard: { flexGrow: 1, flexBasis: 440, maxWidth: 650 },
   mRow: { flexDirection: "row", gap: 12 },
   mImg: { width: 84, height: 84, borderRadius: 12, backgroundColor: c.surfaceTertiary },
   mImgPh: { alignItems: "center", justifyContent: "center" },
   mName: { fontSize: 16, fontWeight: "800", color: c.onSurface },
   mPrice: { fontSize: 16, fontWeight: "800", color: c.brandPrimary, marginTop: 6 },
   mVat: { fontSize: 11, fontWeight: "600", color: c.muted },
-  actions: { flexDirection: "row", gap: 8, marginTop: 12 },
+  actions: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 12 },
+  catalogAction: { flexGrow: 1, flexBasis: 132 },
   panel: { marginTop: 12, padding: 12, borderRadius: 12, backgroundColor: c.brandTertiary },
   panelHead: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 4 },
   panelTitle: { fontSize: 15, fontWeight: "800", color: c.onSurface },

@@ -12,6 +12,8 @@ import { ErrorBoundary } from "@/src/components/error-boundary";
 import { queryClient } from "@/src/query-client";
 import { AuthProvider } from "@/src/auth/auth";
 import { CartProvider } from "@/src/shop/cart";
+import { AppShell } from "@/src/components/app-shell";
+import { useTheme } from "@/src/theme";
 import { registerForPush } from "@/src/push";
 
 LogBox.ignoreAllLogs(true);
@@ -40,6 +42,7 @@ if (Platform.OS === "android") {
 
 export default function RootLayout() {
   const router = useRouter();
+  const { colors } = useTheme();
 
   useEffect(() => {
     if (Platform.OS === "web") return;
@@ -73,7 +76,7 @@ export default function RootLayout() {
             <AuthProvider>
               <CartProvider>
                 <StatusBar style="dark" />
-                <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "#F4F7FB" } }}>
+                <AppShell><Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.surfaceSecondary } }}>
                   <Stack.Screen name="index" />
                   <Stack.Screen name="login" />
                   <Stack.Screen name="(tabs)" />
@@ -95,7 +98,7 @@ export default function RootLayout() {
                   <Stack.Screen name="legal/widerruf" options={{ presentation: "card" }} />
                   <Stack.Screen name="maschinen" options={{ presentation: "card" }} />
                   <Stack.Screen name="maschinen-admin" options={{ presentation: "card" }} />
-                </Stack>
+                </Stack></AppShell>
               </CartProvider>
             </AuthProvider>
           </QueryClientProvider>

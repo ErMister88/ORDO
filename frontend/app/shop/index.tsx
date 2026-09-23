@@ -1,17 +1,17 @@
 import { useState } from "react";
-import { View, Text, ScrollView, Pressable } from "react-native";
+import { View, Text, ScrollView, Pressable, useWindowDimensions } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 import { ArrowLeft, ShoppingCart, ImageSquare, Plus, UserCircle, EnvelopeSimple, CheckCircle } from "phosphor-react-native";
 
-import { makeStyles, useTheme } from "@/src/theme";
+import { makeStyles, tokens, useTheme } from "@/src/theme";
 import { apiGet, fileUrl, API_BASE } from "@/src/api/client";
 import { euro } from "@/src/lib/format";
 import { useCart } from "@/src/shop/cart";
 import { shopApi } from "@/src/shop/auth";
-import { Card, EmptyState, Muted, Input, Button } from "@/src/components/ui";
+import { Card, EmptyState, Muted, Input, Button, PageContainer, LoadingState, ErrorState } from "@/src/components/ui";
 
 function NewsletterCard({ percent }: { percent: number }) {
   const styles = useStyles();
@@ -88,6 +88,8 @@ export default function Shop() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const cart = useCart();
+  const { width } = useWindowDimensions();
+  const desktop = width >= tokens.layout.tablet;
   const products = useQuery({ queryKey: ["shop-products"], queryFn: () => apiGet("/shop/products") });
   const settings = useQuery({ queryKey: ["shop-settings"], queryFn: () => apiGet("/shop/settings") });
 
@@ -115,6 +117,12 @@ export default function Shop() {
       </View>
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <PageContainer style={styles.page}>
+        <View style={styles.shopHero}>
+          <Text style={styles.eyebrow}>S&S COFFEE AND MORE</Text>
+          <Text style={styles.heroTitle}>Kaffee, der im Alltag überzeugt.</Text>
+          <Text style={styles.heroText}>Transparente Bruttopreise, flexible Mengen und auf Wunsch monatlich geliefert.</Text>
+        </View>
         {settings.data && (
           <View style={styles.banner}>
             <Text style={styles.bannerText}>
@@ -125,12 +133,13 @@ export default function Shop() {
         {settings.data?.newsletterDiscountEnabled ? (
           <NewsletterCard percent={settings.data?.newsletterDiscountPercent ?? 10} />
         ) : null}
-        {(products.data ?? []).length === 0 ? (
+        {products.isLoading ? <LoadingState label="Produkte werden geladen…" /> : products.isError ? <ErrorState onRetry={() => products.refetch()} /> : (products.data ?? []).length === 0 ? (
           <EmptyState title="Noch keine Produkte" subtitle="Der Shop wird gerade bestückt" />
         ) : (
-          (products.data ?? []).map((p: any) => (
-            <Card key={p.id} testID={`shop-product-${p.id}`}>
-              <View style={styles.row}>
+          <View style={styles.productGrid}>
+          {(products.data ?? []).map((p: any) => (
+            <Card key={p.id} testID={`shop-product-${p.id}`} style={[styles.productCard, desktop && styles.productCardDesktop]}>
+              <View style={styles.productBody}>
                 {p.imageUrl ? (
                   <Image source={{ uri: fileUrl(p.imageUrl) }} style={styles.thumb} contentFit="cover" transition={150} />
                 ) : (
@@ -151,6 +160,11 @@ export default function Shop() {
                     <Text style={styles.vat}>inkl. {p.taxRate}% MwSt</Text>
                   </View>
                   {p.stock != null && p.stock <= 0 ? <Text style={styles.soldOut}>Zzt. nicht vorrätig</Text> : null}
+                  {p.b2cTiers?.length ? (
+                    <View style={styles.tiers}>
+                      {p.b2cTiers.slice(0, 3).map((tier: any) => <Text key={tier.minQty} style={styles.tier}>ab {tier.minQty} · {euro(tier.price)}/{p.unit}</Text>)}
+                    </View>
+                  ) : null}
                 </View>
               </View>
               <Pressable testID={`shop-add-${p.id}`} style={styles.addBtn} onPress={() => cart.add(p.id, 1)}>
@@ -158,7 +172,8 @@ export default function Shop() {
                 <Text style={styles.addText}>In den Warenkorb</Text>
               </Pressable>
             </Card>
-          ))
+          ))}
+          </View>
         )}
         <View style={styles.footer}>
           <View style={styles.footerLinks}>
@@ -179,6 +194,7 @@ export default function Shop() {
             </Pressable>
           </View>
         </View>
+        </PageContainer>
       </ScrollView>
     </View>
   );
@@ -193,7 +209,12 @@ const useStyles = makeStyles((c) => ({
   badgeText: { color: c.onError, fontSize: 11, fontWeight: "800" },
   title: { fontSize: 20, fontWeight: "800", color: c.onSurface },
   subtitle: { fontSize: 13, color: c.muted, marginTop: 1 },
-  content: { padding: 20, gap: 12, paddingBottom: 32 },
+  content: { padding: tokens.spacing.lg, paddingBottom: 32 },
+  page: { gap: 14 },
+  shopHero: { backgroundColor: c.surfaceInverse, borderRadius: tokens.radius.lg, padding: 24, gap: 7 },
+  eyebrow: { color: c.inverseAccent, fontSize: 10, fontWeight: "900", letterSpacing: 1.6 },
+  heroTitle: { color: c.onSurfaceInverse, fontSize: 28, fontWeight: "800", letterSpacing: -0.7, maxWidth: 560 },
+  heroText: { color: c.inverseMuted, fontSize: 14, lineHeight: 21, maxWidth: 620 },
   banner: { backgroundColor: c.brandTertiary, borderRadius: 12, padding: 12 },
   bannerText: { color: c.brandPrimary, fontWeight: "700", fontSize: 13, textAlign: "center" },
   nlHead: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 4 },
@@ -201,8 +222,11 @@ const useStyles = makeStyles((c) => ({
   nlErr: { color: c.error, fontSize: 13, fontWeight: "600", marginTop: 6 },
   codeBox: { marginTop: 10, paddingVertical: 12, paddingHorizontal: 20, borderRadius: 12, borderWidth: 2, borderStyle: "dashed", borderColor: c.brandPrimary, backgroundColor: c.brandTertiary },
   codeText: { fontSize: 22, fontWeight: "800", letterSpacing: 2, color: c.brandPrimary },
-  row: { flexDirection: "row", gap: 12, alignItems: "center" },
-  thumb: { width: 64, height: 64, borderRadius: 12, backgroundColor: c.surfaceTertiary },
+  productGrid: { flexDirection: "row", flexWrap: "wrap", gap: 14 },
+  productCard: { width: "100%" },
+  productCardDesktop: { width: "48.8%", flexGrow: 1, maxWidth: 520 },
+  productBody: { flexDirection: "row", gap: 14, alignItems: "flex-start" },
+  thumb: { width: 88, height: 88, borderRadius: 10, backgroundColor: c.surfaceTertiary },
   thumbEmpty: { alignItems: "center", justifyContent: "center" },
   pName: { fontSize: 16, fontWeight: "800", color: c.onSurface },
   priceRow: { flexDirection: "row", alignItems: "baseline", gap: 8, marginTop: 4 },
@@ -210,6 +234,8 @@ const useStyles = makeStyles((c) => ({
   perUnit: { fontSize: 13, color: c.muted, fontWeight: "600" },
   vat: { fontSize: 12, color: c.muted },
   soldOut: { fontSize: 12, fontWeight: "700", color: c.error, marginTop: 2 },
+  tiers: { flexDirection: "row", flexWrap: "wrap", gap: 5, marginTop: 8 },
+  tier: { backgroundColor: c.brandTertiary, color: c.onBrandTertiary, fontSize: 10.5, fontWeight: "700", paddingHorizontal: 7, paddingVertical: 4, borderRadius: 6 },
   addBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 12, paddingVertical: 12, borderRadius: 12, backgroundColor: c.brandPrimary },
   addText: { color: c.onBrandPrimary, fontWeight: "700", fontSize: 14 },
   footer: { marginTop: 8, paddingTop: 16, borderTopWidth: 1, borderTopColor: c.divider },

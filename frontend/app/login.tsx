@@ -14,7 +14,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Coffee } from "phosphor-react-native";
 
-import { makeStyles, useTheme } from "@/src/theme";
+import { makeStyles, tokens, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
 import { Button, Input } from "@/src/components/ui";
 
@@ -26,7 +26,8 @@ export default function Login() {
   const { colors } = useTheme();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { height } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
+  const desktop = width >= tokens.layout.desktop;
   const { signIn } = useAuth();
   const { passwordChanged } = useLocalSearchParams<{ passwordChanged?: string }>();
 
@@ -53,8 +54,8 @@ export default function Login() {
   };
 
   return (
-    <View style={styles.root}>
-      <View style={[styles.hero, { height: height * 0.4 }]}>
+    <View style={[styles.root, desktop && styles.rootDesktop]}>
+      <View style={[styles.hero, { height: desktop ? height : height * 0.4 }, desktop && styles.heroDesktop]}>
         <Image source={{ uri: HERO }} style={styles.heroImg} contentFit="cover" />
         <LinearGradient
           colors={["rgba(11,27,61,0.55)", "rgba(11,27,61,0.96)"]}
@@ -70,13 +71,13 @@ export default function Login() {
       </View>
 
       <KeyboardAvoidingView
-        style={styles.sheetWrap}
+        style={[styles.sheetWrap, desktop && styles.sheetWrapDesktop]}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
         keyboardVerticalOffset={0}
       >
         <ScrollView
-          style={styles.sheet}
-          contentContainerStyle={[styles.sheetContent, { paddingBottom: insets.bottom + 24 }]}
+          style={[styles.sheet, desktop && styles.sheetDesktop]}
+          contentContainerStyle={[styles.sheetContent, desktop && styles.sheetContentDesktop, { paddingBottom: insets.bottom + 24 }]}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
@@ -145,7 +146,9 @@ export default function Login() {
 
 const useStyles = makeStyles((c) => ({
   root: { flex: 1, backgroundColor: c.brand },
+  rootDesktop: { flexDirection: "row" },
   hero: { width: "100%" },
+  heroDesktop: { width: "54%" },
   heroImg: { ...StyleSheetAbsolute() },
   heroOverlay: { ...StyleSheetAbsolute() },
   heroContent: { flex: 1, paddingHorizontal: 24, justifyContent: "center" },
@@ -161,8 +164,11 @@ const useStyles = makeStyles((c) => ({
   brandTitle: { fontSize: 30, fontWeight: "800", color: c.onBrand, letterSpacing: -0.5 },
   brandSub: { fontSize: 15, color: "rgba(255,255,255,0.78)", marginTop: 4, fontWeight: "500" },
   sheetWrap: { flex: 1, marginTop: -28 },
+  sheetWrapDesktop: { marginTop: 0, backgroundColor: c.surfaceSecondary, justifyContent: "center" },
   sheet: { flex: 1, backgroundColor: c.surface, borderTopLeftRadius: 28, borderTopRightRadius: 28 },
+  sheetDesktop: { flex: 0, minHeight: 520, maxHeight: 590, marginHorizontal: 48, borderRadius: tokens.radius.lg, borderWidth: 1, borderColor: c.border, ...tokens.shadow },
   sheetContent: { padding: 24, gap: 4 },
+  sheetContentDesktop: { width: "100%", maxWidth: 560, alignSelf: "center", padding: tokens.spacing.xl },
   title: { fontSize: 24, fontWeight: "800", color: c.onSurface, letterSpacing: -0.4 },
   subtitle: { fontSize: 15, color: c.muted, marginBottom: 12 },
   form: { gap: 8 },

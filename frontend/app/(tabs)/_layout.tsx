@@ -1,5 +1,5 @@
 import { Tabs } from "expo-router";
-import { Platform } from "react-native";
+import { Platform, useWindowDimensions } from "react-native";
 import {
   House,
   Users,
@@ -9,7 +9,7 @@ import {
   DotsThreeCircle,
 } from "phosphor-react-native";
 
-import { useTheme } from "@/src/theme";
+import { tokens, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
 
 export default function TabsLayout() {
@@ -17,6 +17,8 @@ export default function TabsLayout() {
   const { user } = useAuth();
   const role = user?.role ?? "customer";
   const isStaff = role === "admin" || role === "sales";
+  const { width } = useWindowDimensions();
+  const desktop = width >= tokens.layout.desktop;
 
   return (
     <Tabs
@@ -27,7 +29,7 @@ export default function TabsLayout() {
         tabBarStyle: {
           backgroundColor: colors.surface,
           borderTopColor: colors.border,
-          ...(Platform.OS === "web" ? { height: 64 } : {}),
+          ...(desktop ? { display: "none" } : Platform.OS === "web" ? { height: 64 } : {}),
         },
         tabBarItemStyle: { alignSelf: "center" },
         tabBarLabelStyle: { fontSize: 11, fontWeight: "700" },
@@ -75,7 +77,7 @@ export default function TabsLayout() {
         name="mehr"
         options={{
           title: "Mehr",
-          href: role === "admin" || role === "customer" ? "/(tabs)/mehr" : null,
+          href: "/(tabs)/mehr",
           tabBarIcon: ({ color, size }) => <DotsThreeCircle size={size} color={String(color)} weight="fill" />,
         }}
       />

@@ -35,26 +35,33 @@ import { Appearance, StyleSheet, useColorScheme } from "react-native";
 
 export type ColorScheme = "light" | "dark";
 
-// Light theme — crisp white surfaces with a deep navy-blue accent (ORDO Connect).
+// ORDO's warm, restrained B2B palette. Navigation deliberately uses the
+// inverse surface while operational content stays light and calm.
 const light = {
   surface: "#FFFFFF",
-  onSurface: "#0F172A",
-  surfaceSecondary: "#F4F7FB",
-  onSurfaceSecondary: "#1E293B",
-  surfaceTertiary: "#EEF2F8",
-  onSurfaceTertiary: "#334155",
-  surfaceInverse: "#0B1B3D",
-  onSurfaceInverse: "#FFFFFF",
-  muted: "#64748B",
+  onSurface: "#17211B",
+  surfaceSecondary: "#F5F3EE",
+  onSurfaceSecondary: "#28332C",
+  surfaceTertiary: "#EEECE6",
+  onSurfaceTertiary: "#3D4941",
+  surfaceInverse: "#17261F",
+  onSurfaceInverse: "#F7F5EF",
+  inverseMuted: "#AEBBB3",
+  inverseSubtle: "#87958C",
+  inverseLabel: "#75837A",
+  inverseBorder: "#314037",
+  inverseActive: "#2B3C32",
+  inverseAccent: "#C5A889",
+  muted: "#69746D",
 
-  brand: "#0B1B3D",
+  brand: "#17261F",
   onBrand: "#FFFFFF",
-  brandPrimary: "#1D3B8E",
+  brandPrimary: "#8A5A34",
   onBrandPrimary: "#FFFFFF",
-  brandSecondary: "#3B82F6",
+  brandSecondary: "#46715B",
   onBrandSecondary: "#FFFFFF",
-  brandTertiary: "#E6ECFB",
-  onBrandTertiary: "#1D3B8E",
+  brandTertiary: "#F0E5D9",
+  onBrandTertiary: "#694326",
 
   success: "#059669",
   onSuccess: "#FFFFFF",
@@ -65,9 +72,9 @@ const light = {
   info: "#2563EB",
   onInfo: "#FFFFFF",
 
-  border: "#E3E9F1",
-  borderStrong: "#CBD5E1",
-  divider: "#EEF2F7",
+  border: "#E2DED5",
+  borderStrong: "#C8C2B7",
+  divider: "#ECE8E0",
 };
 
 export type ThemeColors = typeof light;
@@ -75,6 +82,27 @@ export type ThemeColors = typeof light;
 export const defaultScheme = "light" satisfies ColorScheme;
 
 export const themes: { light: ThemeColors; dark?: ThemeColors } = { light };
+
+export const tokens = {
+  spacing: { xxs: 4, xs: 8, sm: 12, md: 16, lg: 20, xl: 28, xxl: 36 },
+  radius: { xs: 6, sm: 9, md: 12, lg: 16, pill: 999 },
+  control: { button: 44, input: 46, touch: 44 },
+  typography: {
+    display: 34,
+    title: 26,
+    section: 17,
+    body: 14,
+    caption: 12,
+  },
+  layout: { sidebar: 264, content: 1320, narrow: 840, desktop: 1024, tablet: 720 },
+  shadow: {
+    shadowColor: "#17211B",
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.06,
+    shadowRadius: 16,
+    elevation: 2,
+  },
+} as const;
 
 // In-app theme toggle, only after `dark` exists in `themes`. Call
 // setColorScheme("dark"), setColorScheme("light"), or setColorScheme(null) to

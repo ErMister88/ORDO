@@ -46,6 +46,7 @@ from app.routers import (
     audit as audit_router,
     billing,
     companies,
+    dashboard as dashboard_router,
     invoices,
     machines,
     offers,
@@ -1816,3 +1817,54 @@ def test_newsletter_confirmation_token_cannot_cross_tenants(monkeypatch):
     response = run(newsletter.newsletter_confirm("foreign-token", tenant_a))
     assert response.status_code == 404
     assert run(tenant_b.newsletter.find_one({"confirmToken": "foreign-token"}))["confirmed"] is False
+
+
+def test_investor_dashboard_is_tenant_and_role_scoped():
+    database = AsyncDatabase("tenant_investor_dashboard")
+    tenant_a = access(database, TENANT_A, actor_user_id="admin-a", role="admin")
+    tenant_b = access(database, TENANT_B, actor_user_id="admin-b", role="admin")
+    now = datetime.now(timezone.utc).isoformat()
+
+    run(tenant_a.companies.insert_one({
+        "id": "company-a", "name": "Visible customer", "active": True,
+        "assignedSalesRepId": "sales-a", "monthlyKg": 40, "orderCycleDays": 30,
+    }))
+    run(tenant_b.companies.insert_one({
+        "id": "company-b", "name": "Foreign customer", "active": True,
+        "assignedSalesRepId": "sales-b", "monthlyKg": 900, "orderCycleDays": 30,
+    }))
+    run(tenant_a.orders.insert_one({
+        "id": "order-a", "companyId": "company-a", "status": "Neu",
+        "createdAt": now, "currency": "EUR", "netTotalMinor": 10000,
+        "items": [],
+    }))
+    run(tenant_b.orders.insert_one({
+        "id": "order-b", "companyId": "company-b", "status": "Neu",
+        "createdAt": now, "currency": "EUR", "netTotalMinor": 90000,
+        "items": [],
+    }))
+    run(tenant_a.shop_orders.insert_one({"id": "shop-a", "createdAt": now}))
+    run(tenant_b.shop_orders.insert_one({"id": "shop-b", "createdAt": now}))
+
+    admin_result = run(dashboard_router.dashboard(principal(tenant_a), tenant_a))
+    assert admin_result["activeCustomers"] == 1
+    assert admin_result["ordersCount"] == 1
+    assert admin_result["revenueMonth"] == 100.0
+    assert admin_result["shopOrders"] == 1
+    assert [row["id"] for row in admin_result["recentActivity"]] == ["order-a"]
+
+    sales_access = access(database, TENANT_A, actor_user_id="sales-a", role="sales")
+    sales_result = run(dashboard_router.dashboard(principal(sales_access), sales_access))
+    assert sales_result["activeCustomers"] == 1
+    assert sales_result["shopOrders"] is None
+    assert all(row.get("companyId") == "company-a" for row in sales_result["recentActivity"])
+
+    customer_access = access(
+        database, TENANT_A, actor_user_id="customer-a", role="customer",
+        company_id="company-a",
+    )
+    customer_result = run(dashboard_router.dashboard(principal(customer_access), customer_access))
+    assert customer_result["role"] == "customer"
+    assert customer_result["ordersCount"] == 1
+    assert "shopOrders" not in customer_result
+    assert "recentActivity" not in customer_result

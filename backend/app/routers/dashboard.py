@@ -19,6 +19,11 @@ async def dashboard(
     orders = await access.orders.find({"companyId": {"$in": ids}}).to_list(5000)
     offers = await access.offers.find({"companyId": {"$in": ids}}).to_list(1000)
     invoices = await access.invoices.find({"companyId": {"$in": ids}}).to_list(1000)
+    contracts = await access.contracts.find({"companyId": {"$in": ids}}).to_list(1000)
+    shop_orders = (
+        await access.shop_orders.find({}).sort("createdAt", -1).to_list(1000)
+        if user["role"] == "admin" else []
+    )
 
     def order_total(o):
         if isinstance(o.get("netTotalMinor"), int):
@@ -38,11 +43,23 @@ async def dashboard(
         for i in open_invoices
     )
 
+    company_names = {company["id"]: company.get("name", company["id"]) for company in companies}
+    last_order_by_company = {}
+    for order in orders:
+        company_id = order.get("companyId")
+        if company_id and order.get("createdAt") and (
+            company_id not in last_order_by_company
+            or order["createdAt"] > last_order_by_company[company_id]["createdAt"]
+        ):
+            last_order_by_company[company_id] = order
+
     followups = []
     for c in companies:
-        last = await access.orders.find({"companyId": c["id"]}).sort("createdAt", -1).to_list(1)
+        last = last_order_by_company.get(c["id"])
         if last:
-            last_dt = datetime.fromisoformat(last[0]["createdAt"]).replace(tzinfo=timezone.utc)
+            last_dt = datetime.fromisoformat(last["createdAt"])
+            if last_dt.tzinfo is None:
+                last_dt = last_dt.replace(tzinfo=timezone.utc)
             days = (now - last_dt).days
             if days > c.get("orderCycleDays", 30):
                 followups.append({"companyId": c["id"], "name": c["name"], "days": days})
@@ -63,6 +80,28 @@ async def dashboard(
             "ordersCount": len(orders),
         }
 
+    activity = []
+    for order in orders:
+        activity.append({
+            "type": "order", "id": order.get("id"), "companyId": order.get("companyId"),
+            "companyName": company_names.get(order.get("companyId"), ""),
+            "status": order.get("status", ""), "at": order.get("createdAt"),
+        })
+    for offer in offers:
+        activity.append({
+            "type": "offer", "id": offer.get("id"), "companyId": offer.get("companyId"),
+            "companyName": company_names.get(offer.get("companyId"), ""),
+            "status": offer.get("status", ""), "at": offer.get("createdAt"),
+        })
+    for invoice in invoices:
+        activity.append({
+            "type": "invoice", "id": invoice.get("id"), "companyId": invoice.get("companyId"),
+            "companyName": company_names.get(invoice.get("companyId"), ""),
+            "status": invoice.get("status", ""),
+            "at": invoice.get("createdAt") or invoice.get("date"),
+        })
+    activity = sorted(activity, key=lambda row: row.get("at") or "", reverse=True)[:6]
+
     return {
         "role": user["role"],
         "revenueMonth": revenue_month,
@@ -72,5 +111,9 @@ async def dashboard(
         "pendingApprovals": len(approvals),
         "openInvoices": open_invoices_sum,
         "ordersCount": len(orders),
+        "activeContracts": len(contracts),
+        "machinesInField": sum(1 for contract in contracts if contract.get("machine")),
+        "shopOrders": len(shop_orders) if user["role"] == "admin" else None,
+        "recentActivity": activity,
         "followups": sorted(followups, key=lambda x: -(x["days"] or 999)),
     }

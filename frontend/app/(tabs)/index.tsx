@@ -1,15 +1,15 @@
 import { useCallback } from "react";
-import { View, Text, ScrollView, RefreshControl, Pressable } from "react-native";
+import { View, Text, ScrollView, RefreshControl, Pressable, useWindowDimensions } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
-import { SignOut, Warning, ArrowRight, Coffee, Package, UsersThree } from "phosphor-react-native";
+import { SignOut, Warning, ArrowRight, Coffee, Package, UsersThree, FileText, Receipt, Storefront } from "phosphor-react-native";
 
-import { makeStyles, useTheme } from "@/src/theme";
+import { makeStyles, tokens, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
 import { apiGet } from "@/src/api/client";
 import { euro, num } from "@/src/lib/format";
 import { ScreenHeader, HeaderButton } from "@/src/components/screen-header";
-import { Card, KPICard, SectionTitle, InfoRow, Muted } from "@/src/components/ui";
+import { Card, KPICard, SectionTitle, InfoRow, Muted, PageContainer, LoadingState, ErrorState, StatusBadge } from "@/src/components/ui";
 
 export default function Dashboard() {
   const styles = useStyles();
@@ -17,7 +17,7 @@ export default function Dashboard() {
   const { user, signOut } = useAuth();
   const router = useRouter();
 
-  const { data, isLoading, refetch, isRefetching } = useQuery({
+  const { data, isLoading, isError, refetch, isRefetching } = useQuery({
     queryKey: ["dashboard"],
     queryFn: () => apiGet("/dashboard"),
   });
@@ -61,8 +61,11 @@ export default function Dashboard() {
           <RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={colors.brandPrimary} />
         }
       >
-        {isLoading || !data ? (
-          <Muted>Lädt…</Muted>
+        <PageContainer style={styles.page}>
+        {isError ? (
+          <ErrorState onRetry={refetch} />
+        ) : isLoading || !data ? (
+          <LoadingState label="Dashboard wird vorbereitet…" />
         ) : data.role === "customer" ? (
           <CustomerDash data={data} />
         ) : (
@@ -70,8 +73,10 @@ export default function Dashboard() {
             data={data}
             onCustomer={(id: string) => router.push(`/kunde/${id}`)}
             onApprovals={() => router.push("/(tabs)/angebote")}
+            onActivity={(row: any) => row.companyId ? router.push(`/kunde/${row.companyId}`) : undefined}
           />
         )}
+        </PageContainer>
       </ScrollView>
     </View>
   );
@@ -81,32 +86,38 @@ function StaffDash({
   data,
   onCustomer,
   onApprovals,
+  onActivity,
 }: {
   data: any;
   onCustomer: (id: string) => void;
   onApprovals: () => void;
+  onActivity: (row: any) => void;
 }) {
   const styles = useStyles();
   const { colors } = useTheme();
+  const { width } = useWindowDimensions();
+  const desktop = width >= tokens.layout.tablet;
   return (
     <>
-      {/* Hero metric */}
-      <View style={styles.hero} testID="hero-revenue">
-        <View style={styles.heroIcon}>
-          <Coffee size={24} color={colors.onBrand} weight="fill" />
+      <View style={[styles.topGrid, desktop && styles.topGridDesktop]}>
+        <View style={styles.hero} testID="hero-revenue">
+          <View style={styles.heroIcon}>
+            <Coffee size={22} color={colors.onBrand} weight="fill" />
+          </View>
+          <Text style={styles.heroLabel}>Umsatz diesen Monat</Text>
+          <Text style={styles.heroValue}>{euro(data.revenueMonth)}</Text>
+          <Text style={styles.heroSub}>{data.ordersCount} Bestellungen im sichtbaren Kundenbestand</Text>
         </View>
-        <Text style={styles.heroLabel}>Umsatz diesen Monat</Text>
-        <Text style={styles.heroValue}>{euro(data.revenueMonth)}</Text>
-        <Text style={styles.heroSub}>{data.ordersCount} Bestellungen gesamt</Text>
-      </View>
-
-      <View style={styles.kpiGrid}>
-        <KPICard testID="kpi-customers" label="Aktive Kunden" value={num(data.activeCustomers)} accent="primary" />
-        <KPICard testID="kpi-kg" label="kg / Monat" value={num(data.totalKg)} accent="primary" />
-      </View>
-      <View style={styles.kpiGrid}>
-        <KPICard testID="kpi-offers" label="Offene Angebote" value={num(data.openOffers)} accent="warning" />
-        <KPICard testID="kpi-invoices" label="Offene Rechnungen" value={euro(data.openInvoices)} accent="error" />
+        <View style={styles.kpiArea}>
+          <View style={styles.kpiGrid}>
+            <KPICard testID="kpi-customers" label="Aktive B2B-Kunden" value={num(data.activeCustomers)} />
+            <KPICard testID="kpi-offers" label="Offene Angebote" value={num(data.openOffers)} accent="warning" />
+          </View>
+          <View style={styles.kpiGrid}>
+            <KPICard testID="kpi-contracts" label="Aktive Verträge" value={num(data.activeContracts)} accent="success" />
+            <KPICard testID="kpi-invoices" label="Offene Rechnungen" value={euro(data.openInvoices)} accent="error" />
+          </View>
+        </View>
       </View>
 
       {data.pendingApprovals > 0 && (
@@ -124,6 +135,40 @@ function StaffDash({
           </View>
         </Pressable>
       )}
+
+      <View style={[styles.operationalGrid, desktop && styles.operationalGridDesktop]}>
+        <Card style={styles.operationCard}>
+          <SectionTitle>Operativer Überblick</SectionTitle>
+          <View style={styles.operationRows}>
+            <InfoRow label="Monatsmenge der Kunden" value={`${num(data.totalKg)} kg`} />
+            <InfoRow label="Maschinen im Feld" value={num(data.machinesInField)} />
+            {data.shopOrders != null ? <InfoRow label="B2C-Shop-Bestellungen" value={num(data.shopOrders)} /> : null}
+          </View>
+        </Card>
+        <Card style={styles.operationCard}>
+          <SectionTitle>Systembereiche</SectionTitle>
+          <View style={styles.systemRow}><UsersThree size={17} color={colors.brandSecondary} /><Text style={styles.systemText}>Kunden & Vertrieb</Text></View>
+          <View style={styles.systemRow}><FileText size={17} color={colors.brandSecondary} /><Text style={styles.systemText}>Angebote & Verträge</Text></View>
+          <View style={styles.systemRow}><Receipt size={17} color={colors.brandSecondary} /><Text style={styles.systemText}>Bestellungen & Rechnungen</Text></View>
+          {data.shopOrders != null ? <View style={styles.systemRow}><Storefront size={17} color={colors.brandSecondary} /><Text style={styles.systemText}>B2C Commerce</Text></View> : null}
+        </Card>
+      </View>
+
+      {data.recentActivity?.length > 0 ? (
+        <>
+          <SectionTitle style={{ marginTop: 4 }}>Letzte Aktivitäten</SectionTitle>
+          <Card style={{ padding: 0, overflow: "hidden" }}>
+            {data.recentActivity.map((row: any, index: number) => (
+              <Pressable key={`${row.type}-${row.id}`} onPress={() => onActivity(row)} style={[styles.activityRow, index > 0 && styles.activityBorder]}>
+                <View style={styles.activityIcon}>{row.type === "order" ? <Package size={16} color={colors.brandPrimary} /> : row.type === "offer" ? <FileText size={16} color={colors.brandPrimary} /> : <Receipt size={16} color={colors.brandPrimary} />}</View>
+                <View style={{ flex: 1 }}><Text style={styles.activityTitle}>{row.id}</Text><Text style={styles.activityMeta}>{row.companyName || "B2C-Shop"}</Text></View>
+                <StatusBadge status={row.status} />
+                <ArrowRight size={16} color={colors.muted} />
+              </Pressable>
+            ))}
+          </Card>
+        </>
+      ) : null}
 
       {data.followups?.length > 0 && (
         <>
@@ -196,11 +241,12 @@ function CustomerDash({ data }: { data: any }) {
 
 const useStyles = makeStyles((c) => ({
   root: { flex: 1, backgroundColor: c.surfaceSecondary },
-  content: { padding: 20, paddingBottom: 36, gap: 16 },
+  content: { padding: tokens.spacing.lg, paddingBottom: 36 },
+  page: { gap: tokens.spacing.md },
   headerBtns: { flexDirection: "row", gap: 8 },
   hero: {
     backgroundColor: c.brand,
-    borderRadius: 24,
+    borderRadius: tokens.radius.lg,
     padding: 22,
     gap: 2,
     borderWidth: 1,
@@ -210,15 +256,24 @@ const useStyles = makeStyles((c) => ({
     width: 46,
     height: 46,
     borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.15)",
+    backgroundColor: c.inverseActive,
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 12,
   },
-  heroLabel: { fontSize: 14, color: "rgba(255,255,255,0.78)", fontWeight: "600" },
+  heroLabel: { fontSize: 14, color: c.inverseMuted, fontWeight: "600" },
   heroValue: { fontSize: 38, fontWeight: "800", color: c.onBrand, letterSpacing: -1, marginTop: 2 },
-  heroSub: { fontSize: 13, color: "rgba(255,255,255,0.68)", marginTop: 6 },
-  kpiGrid: { flexDirection: "row", gap: 14 },
+  heroSub: { fontSize: 13, color: c.inverseSubtle, marginTop: 6 },
+  topGrid: { gap: 14 },
+  topGridDesktop: { flexDirection: "row", alignItems: "stretch" },
+  kpiArea: { flex: 1, gap: 12 },
+  kpiGrid: { flexDirection: "row", gap: 12 },
+  operationalGrid: { gap: 12 },
+  operationalGridDesktop: { flexDirection: "row" },
+  operationCard: { flex: 1 },
+  operationRows: { gap: 2 },
+  systemRow: { flexDirection: "row", alignItems: "center", gap: 9, paddingVertical: 3 },
+  systemText: { color: c.onSurfaceSecondary, fontSize: 13.5, fontWeight: "600" },
   alert: {
     flexDirection: "row",
     alignItems: "center",
@@ -237,4 +292,9 @@ const useStyles = makeStyles((c) => ({
   overdueDot: { width: 8, height: 8, borderRadius: 999 },
   followName: { fontSize: 15, fontWeight: "700", color: c.onSurface },
   followSub: { fontSize: 13, color: c.muted, marginTop: 1 },
+  activityRow: { minHeight: 62, flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingVertical: 10 },
+  activityBorder: { borderTopWidth: 1, borderTopColor: c.divider },
+  activityIcon: { width: 34, height: 34, borderRadius: 9, backgroundColor: c.brandTertiary, alignItems: "center", justifyContent: "center" },
+  activityTitle: { color: c.onSurface, fontSize: 14, fontWeight: "800" },
+  activityMeta: { color: c.muted, fontSize: 12.5, marginTop: 2 },
 }));

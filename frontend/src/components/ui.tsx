@@ -8,7 +8,7 @@ import {
   type TextInputProps,
   type TextProps,
 } from "react-native";
-import { makeStyles, useTheme } from "@/src/theme";
+import { makeStyles, tokens, useTheme } from "@/src/theme";
 
 // ---------------------------------------------------------------------------
 // Card
@@ -82,7 +82,11 @@ export function StatusBadge({ status, testID }: { status: string; testID?: strin
   const map: Record<string, string> = {
     "Freigabe nötig": colors.warning,
     Freigegeben: colors.success,
+    Angebot: colors.info,
+    Angefragt: colors.warning,
     Versendet: colors.info,
+    "In Bearbeitung": colors.warning,
+    "Zahlung offen": colors.warning,
     Angenommen: colors.success,
     Abgelehnt: colors.error,
     Entwurf: colors.muted,
@@ -195,17 +199,45 @@ export function EmptyState({ title, subtitle }: { title: string; subtitle?: stri
   );
 }
 
+export function LoadingState({ label = "Daten werden geladen…" }: { label?: string }) {
+  const styles = useStyles();
+  const { colors } = useTheme();
+  return (
+    <View style={styles.state} accessibilityRole="progressbar">
+      <ActivityIndicator color={colors.brandPrimary} />
+      <Text style={styles.stateText}>{label}</Text>
+    </View>
+  );
+}
+
+export function ErrorState({ message = "Die Daten konnten nicht geladen werden.", onRetry }: { message?: string; onRetry?: () => void }) {
+  const styles = useStyles();
+  return (
+    <View style={styles.state}>
+      <Text style={styles.errorTitle}>Etwas ist schiefgelaufen</Text>
+      <Text style={styles.stateText}>{message}</Text>
+      {onRetry ? <Button title="Erneut versuchen" kind="secondary" onPress={onRetry} style={styles.retry} /> : null}
+    </View>
+  );
+}
+
+export function PageContainer({ children, style, narrow = false }: { children: React.ReactNode; style?: any; narrow?: boolean }) {
+  const styles = useStyles();
+  return <View style={[styles.page, narrow && styles.pageNarrow, style]}>{children}</View>;
+}
+
 const useStyles = makeStyles((c) => ({
   card: {
     backgroundColor: c.surface,
-    borderRadius: 22,
-    padding: 18,
+    borderRadius: tokens.radius.md,
+    padding: tokens.spacing.md,
     borderWidth: 1,
     borderColor: c.border,
-    gap: 10,
+    gap: tokens.spacing.sm,
+    ...tokens.shadow,
   },
   sectionTitle: {
-    fontSize: 18,
+    fontSize: tokens.typography.section,
     fontWeight: "800",
     color: c.onSurface,
     letterSpacing: -0.3,
@@ -213,12 +245,13 @@ const useStyles = makeStyles((c) => ({
   kpiCard: {
     flex: 1,
     backgroundColor: c.surface,
-    borderRadius: 20,
-    padding: 16,
+    borderRadius: tokens.radius.md,
+    padding: tokens.spacing.md,
     borderWidth: 1,
     borderColor: c.border,
     overflow: "hidden",
-    minHeight: 108,
+    minHeight: 96,
+    minWidth: 140,
     justifyContent: "center",
   },
   kpiBar: {
@@ -229,7 +262,7 @@ const useStyles = makeStyles((c) => ({
     width: 5,
   },
   kpiValue: {
-    fontSize: 29,
+    fontSize: 26,
     fontWeight: "800",
     color: c.onSurface,
     letterSpacing: -0.6,
@@ -245,7 +278,7 @@ const useStyles = makeStyles((c) => ({
     alignItems: "center",
     alignSelf: "flex-start",
     backgroundColor: c.surfaceTertiary,
-    borderRadius: 999,
+    borderRadius: tokens.radius.pill,
     paddingHorizontal: 10,
     paddingVertical: 5,
     gap: 6,
@@ -254,12 +287,12 @@ const useStyles = makeStyles((c) => ({
   badgeText: { fontSize: 12, fontWeight: "700" },
   button: {
     backgroundColor: c.brandPrimary,
-    paddingVertical: 16,
+    paddingVertical: 10,
     paddingHorizontal: 18,
-    borderRadius: 16,
+    borderRadius: tokens.radius.sm,
     alignItems: "center",
     justifyContent: "center",
-    minHeight: 52,
+    minHeight: tokens.control.button,
   },
   buttonSecondary: {
     backgroundColor: c.surfaceTertiary,
@@ -273,9 +306,10 @@ const useStyles = makeStyles((c) => ({
   buttonText: { color: c.onBrandPrimary, fontWeight: "700", fontSize: 15 },
   input: {
     backgroundColor: c.surfaceTertiary,
-    borderRadius: 16,
+    borderRadius: tokens.radius.sm,
     paddingHorizontal: 16,
-    paddingVertical: 15,
+    paddingVertical: 11,
+    minHeight: tokens.control.input,
     color: c.onSurface,
     fontSize: 16,
     borderWidth: 1,
@@ -293,4 +327,10 @@ const useStyles = makeStyles((c) => ({
   empty: { alignItems: "center", justifyContent: "center", paddingVertical: 48, gap: 6 },
   emptyTitle: { fontSize: 16, fontWeight: "700", color: c.onSurface },
   emptySub: { fontSize: 14, color: c.muted, textAlign: "center" },
+  state: { alignItems: "center", justifyContent: "center", paddingVertical: 48, paddingHorizontal: 24, gap: 10 },
+  stateText: { fontSize: 14, color: c.muted, textAlign: "center", lineHeight: 20 },
+  errorTitle: { fontSize: 16, fontWeight: "800", color: c.onSurface },
+  retry: { minWidth: 160, marginTop: 4 },
+  page: { width: "100%", maxWidth: tokens.layout.content, alignSelf: "center" },
+  pageNarrow: { maxWidth: tokens.layout.narrow },
 }));
