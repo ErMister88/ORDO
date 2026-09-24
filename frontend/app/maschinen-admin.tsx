@@ -11,6 +11,7 @@ import { makeStyles, useTheme } from "@/src/theme";
 import { apiGet, apiPost, apiPut, apiDelete, apiUpload, fileUrl } from "@/src/api/client";
 import { euro } from "@/src/lib/format";
 import { Card, Input, Button, SectionTitle, Muted, EmptyState, StatusBadge, InfoRow } from "@/src/components/ui";
+import { uploadsEnabled } from "@/src/config/features";
 
 const EMPTY = { name: "", description: "", price: "", taxRate: "19", imageUrl: "", active: true };
 
@@ -90,16 +91,22 @@ export default function MaschinenAdmin() {
           {editing ? (
             <Card testID="machine-form">
               <SectionTitle>{editing === "new" ? "Neue Maschine" : "Maschine bearbeiten"}</SectionTitle>
-              <Pressable onPress={pickImage} style={styles.imgPick} testID="pick-image">
-                {fileUrl(form.imageUrl) ? (
+              {uploadsEnabled ? (
+                <Pressable onPress={pickImage} style={styles.imgPick} testID="pick-image">
+                  {fileUrl(form.imageUrl) ? (
+                    <Image source={{ uri: fileUrl(form.imageUrl) }} style={styles.imgPickImg} contentFit="cover" />
+                  ) : (
+                    <View style={styles.imgPickPh}>
+                      <Camera size={26} color={colors.muted} />
+                      <Muted>{uploading ? "Lädt…" : "Bild auswählen"}</Muted>
+                    </View>
+                  )}
+                </Pressable>
+              ) : fileUrl(form.imageUrl) ? (
+                <View style={styles.imgPick}>
                   <Image source={{ uri: fileUrl(form.imageUrl) }} style={styles.imgPickImg} contentFit="cover" />
-                ) : (
-                  <View style={styles.imgPickPh}>
-                    <Camera size={26} color={colors.muted} />
-                    <Muted>{uploading ? "Lädt…" : "Bild auswählen"}</Muted>
-                  </View>
-                )}
-              </Pressable>
+                </View>
+              ) : null}
               <Text style={styles.label}>Name</Text>
               <Input testID="m-name" value={form.name} onChangeText={set("name")} placeholder="z. B. WMF 1500 S+" />
               <Text style={styles.label}>Beschreibung</Text>

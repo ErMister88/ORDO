@@ -70,13 +70,43 @@ def test_b2b_customer_price_wins_and_legacy_tier_never_applies():
     assert (quote.final_unit_price_minor, quote.price_source, quote.price_semantics) == (1890, "customer_price", "net")
 
 
-def test_b2b_standard_fallback_and_never_b2c_fallback():
+def test_b2b_standard_is_the_valid_fallback_when_customer_price_is_missing():
     db = AsyncDatabase("pricing_b2b_standard")
     a = access(db); seed(a)
-    assert run(PricingEngine(a).quote_b2b("c1", "p1", 1))[1].final_unit_price_minor == 1990
+    quote = run(PricingEngine(a).quote_b2b("c1", "p1", 1))[1]
+    assert (quote.final_unit_price_minor, quote.price_source, quote.currency) == (1990, "b2b_standard", "EUR")
+
+
+def test_b2b_never_uses_b2c_price_when_standard_and_customer_price_are_missing():
+    db = AsyncDatabase("pricing_b2b_no_b2c_fallback")
+    a = access(db); seed(a)
     db.raw.products.update_one({"tenantId": "tenant-a", "id": "p1"}, {"$unset": {"standardPriceMinor": "", "standardPrice": ""}})
     with pytest.raises(PricingError, match="kein gültiger Preis"):
         run(PricingEngine(a).quote_b2b("c1", "p1", 1))
+
+
+def test_b2b_without_any_configured_price_fails_closed():
+    db = AsyncDatabase("pricing_b2b_no_price")
+    a = access(db); seed(a)
+    db.raw.products.update_one({"tenantId": "tenant-a", "id": "p1"}, {"$unset": {
+        "standardPriceMinor": "", "standardPrice": "", "b2cPriceMinor": "", "b2cPrice": "",
+    }})
+    with pytest.raises(PricingError, match="kein gültiger Preis"):
+        run(PricingEngine(a).quote_b2b("c1", "p1", 1))
+
+
+def test_foreign_tenant_customer_price_cannot_make_missing_b2b_price_orderable():
+    db = AsyncDatabase("pricing_b2b_foreign_price")
+    own, foreign = access(db, "tenant-a"), access(db, "tenant-b")
+    seed(own)
+    db.raw.products.update_one({"tenantId": "tenant-a", "id": "p1"}, {"$unset": {
+        "standardPriceMinor": "", "standardPrice": "",
+    }})
+    run(foreign.customer_prices.insert_one({
+        "companyId": "c1", "productId": "p1", "priceMinor": 1, "currency": "EUR",
+    }))
+    with pytest.raises(PricingError, match="kein gültiger Preis"):
+        run(PricingEngine(own).quote_b2b("c1", "p1", 1))
 
 
 def test_duplicate_or_wrong_currency_customer_price_fails_closed():
@@ -101,7 +131,9 @@ def test_promotion_is_start_inclusive_end_exclusive_and_base_survives():
     run(a.pricing_promotions.insert_one({"id": "promo", "productId": "p1", "companyId": "c1",
         "priceMinor": 1890, "currency": "EUR", "startsAt": start.isoformat(), "endsAt": end.isoformat()}))
     engine = PricingEngine(a)
-    assert run(engine.quote_b2b("c1", "p1", 1, at=start))[1].final_unit_price_minor == 1890
+    active = run(engine.quote_b2b("c1", "p1", 1, at=start))[1]
+    assert (active.final_unit_price_minor, active.price_source, active.base_price_source) == (
+        1890, "b2b_promotion", "customer_price")
     expired = run(engine.quote_b2b("c1", "p1", 1, at=end))[1]
     assert (expired.final_unit_price_minor, expired.price_source) == (1990, "customer_price")
 

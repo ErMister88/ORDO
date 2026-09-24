@@ -11,6 +11,7 @@ import { makeStyles, useTheme } from "@/src/theme";
 import { apiGet, apiPost, apiPut, apiUpload, fileUrl } from "@/src/api/client";
 import { euro } from "@/src/lib/format";
 import { Card, Input, Button, SectionTitle, Muted } from "@/src/components/ui";
+import { uploadsEnabled } from "@/src/config/features";
 
 type Tier = { minQty: string; price: string };
 
@@ -223,20 +224,22 @@ export default function Produkte() {
             <Card testID="product-form">
               <SectionTitle>{editingId ? "Produkt bearbeiten" : "Neues Produkt"}</SectionTitle>
 
-              <Text style={styles.label}>Produktbild</Text>
+              {uploadsEnabled || form.imageUrl ? <Text style={styles.label}>Produktbild</Text> : null}
               {form.imageUrl ? (
                 <View style={styles.imgWrap}>
                   <Image source={{ uri: fileUrl(form.imageUrl) }} style={styles.img} contentFit="cover" transition={200} />
-                  <Pressable
-                    testID="remove-image"
-                    style={styles.imgRemove}
-                    onPress={() => setForm((f) => ({ ...f, imageUrl: "" }))}
-                    hitSlop={8}
-                  >
-                    <X size={16} color={colors.onError} weight="bold" />
-                  </Pressable>
+                  {uploadsEnabled ? (
+                    <Pressable
+                      testID="remove-image"
+                      style={styles.imgRemove}
+                      onPress={() => setForm((f) => ({ ...f, imageUrl: "" }))}
+                      hitSlop={8}
+                    >
+                      <X size={16} color={colors.onError} weight="bold" />
+                    </Pressable>
+                  ) : null}
                 </View>
-              ) : (
+              ) : uploadsEnabled ? (
                 <Pressable testID="pick-image" style={styles.imgPicker} onPress={pickImage} disabled={uploading}>
                   {uploading ? (
                     <ActivityIndicator color={colors.brandPrimary} />
@@ -247,8 +250,8 @@ export default function Produkte() {
                     </>
                   )}
                 </Pressable>
-              )}
-              {form.imageUrl && !uploading ? (
+              ) : null}
+              {uploadsEnabled && form.imageUrl && !uploading ? (
                 <Pressable testID="change-image" style={styles.changeImg} onPress={pickImage}>
                   <Camera size={16} color={colors.brandPrimary} weight="bold" />
                   <Text style={styles.changeImgText}>Bild ändern</Text>

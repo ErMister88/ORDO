@@ -13,6 +13,8 @@ Das Frontend und das Backend werden als getrennte Render-Dienste betrieben. Für
 
 `EXPO_PUBLIC_BACKEND_URL` muss beim Build auf die öffentliche HTTPS-Adresse des Staging-Backends gesetzt werden, zum Beispiel `https://ordo-api-staging.onrender.com`.
 
+`EXPO_PUBLIC_UPLOADS_ENABLED` ist standardmäßig deaktiviert. Es darf erst auf `true` gesetzt werden, wenn der Object Storage des jeweiligen Deployments nachweislich funktioniert. Für die Investor-Demo bleibt der Wert `false`; dadurch werden ausschließlich die nicht verfügbaren Upload-Aktionen ausgeblendet.
+
 Die Adresse darf weder `/api` noch einen abschließenden Schrägstrich enthalten. Variablen mit dem Präfix `EXPO_PUBLIC_` sind Bestandteil des öffentlichen Web-Bundles. Deshalb dürfen dort keine Secrets oder Zugangsdaten gespeichert werden.
 
 ## SPA Rewrite

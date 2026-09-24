@@ -1,5 +1,5 @@
-import type { ReactNode } from "react";
-import { Pressable, ScrollView, Text, View, useWindowDimensions } from "react-native";
+import { useEffect, type ReactNode } from "react";
+import { ActivityIndicator, Pressable, ScrollView, Text, View, useWindowDimensions } from "react-native";
 import { usePathname, useRouter } from "expo-router";
 import {
   ChartBar, Coffee, FileText, Gauge, Package, Receipt, ShoppingBag,
@@ -7,6 +7,7 @@ import {
 } from "phosphor-react-native";
 
 import { useAuth } from "@/src/auth/auth";
+import { canAccessRoute, deniedRouteTarget, isPublicRoute } from "@/src/auth/route-access";
 import { makeStyles, tokens, useTheme } from "@/src/theme";
 
 type NavItem = { label: string; path: string; icon: typeof Gauge; match?: string[] };
@@ -54,14 +55,31 @@ function groups(role?: string): NavGroup[] {
   ];
 }
 
-const publicPath = (path: string) => path === "/" || path.startsWith("/login") || path === "/shop" || path.startsWith("/shop/") || path.startsWith("/legal") || path.startsWith("/passwort-vergessen");
-
 export function AppShell({ children }: { children: ReactNode }) {
+  const styles = useStyles();
   const { width } = useWindowDimensions();
   const path = usePathname();
-  const { user } = useAuth();
+  const router = useRouter();
+  const { user, loading } = useAuth();
   const desktop = width >= tokens.layout.desktop;
-  if (!desktop || !user || publicPath(path)) return <>{children}</>;
+  const publicRoute = isPublicRoute(path);
+  const allowed = canAccessRoute(path, user?.role ?? null);
+  const mustChangePassword = Boolean(user?.must_change_password && !path.startsWith("/passwort-aendern"));
+
+  useEffect(() => {
+    if (loading || publicRoute) return;
+    if (mustChangePassword) router.replace("/passwort-aendern?forced=1");
+    else if (!allowed) router.replace(deniedRouteTarget(user?.role ?? null));
+  }, [allowed, loading, mustChangePassword, publicRoute, router, user?.role]);
+
+  if (!publicRoute && (loading || mustChangePassword || !allowed)) {
+    return (
+      <View style={styles.guardLoading} testID="route-guard-loading">
+        <ActivityIndicator size="large" />
+      </View>
+    );
+  }
+  if (!desktop || !user || publicRoute) return <>{children}</>;
   return <View style={{ flex: 1, flexDirection: "row" }}><DesktopSidebar />{children}</View>;
 }
 
@@ -105,6 +123,7 @@ function DesktopSidebar() {
 }
 
 const useStyles = makeStyles((c) => ({
+  guardLoading: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: c.surfaceSecondary },
   sidebar: { width: tokens.layout.sidebar, backgroundColor: c.surfaceInverse, paddingHorizontal: 16, paddingVertical: 20, borderRightWidth: 1, borderRightColor: c.inverseBorder },
   brandBlock: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 8, paddingBottom: 24 },
   mark: { width: 38, height: 38, borderRadius: 10, backgroundColor: c.brandPrimary, alignItems: "center", justifyContent: "center" },
