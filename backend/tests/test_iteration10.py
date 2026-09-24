@@ -5,41 +5,34 @@
 - Admin shop settings + orders (RBAC)
 - B2C price roundtrip on products
 """
-import os
 import pytest
 import requests
-from pathlib import Path
+import os
 
-# BASE_URL from frontend/.env
-BASE_URL = None
-fenv = Path("/app/frontend/.env")
-for line in fenv.read_text().splitlines():
-    if line.startswith("EXPO_PUBLIC_BACKEND_URL="):
-        BASE_URL = line.split("=", 1)[1].strip().strip('"').rstrip("/")
-        break
+BASE_URL = ""
 
 
-def _login(email, password):
-    r = requests.post(f"{BASE_URL}/api/auth/login",
-                      data={"username": email, "password": password},
-                      timeout=30)
-    r.raise_for_status()
-    return r.json()["access_token"]
+@pytest.fixture(scope="module", autouse=True)
+def _configure_base_url(base_url):
+    global BASE_URL
+    BASE_URL = base_url
+    yield
+    BASE_URL = ""
 
 
 @pytest.fixture(scope="module")
-def admin_tok():
-    return _login("admin@ss-coffee.de", "Admin#2026")
+def admin_tok(admin_token):
+    return admin_token
 
 
 @pytest.fixture(scope="module")
-def sales_tok():
-    return _login("vertrieb@ss-coffee.de", "Sales#2026")
+def sales_tok(sales_token):
+    return sales_token
 
 
 @pytest.fixture(scope="module")
-def customer_tok():
-    return _login("kunde@ss-coffee.de", "Kunde#2026")
+def customer_tok(customer_token):
+    return customer_token
 
 
 def hdr(t):
@@ -227,19 +220,25 @@ class TestShopCheckout:
 # --- 4. Admin shop settings + orders RBAC ---
 class TestShopAdmin:
     original = None
+    token = None
 
     @classmethod
     def teardown_class(cls):
         # restore settings
-        if cls.original:
+        if cls.original and cls.token:
             try:
-                tok = _login("admin@ss-coffee.de", "Admin#2026")
-                requests.put(f"{BASE_URL}/api/shop/settings", json=cls.original, headers=hdr(tok), timeout=30)
+                requests.put(
+                    f"{BASE_URL}/api/shop/settings",
+                    json=cls.original,
+                    headers=hdr(cls.token),
+                    timeout=30,
+                )
             except Exception as e:
                 print(f"restore warning: {e}")
 
     def test_put_settings_admin(self, admin_tok):
         # save original
+        TestShopAdmin.token = admin_tok
         TestShopAdmin.original = requests.get(f"{BASE_URL}/api/shop/settings", timeout=30).json()
         new = {"freeShippingThreshold": 75.0, "shippingFee": 5.5}
         r = requests.put(f"{BASE_URL}/api/shop/settings", json=new, headers=hdr(admin_tok), timeout=30)
@@ -287,23 +286,33 @@ class TestShopAdmin:
 class TestB2CPriceRoundtrip:
     original_b2c = None
     product_id = None
+    token = None
 
     @classmethod
     def teardown_class(cls):
-        if cls.original_b2c is not None and cls.product_id:
+        if cls.original_b2c is not None and cls.product_id and cls.token:
             try:
-                tok = _login("admin@ss-coffee.de", "Admin#2026")
                 # Fetch full product (admin) then PUT again with original b2cPrice
-                r = requests.get(f"{BASE_URL}/api/products", headers=hdr(tok), timeout=30)
+                r = requests.get(
+                    f"{BASE_URL}/api/products",
+                    headers=hdr(cls.token),
+                    timeout=30,
+                )
                 p = next((x for x in r.json() if x["id"] == cls.product_id), None)
                 if p:
                     p["b2cPrice"] = cls.original_b2c
                     p.pop("id", None)
-                    requests.put(f"{BASE_URL}/api/products/{cls.product_id}", json=p, headers=hdr(tok), timeout=30)
+                    requests.put(
+                        f"{BASE_URL}/api/products/{cls.product_id}",
+                        json=p,
+                        headers=hdr(cls.token),
+                        timeout=30,
+                    )
             except Exception as e:
                 print(f"restore warning: {e}")
 
     def test_put_b2cprice(self, admin_tok):
+        TestB2CPriceRoundtrip.token = admin_tok
         r = requests.get(f"{BASE_URL}/api/products", headers=hdr(admin_tok), timeout=30)
         assert r.status_code == 200
         prods = r.json()
