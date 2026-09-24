@@ -1,13 +1,13 @@
 import { useState } from "react";
 import { View, Text, ScrollView, Pressable, useWindowDimensions } from "react-native";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 import { ArrowLeft, ShoppingCart, ImageSquare, Plus, UserCircle, EnvelopeSimple, CheckCircle } from "phosphor-react-native";
 
 import { makeStyles, tokens, useTheme } from "@/src/theme";
-import { apiGet, fileUrl, API_BASE } from "@/src/api/client";
+import { apiGet, apiPost, fileUrl, API_BASE } from "@/src/api/client";
 import { euro } from "@/src/lib/format";
 import { useCart } from "@/src/shop/cart";
 import { shopApi } from "@/src/shop/auth";
@@ -92,6 +92,15 @@ export default function Shop() {
   const desktop = width >= tokens.layout.tablet;
   const products = useQuery({ queryKey: ["shop-products"], queryFn: () => apiGet("/shop/products") });
   const settings = useQuery({ queryKey: ["shop-settings"], queryFn: () => apiGet("/shop/settings") });
+  const categories = useQuery({ queryKey: ["shop-categories"], queryFn: () => apiGet("/shop/categories") });
+  const [categoryId, setCategoryId] = useState<string | null>(null);
+  const [financeProductId, setFinanceProductId] = useState<string | null>(null);
+  const [finance, setFinance] = useState({ name: "", email: "", phone: "", message: "" });
+  const financing = useMutation({
+    mutationFn: () => apiPost("/shop/equipment-requests", { productId: financeProductId, ...finance }),
+    onSuccess: () => { setFinanceProductId(null); setFinance({ name: "", email: "", phone: "", message: "" }); },
+  });
+  const visibleProducts = (products.data ?? []).filter((product: any) => !categoryId || product.categoryId === categoryId);
 
   return (
     <View style={styles.root}>
@@ -100,8 +109,8 @@ export default function Shop() {
           <ArrowLeft size={20} color={colors.onSurfaceSecondary} weight="bold" />
         </Pressable>
         <View style={{ flex: 1 }}>
-          <Text style={styles.title}>S&S Kaffee-Shop</Text>
-          <Text style={styles.subtitle}>Premium-Kaffee für zuhause</Text>
+          <Text style={styles.title}>S&S Shop</Text>
+          <Text style={styles.subtitle}>Produkte für Genuss, Gastro und Zuhause</Text>
         </View>
         <Pressable onPress={() => router.push("/shop/konto")} style={styles.iconBtn} testID="shop-account-button" hitSlop={8}>
           <UserCircle size={22} color={colors.onSurfaceSecondary} weight="bold" />
@@ -120,8 +129,8 @@ export default function Shop() {
         <PageContainer style={styles.page}>
         <View style={styles.shopHero}>
           <Text style={styles.eyebrow}>S&S COFFEE AND MORE</Text>
-          <Text style={styles.heroTitle}>Kaffee, der im Alltag überzeugt.</Text>
-          <Text style={styles.heroText}>Transparente Bruttopreise, flexible Mengen und auf Wunsch monatlich geliefert.</Text>
+          <Text style={styles.heroTitle}>Gute Produkte. Klar bestellt.</Text>
+          <Text style={styles.heroText}>Transparente Bruttopreise, flexible Mengen und ein Sortiment von Kaffee bis Equipment.</Text>
         </View>
         {settings.data && (
           <View style={styles.banner}>
@@ -133,11 +142,12 @@ export default function Shop() {
         {settings.data?.newsletterDiscountEnabled ? (
           <NewsletterCard percent={settings.data?.newsletterDiscountPercent ?? 10} />
         ) : null}
+        {(categories.data ?? []).length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryRow}><Pressable onPress={() => setCategoryId(null)} style={[styles.categoryChip, !categoryId && styles.categoryChipActive]}><Text style={[styles.categoryText, !categoryId && styles.categoryTextActive]}>Alle</Text></Pressable>{(categories.data ?? []).map((category: any) => <Pressable key={category.id} onPress={() => setCategoryId(category.id)} style={[styles.categoryChip, categoryId === category.id && styles.categoryChipActive]}><Text style={[styles.categoryText, categoryId === category.id && styles.categoryTextActive]}>{category.name}</Text></Pressable>)}</ScrollView> : null}
         {products.isLoading ? <LoadingState label="Produkte werden geladen…" /> : products.isError ? <ErrorState onRetry={() => products.refetch()} /> : (products.data ?? []).length === 0 ? (
           <EmptyState title="Noch keine Produkte" subtitle="Der Shop wird gerade bestückt" />
         ) : (
           <View style={styles.productGrid}>
-          {(products.data ?? []).map((p: any) => (
+          {visibleProducts.map((p: any) => (
             <Card key={p.id} testID={`shop-product-${p.id}`} style={[styles.productCard, desktop && styles.productCardDesktop]}>
               <View style={styles.productBody}>
                 {p.imageUrl ? (
@@ -167,10 +177,12 @@ export default function Shop() {
                   ) : null}
                 </View>
               </View>
-              <Pressable testID={`shop-add-${p.id}`} style={styles.addBtn} onPress={() => cart.add(p.id, 1)}>
+              {p.directPurchaseAllowed !== false ? <Pressable testID={`shop-add-${p.id}`} style={styles.addBtn} onPress={() => cart.add(p.id, p.minimumOrderQuantity ?? 1)}>
                 <Plus size={16} color={colors.onBrandPrimary} weight="bold" />
                 <Text style={styles.addText}>In den Warenkorb</Text>
-              </Pressable>
+              </Pressable> : null}
+              {p.financingRequestAllowed ? <Button testID={`shop-finance-${p.id}`} title="Finanzierung anfragen" kind="secondary" onPress={() => { financing.reset(); setFinanceProductId(financeProductId === p.id ? null : p.id); }} /> : null}
+              {financeProductId === p.id ? <View style={styles.financeForm}><Muted>Unverbindliche Anfrage. Eine individuelle Kalkulation erfolgt durch das Team.</Muted><Input value={finance.name} onChangeText={(name) => setFinance((value) => ({ ...value, name }))} placeholder="Name" /><Input value={finance.email} onChangeText={(email) => setFinance((value) => ({ ...value, email }))} placeholder="E-Mail" autoCapitalize="none" /><Input value={finance.phone} onChangeText={(phone) => setFinance((value) => ({ ...value, phone }))} placeholder="Telefon (optional)" /><Input value={finance.message} onChangeText={(message) => setFinance((value) => ({ ...value, message }))} placeholder="Ihre Anfrage" multiline /><Button title={financing.isSuccess ? "Anfrage gesendet" : "Anfrage absenden"} disabled={!finance.name.trim() || !finance.email.includes("@") || financing.isSuccess} loading={financing.isPending} onPress={() => financing.mutate()} />{financing.error ? <Text style={styles.nlErr}>{(financing.error as Error).message}</Text> : null}</View> : null}
             </Card>
           ))}
           </View>
@@ -223,6 +235,11 @@ const useStyles = makeStyles((c) => ({
   codeBox: { marginTop: 10, paddingVertical: 12, paddingHorizontal: 20, borderRadius: 12, borderWidth: 2, borderStyle: "dashed", borderColor: c.brandPrimary, backgroundColor: c.brandTertiary },
   codeText: { fontSize: 22, fontWeight: "800", letterSpacing: 2, color: c.brandPrimary },
   productGrid: { flexDirection: "row", flexWrap: "wrap", gap: 14 },
+  categoryRow: { gap: 8 },
+  categoryChip: { borderRadius: 999, backgroundColor: c.surface, borderWidth: 1, borderColor: c.border, paddingHorizontal: 14, paddingVertical: 9 },
+  categoryChipActive: { backgroundColor: c.brandPrimary, borderColor: c.brandPrimary },
+  categoryText: { color: c.onSurfaceSecondary, fontSize: 13, fontWeight: "700" },
+  categoryTextActive: { color: c.onBrandPrimary },
   productCard: { width: "100%" },
   productCardDesktop: { width: "48.8%", flexGrow: 1, maxWidth: 520 },
   productBody: { flexDirection: "row", gap: 14, alignItems: "flex-start" },
@@ -238,6 +255,7 @@ const useStyles = makeStyles((c) => ({
   tier: { backgroundColor: c.brandTertiary, color: c.onBrandTertiary, fontSize: 10.5, fontWeight: "700", paddingHorizontal: 7, paddingVertical: 4, borderRadius: 6 },
   addBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 12, paddingVertical: 12, borderRadius: 12, backgroundColor: c.brandPrimary },
   addText: { color: c.onBrandPrimary, fontWeight: "700", fontSize: 14 },
+  financeForm: { marginTop: 10, gap: 8, paddingTop: 10, borderTopWidth: 1, borderTopColor: c.divider },
   footer: { marginTop: 8, paddingTop: 16, borderTopWidth: 1, borderTopColor: c.divider },
   footerLinks: { flexDirection: "row", flexWrap: "wrap", justifyContent: "center", alignItems: "center", gap: 6 },
   footerLink: { fontSize: 13, color: c.muted, fontWeight: "600" },

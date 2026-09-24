@@ -1,6 +1,6 @@
 """Dashboard KPIs."""
-from fastapi import Depends
-from typing import Annotated
+from fastapi import Depends, HTTPException
+from typing import Annotated, Optional
 from datetime import datetime, timezone
 
 from ..core import api_router, strip_id
@@ -13,6 +13,9 @@ from ..money import amount_minor, from_minor, line_total_minor, to_minor
 async def dashboard(
     user: Annotated[dict, Depends(current_user)],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    period: str = "month",
+    start: Optional[str] = None,
+    end: Optional[str] = None,
 ):
     ids = await visible_company_ids(user, access)
     companies = await access.companies.find({"id": {"$in": ids}}).to_list(1000)
@@ -25,19 +28,57 @@ async def dashboard(
         if user["role"] == "admin" else []
     )
 
+    def parse_boundary(value: str, field: str) -> datetime:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Ungültiger {field}") from exc
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    now = datetime.now(timezone.utc)
+    if period == "month":
+        period_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+    elif period == "quarter":
+        first_month = ((now.month - 1) // 3) * 3 + 1
+        period_start = datetime(now.year, first_month, 1, tzinfo=timezone.utc)
+    elif period == "year":
+        period_start = datetime(now.year, 1, 1, tzinfo=timezone.utc)
+    elif period == "custom" and start and end:
+        period_start = parse_boundary(start, "Startzeitraum")
+    else:
+        raise HTTPException(status_code=400, detail="Ungültiger Auswertungszeitraum")
+    period_end = parse_boundary(end, "Endzeitraum") if period == "custom" and end else now
+    if period_start > period_end:
+        raise HTTPException(status_code=400, detail="Startzeitraum muss vor dem Endzeitraum liegen")
+
+    def in_period(row):
+        value = row.get("createdAt") or row.get("date")
+        if not isinstance(value, str):
+            return False
+        try:
+            point = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if point.tzinfo is None:
+                point = point.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return False
+        return period_start <= point.astimezone(timezone.utc) <= period_end
+
+    period_orders = [order for order in orders if in_period(order)]
+
     def order_total(o):
         if isinstance(o.get("netTotalMinor"), int):
             return from_minor(o["netTotalMinor"])
         return from_minor(sum(line_total_minor(to_minor(i["price"]), i["qty"]) for i in o["items"]))
 
-    now = datetime.now(timezone.utc)
     this_month = [o for o in orders if datetime.fromisoformat(o["createdAt"]).month == now.month
                   and datetime.fromisoformat(o["createdAt"]).year == now.year]
     revenue_month = sum(order_total(o) for o in this_month)
     total_kg = sum(c.get("monthlyKg", 0) for c in companies)
     open_offers = [o for o in offers if o["status"] in ("Freigabe nötig", "Freigegeben", "Versendet")]
     approvals = [o for o in offers if o["status"] == "Freigabe nötig"]
-    open_invoices = [i for i in invoices if i["status"] != "Bezahlt"]
+    open_invoices = [i for i in invoices if i["status"] not in ("Bezahlt", "Storniert")]
     open_invoices_sum = sum(
         from_minor(amount_minor(i, "amount", expected_currency=i.get("currency", access.context.default_currency)))
         for i in open_invoices
@@ -102,6 +143,65 @@ async def dashboard(
         })
     activity = sorted(activity, key=lambda row: row.get("at") or "", reverse=True)[:6]
 
+    customer_metrics = []
+    for company in companies:
+        company_orders = [order for order in period_orders if order.get("companyId") == company["id"]]
+        last_order = last_order_by_company.get(company["id"])
+        customer_metrics.append({
+            "companyId": company["id"], "name": company.get("name", ""),
+            "revenue": round(sum(order_total(order) for order in company_orders), 2),
+            "orders": len(company_orders),
+            "quantity": round(sum(float(item.get("qty", 0)) for order in company_orders for item in order.get("items", [])), 3),
+            "lastPurchaseAt": last_order.get("createdAt") if last_order else None,
+        })
+    customer_metrics.sort(key=lambda row: (-row["revenue"], row["name"]))
+
+    top_sales_reps = None
+    if user["role"] == "admin":
+        sales_rows = {}
+        for order in period_orders:
+            attribution = order.get("salesAttribution") or {}
+            sales_id = attribution.get("salesRepId") or (
+                attribution.get("actorUserId") if attribution.get("actorRole") == "sales" else None
+            )
+            if not sales_id:
+                continue
+            row = sales_rows.setdefault(sales_id, {
+                "userId": sales_id, "name": attribution.get("actorName") or sales_id,
+                "revenue": 0.0, "orders": 0, "quantity": 0.0,
+                "margin": 0.0, "marginDataComplete": True,
+            })
+            row["revenue"] += order_total(order)
+            row["orders"] += 1
+            for item in order.get("items", []):
+                row["quantity"] += float(item.get("qty", 0))
+                if isinstance(item.get("costMinor"), int) and isinstance(item.get("lineTotalMinor"), int):
+                    row["margin"] += from_minor(item["lineTotalMinor"] - line_total_minor(item["costMinor"], item["qty"]))
+                else:
+                    row["marginDataComplete"] = False
+        assigned_counts = {}
+        new_counts = {}
+        for company in companies:
+            rep_id = company.get("assignedSalesRepId")
+            if rep_id and company.get("active", True):
+                assigned_counts[rep_id] = assigned_counts.get(rep_id, 0) + 1
+            if rep_id and in_period(company):
+                new_counts[rep_id] = new_counts.get(rep_id, 0) + 1
+        for rep_id, row in sales_rows.items():
+            row["activeCustomers"] = assigned_counts.get(rep_id, 0)
+            row["newCustomers"] = new_counts.get(rep_id, 0)
+            row["revenue"] = round(row["revenue"], 2)
+            row["quantity"] = round(row["quantity"], 3)
+            row["margin"] = round(row["margin"], 2) if row["marginDataComplete"] else None
+        top_sales_reps = sorted(sales_rows.values(), key=lambda row: (-row["revenue"], row["name"]))[:5]
+
+    alerts = []
+    for invoice in invoices:
+        if invoice.get("status") not in ("Bezahlt", "Storniert") and invoice.get("dueDate") and invoice["dueDate"] < now.date().isoformat():
+            alerts.append({"type": "invoice_overdue", "id": invoice.get("id"), "companyId": invoice.get("companyId"), "dueDate": invoice.get("dueDate")})
+    tasks = await access.customer_tasks.find({"companyId": {"$in": ids}, "status": "open", "dueAt": {"$lte": now.isoformat()}}).sort("dueAt", 1).to_list(100)
+    alerts.extend({"type": "task_due", "id": task.get("id"), "companyId": task.get("companyId"), "dueAt": task.get("dueAt"), "title": task.get("title")} for task in tasks)
+
     return {
         "role": user["role"],
         "revenueMonth": revenue_month,
@@ -116,4 +216,8 @@ async def dashboard(
         "shopOrders": len(shop_orders) if user["role"] == "admin" else None,
         "recentActivity": activity,
         "followups": sorted(followups, key=lambda x: -(x["days"] or 999)),
+        "period": {"type": period, "start": period_start.isoformat(), "end": period_end.isoformat()},
+        "topCustomers": customer_metrics[:10],
+        "topSalesReps": top_sales_reps,
+        "managementAlerts": alerts,
     }

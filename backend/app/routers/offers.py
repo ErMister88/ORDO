@@ -67,7 +67,12 @@ async def create_offer(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         offer_minor = to_minor(it.price)
         if offer_minor < amount_minor(prod, "absoluteFloor", expected_currency=currency):
-            raise HTTPException(status_code=400, detail="Preis unter absoluter Grenze – nicht zulässig")
+            detail = (
+                "Preis unter absoluter Grenze – nicht zulässig"
+                if user.get("role") == "admin"
+                else "Dieser Preis benötigt eine Freigabe durch einen Administrator."
+            )
+            raise HTTPException(status_code=409, detail=detail)
         if offer_minor < amount_minor(prod, "salesFloor", expected_currency=currency):
             needs_approval = True
         snapshot = product_item_snapshot(

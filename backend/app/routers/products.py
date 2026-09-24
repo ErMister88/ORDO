@@ -1,4 +1,5 @@
 """Products + image upload/serving."""
+import secrets
 import uuid
 import requests
 from fastapi import Depends, HTTPException, UploadFile, File
@@ -15,7 +16,7 @@ from ..deps import (
     require_roles,
     tenant_business_access,
 )
-from ..models import ProductIn, ActiveIn, StockIn
+from ..models import EquipmentFinancingRequestIn, ProductCategoryIn, ProductIn, ActiveIn, StockIn
 from ..money import to_minor
 from ..storage import put_object, get_object, APP_NAME
 from ..tenant_access import TenantBusinessAccess
@@ -44,6 +45,35 @@ def _product_payload(body: ProductIn, currency: str) -> dict:
     return payload
 
 
+INTERNAL_PRODUCT_FIELDS = {
+    "cost", "costMinor", "salesFloor", "salesFloorMinor",
+    "absoluteFloor", "absoluteFloorMinor", "internalCosts", "margin", "profitability",
+    "metadata",
+}
+
+
+def _product_response(product: dict, role: str) -> dict:
+    payload = strip_id(product)
+    if role != "admin":
+        for field in INTERNAL_PRODUCT_FIELDS:
+            payload.pop(field, None)
+    return payload
+
+
+async def _validate_product_references(access: TenantBusinessAccess, body: ProductIn, product_id: str | None = None) -> None:
+    if not body.name.strip():
+        raise HTTPException(status_code=400, detail="Produktname ist erforderlich")
+    if not body.unit.strip():
+        raise HTTPException(status_code=400, detail="Einheit ist erforderlich")
+    if body.categoryId and not await access.product_categories.find_one({"id": body.categoryId, "active": {"$ne": False}}):
+        raise HTTPException(status_code=400, detail="Kategorie ist nicht verfügbar")
+    sku = body.sku.strip()
+    if sku:
+        existing = await access.products.find_one({"sku": sku})
+        if existing and existing.get("id") != product_id:
+            raise HTTPException(status_code=409, detail="Artikelnummer ist bereits vergeben")
+
+
 @api_router.get("/products")
 async def get_products(
     user: Annotated[dict, Depends(current_user)],
@@ -53,22 +83,12 @@ async def get_products(
     # role must never receive cost/floor/standard pricing. They use /shop/products.
     if user["role"] not in ("admin", "sales", "customer"):
         raise HTTPException(status_code=403, detail="Kein Zugriff auf den Großhandelskatalog")
-    prods = await access.products.find({}).to_list(1000)
-    result = []
-    for p in prods:
-        p = strip_id(p)
-        if user["role"] == "customer":
-            p.pop("cost", None)
-            p.pop("costMinor", None)
-            p.pop("salesFloor", None)
-            p.pop("salesFloorMinor", None)
-            p.pop("absoluteFloor", None)
-            p.pop("absoluteFloorMinor", None)
-        elif user["role"] == "sales":
-            p.pop("cost", None)
-            p.pop("costMinor", None)
-        result.append(p)
-    return result
+    query = {} if user["role"] == "admin" else {
+        "active": {"$ne": False},
+        "b2bAvailable": {"$ne": False},
+    }
+    prods = await access.products.find(query).to_list(1000)
+    return [_product_response(product, user["role"]) for product in prods]
 
 
 @api_router.post("/products")
@@ -77,6 +97,7 @@ async def create_product(
     user: Annotated[dict, Depends(require_roles("admin"))],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
 ):
+    await _validate_product_references(access, body)
     seq = await next_seq("product")
     prod = {"id": f"p{seq}", **_product_payload(body, access.context.default_currency)}
     await access.products.insert_one(prod)
@@ -90,9 +111,13 @@ async def update_product(
     user: Annotated[dict, Depends(require_roles("admin"))],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
 ):
+    await _validate_product_references(access, body, product_id)
+    payload = _product_payload(body, access.context.default_currency)
+    if "metadata" not in body.model_fields_set:
+        payload.pop("metadata", None)
     res = await access.products.update_one(
         {"id": product_id},
-        {"$set": _product_payload(body, access.context.default_currency)},
+        {"$set": payload},
     )
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Produkt nicht gefunden")
@@ -126,6 +151,95 @@ async def set_product_stock(
         raise HTTPException(status_code=404, detail="Produkt nicht gefunden")
     await tenant_audit(access, user, "product.stock", product_id, {"stock": stock})
     return {"ok": True, "stock": stock}
+
+
+@api_router.get("/product-categories")
+async def list_product_categories(
+    user: Annotated[dict, Depends(current_user)],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    query = {} if user["role"] == "admin" else {"active": {"$ne": False}}
+    rows = await access.product_categories.find(query).sort("name", 1).to_list(1000)
+    return [strip_id(row) for row in rows]
+
+
+@api_router.get("/shop/categories")
+async def list_public_product_categories(
+    access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
+):
+    rows = await access.product_categories.find({"active": {"$ne": False}}).sort("name", 1).to_list(1000)
+    return [strip_id(row) for row in rows]
+
+
+@api_router.post("/product-categories")
+async def create_product_category(
+    body: ProductCategoryIn,
+    user: Annotated[dict, Depends(require_roles("admin"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Kategoriename ist erforderlich")
+    if await access.product_categories.find_one({"name": name}):
+        raise HTTPException(status_code=409, detail="Kategorie existiert bereits")
+    row = {"id": "cat-" + secrets.token_hex(6), **body.model_dump(), "name": name,
+           "createdAt": datetime.now(timezone.utc).isoformat()}
+    await access.product_categories.insert_one(row)
+    await tenant_audit(access, user, "product_category.create", row["id"], {"name": name})
+    return strip_id(row)
+
+
+@api_router.put("/product-categories/{category_id}")
+async def update_product_category(
+    category_id: str,
+    body: ProductCategoryIn,
+    user: Annotated[dict, Depends(require_roles("admin"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Kategoriename ist erforderlich")
+    result = await access.product_categories.update_one({"id": category_id}, {"$set": {**body.model_dump(), "name": name}})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Kategorie nicht gefunden")
+    row = await access.product_categories.find_one({"id": category_id})
+    return strip_id(row)
+
+
+@api_router.post("/shop/equipment-requests", status_code=201)
+async def create_equipment_financing_request(
+    body: EquipmentFinancingRequestIn,
+    access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
+):
+    product = await access.products.find_one({
+        "id": body.productId, "active": {"$ne": False},
+        "b2cAvailable": {"$ne": False}, "financingRequestAllowed": True,
+    })
+    if not product:
+        raise HTTPException(status_code=404, detail="Produkt ist für eine Finanzierungsanfrage nicht verfügbar")
+    email = body.email.strip().lower()
+    if not body.name.strip() or not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Name und gültige E-Mail-Adresse sind erforderlich")
+    row = {
+        "id": "equipment-request-" + secrets.token_hex(8), "productId": product["id"],
+        "productSnapshot": {"id": product["id"], "sku": product.get("sku"),
+                            "name": product.get("name", ""), "brand": product.get("brand", "")},
+        "requestType": "financing", "contact": {"name": body.name.strip(), "email": email,
+                                                   "phone": body.phone.strip()},
+        "message": body.message.strip(), "status": "Angefragt",
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+    }
+    await access.equipment_requests.insert_one(row)
+    return {"id": row["id"], "status": row["status"]}
+
+
+@api_router.get("/equipment-requests")
+async def list_equipment_financing_requests(
+    user: Annotated[dict, Depends(require_roles("admin"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    rows = await access.equipment_requests.find({}).sort("createdAt", -1).to_list(1000)
+    return [strip_id(row) for row in rows]
 
 
 @api_router.post("/upload")

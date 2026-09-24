@@ -7,6 +7,7 @@ from fastapi import Depends, HTTPException
 
 from ..audit_service import tenant_audit
 from ..core import api_router, strip_id
+from ..customer_activity import record_customer_activity
 from ..deps import current_user, require_roles, tenant_business_access, visible_company_ids
 from ..models import B2BPromotionIn, CustomerPriceIn, PricingQuoteIn
 from ..money import MoneyError, amount_minor, from_minor, require_minor, to_minor
@@ -28,6 +29,75 @@ async def _can_manage_company(user: dict, access: TenantBusinessAccess, company_
     if user.get("role") == "admin":
         return True
     return company_id in await visible_company_ids(user, access)
+
+
+def _conditions(body: CustomerPriceIn, *, include_internal: bool) -> dict:
+    if body.validFrom is not None and body.validFrom.tzinfo is None:
+        raise HTTPException(status_code=400, detail="Gültigkeitsbeginn benötigt eine Zeitzone")
+    if body.validUntil is not None and body.validUntil.tzinfo is None:
+        raise HTTPException(status_code=400, detail="Gültigkeitsende benötigt eine Zeitzone")
+    if body.validFrom and body.validUntil and body.validFrom >= body.validUntil:
+        raise HTTPException(status_code=400, detail="Gültigkeitsende muss nach dem Beginn liegen")
+    payload = {
+        "deliveryTerms": body.deliveryTerms.strip(),
+        "transportModel": body.transportModel.strip(),
+        "paymentTermDays": body.paymentTermDays,
+        "minimumQuantity": body.minimumQuantity,
+        "validFrom": body.validFrom.astimezone(timezone.utc).isoformat() if body.validFrom else None,
+        "validUntil": body.validUntil.astimezone(timezone.utc).isoformat() if body.validUntil else None,
+        "sourceReference": body.sourceReference.strip(),
+    }
+    if include_internal:
+        payload["internalNote"] = body.internalNote.strip()
+    return payload
+
+
+async def _persist_customer_price(body: CustomerPriceIn, user: dict, access: TenantBusinessAccess) -> dict:
+    existing_rows = await access.customer_prices.find(
+        {"companyId": body.companyId, "productId": body.productId, "active": {"$ne": False}}
+    ).to_list(2)
+    if len(existing_rows) > 1:
+        raise HTTPException(status_code=409, detail="Mehrere aktive Kundenpreise müssen vor der Änderung bereinigt werden")
+    existing = existing_rows[0] if existing_rows else None
+    currency = access.context.default_currency
+    new_minor = to_minor(body.price)
+    try:
+        old_minor = amount_minor(existing, "price", expected_currency=currency) if existing else None
+    except MoneyError as exc:
+        raise HTTPException(status_code=409, detail="Bestehender Kundenpreis ist beschädigt") from exc
+    if old_minor != new_minor:
+        await access.price_history.insert_one({
+            "companyId": body.companyId, "productId": body.productId,
+            "oldPrice": from_minor(old_minor) if old_minor is not None else None,
+            "oldPriceMinor": old_minor, "newPrice": from_minor(new_minor),
+            "newPriceMinor": new_minor, "currency": currency,
+            "changedBy": user["id"], "changedByName": user.get("name", ""),
+            "changedAt": datetime.now(timezone.utc).isoformat(),
+        })
+    conditions = _conditions(body, include_internal=user.get("role") == "admin")
+    await access.customer_prices.update_one(
+        {"companyId": body.companyId, "productId": body.productId},
+        {"$set": {"price": from_minor(new_minor), "priceMinor": new_minor,
+                  "currency": currency, "active": True, **conditions}}, upsert=True,
+    )
+    await tenant_audit(access, user, "price.set", body.companyId,
+                       {"productId": body.productId, "priceMinor": new_minor, "currency": currency})
+    await record_customer_activity(
+        access, company_id=body.companyId, actor=user, activity_type="price_changed",
+        title="Kundenpreis geändert", internal=True,
+        reference={"type": "product", "id": body.productId},
+    )
+    public_conditions = {
+        key: value for key, value in conditions.items()
+        if key != "internalNote" and value not in (None, "")
+    }
+    result = {"ok": True, "companyId": body.companyId, "productId": body.productId,
+              "price": from_minor(new_minor), "priceMinor": new_minor, "currency": currency,
+              **public_conditions}
+    if user.get("role") == "admin":
+        if conditions.get("internalNote"):
+            result["internalNote"] = conditions["internalNote"]
+    return result
 
 
 @api_router.post("/pricing/b2b/quote")
@@ -68,36 +138,47 @@ async def upsert_customer_price(
     product = await access.products.find_one({"id": body.productId})
     if not company or not product:
         raise HTTPException(status_code=404, detail="Kunde oder Produkt nicht gefunden")
-    existing_rows = await access.customer_prices.find(
-        {"companyId": body.companyId, "productId": body.productId, "active": {"$ne": False}}
-    ).to_list(2)
-    if len(existing_rows) > 1:
-        raise HTTPException(status_code=409, detail="Mehrere aktive Kundenpreise müssen vor der Änderung bereinigt werden")
-    existing = existing_rows[0] if existing_rows else None
-    currency = access.context.default_currency
-    new_minor = to_minor(body.price)
-    try:
-        old_minor = amount_minor(existing, "price", expected_currency=currency) if existing else None
-    except MoneyError as exc:
-        raise HTTPException(status_code=409, detail="Bestehender Kundenpreis ist beschädigt") from exc
-    if old_minor != new_minor:
-        await access.price_history.insert_one({
-            "companyId": body.companyId, "productId": body.productId,
-            "oldPrice": from_minor(old_minor) if old_minor is not None else None,
-            "oldPriceMinor": old_minor, "newPrice": from_minor(new_minor),
-            "newPriceMinor": new_minor, "currency": currency,
-            "changedBy": user["id"], "changedByName": user.get("name", ""),
-            "changedAt": datetime.now(timezone.utc).isoformat(),
-        })
-    await access.customer_prices.update_one(
-        {"companyId": body.companyId, "productId": body.productId},
-        {"$set": {"price": from_minor(new_minor), "priceMinor": new_minor,
-                  "currency": currency, "active": True}}, upsert=True,
+    if user.get("role") == "sales":
+        try:
+            floor_minor = amount_minor(product, "salesFloor", expected_currency=access.context.default_currency)
+        except MoneyError:
+            floor_minor = None
+        if floor_minor is not None and to_minor(body.price) < floor_minor:
+            now = datetime.now(timezone.utc).isoformat()
+            approval = {
+                "id": "price-approval-" + secrets.token_hex(8),
+                "companyId": body.companyId, "productId": body.productId,
+                "requestedPriceMinor": to_minor(body.price), "currency": access.context.default_currency,
+                "conditions": _conditions(body, include_internal=False),
+                "status": "pending", "requestedBy": user["id"], "createdAt": now,
+            }
+            await access.price_approvals.insert_one(approval)
+            await tenant_audit(access, user, "price.approval.request", approval["id"], {"companyId": body.companyId, "productId": body.productId})
+            return {"ok": False, "approvalRequired": True,
+                    "message": "Dieser Preis benötigt eine Freigabe durch einen Administrator."}
+    return await _persist_customer_price(body, user, access)
+
+
+@api_router.get("/pricing/approvals")
+async def list_price_approvals(user: Annotated[dict, Depends(require_roles("admin"))], access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)]):
+    rows = await access.price_approvals.find({"status": "pending"}).sort("createdAt", -1).to_list(1000)
+    return [strip_id(row) for row in rows]
+
+
+@api_router.post("/pricing/approvals/{approval_id}/approve")
+async def approve_price(approval_id: str, user: Annotated[dict, Depends(require_roles("admin"))], access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)]):
+    approval = await access.price_approvals.find_one({"id": approval_id, "status": "pending"})
+    if not approval:
+        raise HTTPException(status_code=404, detail="Preisfreigabe nicht gefunden")
+    body = CustomerPriceIn(
+        companyId=approval["companyId"], productId=approval["productId"],
+        price=from_minor(approval["requestedPriceMinor"]), **(approval.get("conditions") or {}),
     )
-    await tenant_audit(access, user, "price.set", body.companyId,
-                       {"productId": body.productId, "priceMinor": new_minor, "currency": currency})
-    return {"ok": True, **body.model_dump(), "price": from_minor(new_minor),
-            "priceMinor": new_minor, "currency": currency}
+    result = await _persist_customer_price(body, user, access)
+    await access.price_approvals.update_one({"id": approval_id, "status": "pending"}, {"$set": {
+        "status": "approved", "decidedBy": user["id"], "decidedAt": datetime.now(timezone.utc).isoformat(),
+    }})
+    return result
 
 
 @api_router.get("/companies/{company_id}/price-history")

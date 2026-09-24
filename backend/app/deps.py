@@ -253,11 +253,11 @@ async def visible_company_ids(
         raise HTTPException(status_code=403, detail="Keine aktive Tenant-Mitgliedschaft")
 
     if context.role == "admin":
-        companies = await access.companies.find({"active": True}).to_list(1000)
+        companies = await access.companies.find({}).to_list(1000)
         return [company["id"] for company in companies]
     if context.role == "sales":
         companies = await access.companies.find(
-            {"assignedSalesRepId": context.actor_user_id, "active": True}
+            {"assignedSalesRepId": context.actor_user_id, "active": {"$ne": False}}
         ).to_list(1000)
         return [company["id"] for company in companies]
     if context.role != "customer" or context.company_id is None:

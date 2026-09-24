@@ -12,7 +12,10 @@ TENANT_SCOPED_BUSINESS_COLLECTIONS = frozenset({
     "audit_log",
     "companies",
     "contracts",
+    "customer_activities",
     "customer_prices",
+    "customer_tasks",
+    "equipment_requests",
     "invoices",
     "machine_requests",
     "machines",
@@ -20,7 +23,9 @@ TENANT_SCOPED_BUSINESS_COLLECTIONS = frozenset({
     "offers",
     "orders",
     "price_history",
+    "price_approvals",
     "pricing_promotions",
+    "product_categories",
     "products",
     "push_registrations",
     "settings",
@@ -134,7 +139,11 @@ class TenantBusinessAccess:
         self.audit_log = TenantScopedCollection(database, "audit_log", context)
         self.companies = TenantScopedCollection(database, "companies", context)
         self.contracts = TenantScopedCollection(database, "contracts", context)
+        self.customer_activities = TenantScopedCollection(database, "customer_activities", context)
+        self.customer_tasks = TenantScopedCollection(database, "customer_tasks", context)
+        self.equipment_requests = TenantScopedCollection(database, "equipment_requests", context)
         self.products = TenantScopedCollection(database, "products", context)
+        self.product_categories = TenantScopedCollection(database, "product_categories", context)
         self.customer_prices = TenantScopedCollection(database, "customer_prices", context)
         self.invoices = TenantScopedCollection(database, "invoices", context)
         self.machine_requests = TenantScopedCollection(database, "machine_requests", context)
@@ -143,6 +152,7 @@ class TenantBusinessAccess:
         self.offers = TenantScopedCollection(database, "offers", context)
         self.orders = TenantScopedCollection(database, "orders", context)
         self.price_history = TenantScopedCollection(database, "price_history", context)
+        self.price_approvals = TenantScopedCollection(database, "price_approvals", context)
         self.pricing_promotions = TenantScopedCollection(database, "pricing_promotions", context)
         self.push_registrations = TenantScopedCollection(database, "push_registrations", context)
         self.settings = TenantScopedCollection(database, "settings", context)

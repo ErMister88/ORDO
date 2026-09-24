@@ -78,6 +78,7 @@ class PriceQuote:
     promotion: Mapping[str, Any] | None = None
     subscription_discount_percent: int = 0
     subscription_discount_minor: int = 0
+    commercial_conditions: Mapping[str, Any] | None = None
 
     def public(self) -> dict[str, Any]:
         return {
@@ -99,6 +100,7 @@ class PriceQuote:
             "promotion": dict(self.promotion) if self.promotion else None,
             "subscriptionDiscountPercent": self.subscription_discount_percent,
             "subscriptionDiscountMinor": self.subscription_discount_minor,
+            "commercialConditions": dict(self.commercial_conditions) if self.commercial_conditions else None,
         }
 
     def snapshot(self, product: Mapping[str, Any]) -> dict[str, Any]:
@@ -118,6 +120,7 @@ class PriceQuote:
             "promotion": dict(self.promotion) if self.promotion else None,
             "subscriptionDiscountPercent": self.subscription_discount_percent,
             "subscriptionDiscountMinor": self.subscription_discount_minor,
+            "commercialConditions": dict(self.commercial_conditions) if self.commercial_conditions else None,
         })
         return item
 
@@ -169,7 +172,9 @@ class PricingEngine:
         self.currency = currency_code(access.context.default_currency)
 
     async def _product(self, product_id: str) -> dict[str, Any]:
-        product = await self.access.products.find_one({"id": product_id, "active": {"$ne": False}})
+        product = await self.access.products.find_one({
+            "id": product_id, "active": {"$ne": False}, "b2bAvailable": {"$ne": False},
+        })
         if not product:
             raise PricingError("Produkt ist nicht verfügbar")
         stored_currency = product.get("currency")
@@ -201,6 +206,18 @@ class PricingEngine:
             base_price_source="machine_b2c_standard",
         )
 
+    async def _b2c_product(self, product_id: str) -> dict[str, Any]:
+        product = await self.access.products.find_one({
+            "id": product_id, "active": {"$ne": False}, "b2cAvailable": {"$ne": False},
+        })
+        if not product:
+            raise PricingError("Produkt ist nicht verfügbar")
+        stored_currency = product.get("currency")
+        if stored_currency is not None and currency_code(stored_currency) != self.currency:
+            raise PricingError("Produkt besitzt eine unpassende Währung")
+        _tax_rate(product)
+        return product
+
     async def quote_b2b(
         self,
         company_id: str,
@@ -218,7 +235,21 @@ class PricingEngine:
                 "companyId": company_id,
                 "productId": product_id,
                 "active": {"$ne": False},
-            }).to_list(3)
+            }).to_list(20)
+        instant = at or datetime.now(timezone.utc)
+        if not isinstance(instant, datetime) or instant.tzinfo is None:
+            raise PricingError("Preiszeitpunkt benötigt eine Zeitzone")
+        instant = instant.astimezone(timezone.utc)
+        active_customer_prices = []
+        for row in customer_prices:
+            valid_from = row.get("validFrom")
+            valid_until = row.get("validUntil")
+            if valid_from and _utc(valid_from, "Gültigkeitsbeginn") > instant:
+                continue
+            if valid_until and _utc(valid_until, "Gültigkeitsende") <= instant:
+                continue
+            active_customer_prices.append(row)
+        customer_prices = active_customer_prices
         if len(customer_prices) > 1:
             raise PricingError("Mehrere aktive Kundenpreise verhindern eine eindeutige Preisauflösung")
         if customer_prices:
@@ -232,6 +263,11 @@ class PricingEngine:
             except MoneyError as exc:
                 raise PricingError("Kundenpreis ist ungültig") from exc
             base_source = "customer_price"
+            customer_conditions = {
+                key: customer_prices[0].get(key)
+                for key in ("deliveryTerms", "transportModel", "paymentTermDays", "minimumQuantity", "validFrom", "validUntil", "sourceReference")
+                if customer_prices[0].get(key) not in (None, "")
+            }
         else:
             try:
                 base_minor = amount_minor(
@@ -240,13 +276,10 @@ class PricingEngine:
             except MoneyError as exc:
                 raise PricingError("Für dieses B2B-Produkt ist kein gültiger Preis hinterlegt") from exc
             base_source = "b2b_standard"
+            customer_conditions = None
         if base_minor <= 0:
             raise PricingError("Für dieses B2B-Produkt ist kein gültiger Preis hinterlegt")
 
-        instant = at or datetime.now(timezone.utc)
-        if not isinstance(instant, datetime) or instant.tzinfo is None:
-            raise PricingError("Preiszeitpunkt benötigt eine Zeitzone")
-        instant = instant.astimezone(timezone.utc)
         candidates = await self.access.pricing_promotions.find({
             "productId": product_id,
             "active": {"$ne": False},
@@ -300,6 +333,7 @@ class PricingEngine:
             price_source=source,
             base_price_source=base_source,
             promotion=promotion_snapshot,
+            commercial_conditions=customer_conditions,
         )
         return product, quote
 
@@ -333,7 +367,7 @@ class PricingEngine:
         subscription_discount_percent: int | None = None,
     ) -> tuple[dict[str, Any], PriceQuote]:
         qty = _quantity(quantity)
-        product = await self._product(product_id)
+        product = await self._b2c_product(product_id)
         try:
             base_minor = amount_minor(product, "b2cPrice", expected_currency=self.currency)
         except MoneyError as exc:

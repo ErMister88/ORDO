@@ -1,6 +1,6 @@
 """Pydantic request/response models."""
 from pydantic import BaseModel, Field
-from typing import Annotated, List, Optional, Literal
+from typing import Annotated, Any, List, Optional, Literal
 from datetime import datetime
 
 from .core import Role
@@ -49,6 +49,9 @@ class OrderItemIn(BaseModel):
 class OrderCreate(BaseModel):
     companyId: str
     items: List[OrderItemIn]
+    paymentMethod: Literal["bank_transfer", "cash", "card", "other"] = "bank_transfer"
+    createInvoice: bool = False
+    paymentTermDays: Optional[Annotated[int, Field(ge=0, le=3650)]] = None
 
 
 class DecisionIn(BaseModel):
@@ -61,9 +64,22 @@ class DiscountTier(BaseModel):
 
 
 class ProductIn(BaseModel):
-    brand: str
+    sku: str = ""
+    ean: str = ""
+    brand: str = ""
     name: str
-    unit: str = "kg"
+    categoryId: Optional[str] = None
+    unit: str = "piece"
+    packagingUnit: str = ""
+    packageQuantity: Optional[PositiveQuantity] = None
+    contentAmount: Optional[PositiveQuantity] = None
+    contentUnit: str = ""
+    minimumOrderQuantity: Optional[PositiveQuantity] = None
+    b2bAvailable: bool = True
+    b2cAvailable: bool = False
+    directPurchaseAllowed: bool = True
+    financingRequestAllowed: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
     standardPrice: PositiveMoneyValue
     salesFloor: PositiveMoneyValue
     absoluteFloor: PositiveMoneyValue
@@ -82,6 +98,14 @@ class CustomerPriceIn(BaseModel):
     companyId: str
     productId: str
     price: PositiveMoneyValue
+    deliveryTerms: str = ""
+    transportModel: str = ""
+    paymentTermDays: Optional[Annotated[int, Field(ge=0, le=3650)]] = None
+    minimumQuantity: Optional[PositiveQuantity] = None
+    validFrom: Optional[datetime] = None
+    validUntil: Optional[datetime] = None
+    internalNote: str = ""
+    sourceReference: str = ""
 
 
 class B2BPromotionIn(BaseModel):
@@ -175,10 +199,11 @@ class ShopAddressIn(BaseModel):
 
 
 class MachineIn(BaseModel):
+    productId: Optional[str] = None
     name: str
     description: str = ""
     imageUrl: str = ""
-    price: PositiveMoneyValue  # Bruttopreis inkl. 19% MwSt (Kauf)
+    price: PositiveMoneyValue  # Configured gross B2C purchase price.
     taxRate: PercentValue
     active: bool = True
 
@@ -193,6 +218,14 @@ class MachineRequestIn(BaseModel):
     contactName: str = ""
     contactEmail: str = ""
     contactPhone: str = ""
+    message: str = ""
+
+
+class EquipmentFinancingRequestIn(BaseModel):
+    productId: str
+    name: str
+    email: str
+    phone: str = ""
     message: str = ""
 
 
@@ -240,6 +273,62 @@ class CompanyUpdateIn(BaseModel):
     assignedSalesRepId: Optional[str] = None
     orderCycleDays: int = 30
     active: bool = True
+    status: Optional[Literal["Lead", "Interessent", "Neukunde", "Aktiv", "Inaktiv", "Gesperrt"]] = None
+
+
+class CompanyCreateIn(BaseModel):
+    name: str
+    city: str = ""
+    email: str = ""
+    phone: str = ""
+    vatId: str = ""
+    status: Literal["Lead", "Interessent", "Neukunde", "Aktiv", "Inaktiv", "Gesperrt"] = "Lead"
+    assignedSalesRepId: Optional[str] = None
+    orderCycleDays: Annotated[int, Field(ge=1, le=3650)] = 30
+
+
+class CompanyAssignmentIn(BaseModel):
+    assignedSalesRepId: Optional[str] = None
+
+
+class CompanyStatusIn(BaseModel):
+    status: Literal["Lead", "Interessent", "Neukunde", "Aktiv", "Inaktiv", "Gesperrt"]
+
+
+class CustomerActivityIn(BaseModel):
+    type: Literal["call", "visit", "note", "service"]
+    title: str
+    note: str = ""
+    internal: bool = True
+    occurredAt: Optional[datetime] = None
+
+
+class CustomerTaskIn(BaseModel):
+    title: str
+    note: str = ""
+    dueAt: datetime
+    assignedUserId: Optional[str] = None
+
+
+class CustomerTaskUpdateIn(BaseModel):
+    status: Literal["open", "completed", "cancelled"]
+
+
+class ProductCategoryIn(BaseModel):
+    name: str
+    description: str = ""
+    active: bool = True
+
+
+class InvoiceStatusIn(BaseModel):
+    status: Literal["Entwurf", "Offen", "Teilweise bezahlt", "Bezahlt", "Überfällig", "Storniert"]
+
+
+class PaymentRecordIn(BaseModel):
+    amount: PositiveMoneyValue
+    method: Literal["bank_transfer", "cash", "card", "other"]
+    paidAt: Optional[datetime] = None
+    reference: str = ""
 
 
 class CreateUserIn(BaseModel):

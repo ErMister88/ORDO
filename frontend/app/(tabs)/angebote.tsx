@@ -109,12 +109,12 @@ export default function Angebote() {
             ) : (
               visibleOffers.map((o: any) => {
               const comp = o.companySnapshot || compMap[o.companyId];
-              const monthlyDb = o.items.reduce((s: number, it: any) => {
+              const monthlyDb = isAdmin ? o.items.reduce((s: number, it: any) => {
                 return s + (typeof it.costMinor === "number"
                   ? (it.price - it.costMinor / 100) * it.qty
                   : 0);
-              }, 0);
-              const hasHistoricalCost = o.items.every((it: any) => typeof it.costMinor === "number");
+              }, 0) : 0;
+              const hasHistoricalCost = isAdmin && o.items.every((it: any) => typeof it.costMinor === "number");
               return (
                 <Card key={o.id} testID={`offer-${o.id}`}>
                   <View style={styles.offerTop}>
@@ -264,16 +264,17 @@ function CreateOffer({
 
   const state = useMemo(() => {
     if (!product || !parsed) return null;
+    if (!isAdmin) return "server-check";
     if (parsed < product.absoluteFloor) return "invalid";
     if (parsed < product.salesFloor) return "approval";
     return "ok";
-  }, [product, parsed]);
+  }, [product, parsed, isAdmin]);
 
   const db = product && parsed ? (parsed - product.cost) * q : 0;
 
   const addItem = () => {
     if (!product || !parsed || !q) return;
-    if (parsed < product.absoluteFloor) {
+    if (isAdmin && parsed < product.absoluteFloor) {
       setMsg("Position unter absoluter Preisgrenze – nicht zulässig.");
       return;
     }
@@ -285,7 +286,7 @@ function CreateOffer({
 
   const removeItem = (idx: number) => setItems((prev) => prev.filter((_, i) => i !== idx));
 
-  const needsApproval = items.some((it) => {
+  const needsApproval = isAdmin && items.some((it) => {
     const p = products.find((x) => x.id === it.productId);
     return p && it.price < p.salesFloor;
   });
@@ -297,8 +298,8 @@ function CreateOffer({
         termMonths: 48,
         items,
       }),
-    onSuccess: () => {
-      setMsg("Angebot erstellt");
+    onSuccess: (created: any) => {
+      setMsg(created.status === "Freigabe nötig" ? "Angebot erstellt und zur Admin-Freigabe eingereicht." : "Angebot erstellt");
       setItems([]);
       onCreated();
     },
@@ -337,7 +338,7 @@ function CreateOffer({
         <View style={styles.lineList}>
           {items.map((it, idx) => {
             const p = products.find((x) => x.id === it.productId);
-            const below = p && it.price < p.salesFloor;
+            const below = isAdmin && p && it.price < p.salesFloor;
             return (
               <View key={idx} style={styles.lineRow} testID={`offer-line-${idx}`}>
                 <View style={{ flex: 1 }}>
@@ -399,8 +400,8 @@ function CreateOffer({
       </View>
 
       <Muted>
-        Autoritative Basis {baseQuote.data ? euro(baseQuote.data.lines[0].finalUnitPrice) : "nicht verfügbar"} netto · Vertriebslimit {euro(product.salesFloor)} · Grenze{" "}
-        {euro(product.absoluteFloor)}
+        Autoritative Basis {baseQuote.data ? euro(baseQuote.data.lines[0].finalUnitPrice) : "nicht verfügbar"} netto
+        {isAdmin ? ` · Vertriebslimit ${euro(product.salesFloor)} · Grenze ${euro(product.absoluteFloor)}` : " · Der Server prüft erforderliche Preisfreigaben."}
       </Muted>
 
       {parsed && isAdmin ? (
@@ -419,6 +420,9 @@ function CreateOffer({
       )}
       {state === "ok" && (
         <Text style={[styles.hint, { color: colors.success }]}>Direkt freigabefähig.</Text>
+      )}
+      {state === "server-check" && (
+        <Text style={[styles.hint, { color: colors.muted }]}>Die Freigabeprüfung erfolgt beim Erstellen serverseitig.</Text>
       )}
 
       <Pressable

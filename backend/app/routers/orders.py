@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from ..core import api_router, strip_id, next_seq, logger, ORDER_STATUS_FLOW
 from ..audit_service import tenant_audit
+from ..customer_activity import record_customer_activity
 from ..deps import current_user, require_roles, tenant_business_access, visible_company_ids
 from ..models import OrderCreate, OrderStatusIn, OrderItemIn  # noqa: F401
 from ..emailer import send_email, email_shell, company_recipient
@@ -85,6 +86,8 @@ async def create_order(
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
     if not body.items:
         raise HTTPException(status_code=400, detail="Bestellung enthält keine Artikel")
+    if user.get("role") == "customer" and (body.paymentMethod != "bank_transfer" or body.createInvoice):
+        raise HTTPException(status_code=403, detail="Zahlungsart und Rechnungserstellung sind nur für Mitarbeiter verfügbar")
     items = []
     currency = access.context.default_currency
     company = await access.companies.find_one({"id": body.companyId})
@@ -112,6 +115,8 @@ async def create_order(
         "currency": currency,
         "netTotalMinor": items_total_minor(items, currency=currency),
         "snapshotVersion": 1,
+        "paymentMethod": body.paymentMethod,
+        "paymentTermDays": body.paymentTermDays,
         "companySnapshot": {
             "companyId": company["id"],
             "name": company.get("name", ""),
@@ -127,7 +132,18 @@ async def create_order(
         "createdAt": now.isoformat(),
     }
     await access.orders.insert_one(order)
-    return strip_id(redact_internal_snapshot_fields(order))
+    await record_customer_activity(
+        access, company_id=body.companyId, actor=user, activity_type="order_created",
+        title=f"Bestellung {order_no} erstellt", internal=False,
+        reference={"type": "order", "id": order_no},
+    )
+    response = strip_id(redact_internal_snapshot_fields(order))
+    if body.createInvoice:
+        from .billing import create_invoice_record
+        invoice = await create_invoice_record(access, order, user)
+        response["invoice"] = strip_id(redact_internal_snapshot_fields(invoice))
+        response["invoiceId"] = invoice["id"]
+    return response
 
 
 @api_router.get("/orders/{order_id}")

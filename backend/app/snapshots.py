@@ -48,6 +48,9 @@ def redact_internal_snapshot_fields(document: Mapping[str, Any]) -> dict[str, An
     attribution = public.get("salesAttribution")
     if isinstance(attribution, dict):
         attribution.pop("membershipId", None)
+    for payment in public.get("paymentRecords") or []:
+        if isinstance(payment, dict):
+            payment.pop("createdBy", None)
     return public
 
 
@@ -68,9 +71,15 @@ def product_item_snapshot(
         "snapshotVersion": SNAPSHOT_VERSION,
         "productId": product["id"],
         "sku": product.get("sku"),
+        "ean": product.get("ean"),
+        "categoryId": product.get("categoryId"),
         "productName": f"{product.get('brand', '')} {product.get('name', '')}".strip(),
         "description": product.get("description", ""),
         "unit": product.get("unit", "kg"),
+        "packagingUnit": product.get("packagingUnit", ""),
+        "packageQuantity": product.get("packageQuantity"),
+        "contentAmount": product.get("contentAmount"),
+        "contentUnit": product.get("contentUnit", ""),
         "qty": quantity,
         "price": from_minor(unit_price_minor),
         "unitPriceMinor": unit_price_minor,

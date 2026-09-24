@@ -87,7 +87,7 @@ class TestSEC001ProductsAccess:
         prods = r.json()
         assert isinstance(prods, list) and len(prods) >= 1
         # admin must have full pricing visibility on at least one product
-        assert any("cost" in p for p in prods) or True  # cost may be missing on some, ok
+        assert any("cost" in p for p in prods)
 
     def test_customer_no_cost_or_floors(self, base_url, customer_token):
         r = requests.get(f"{base_url}/api/products", headers=hdr(customer_token), timeout=30)
@@ -99,12 +99,14 @@ class TestSEC001ProductsAccess:
             assert "salesFloor" not in p, f"customer leaked salesFloor: {p}"
             assert "absoluteFloor" not in p, f"customer leaked absoluteFloor: {p}"
 
-    def test_sales_no_cost_but_can_see_floors(self, base_url, sales_token):
+    def test_sales_no_cost_or_floors(self, base_url, sales_token):
         r = requests.get(f"{base_url}/api/products", headers=hdr(sales_token), timeout=30)
         assert r.status_code == 200
         prods = r.json()
         for p in prods:
             assert "cost" not in p, f"sales leaked cost: {p}"
+            assert "salesFloor" not in p, f"sales leaked salesFloor: {p}"
+            assert "absoluteFloor" not in p, f"sales leaked absoluteFloor: {p}"
 
 
 # ==============================================================================

@@ -41,6 +41,8 @@ async def create_machine(
     user: Annotated[dict, Depends(require_roles("admin"))],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
 ):
+    if body.productId and not await access.products.find_one({"id": body.productId}):
+        raise HTTPException(status_code=404, detail="Produkt nicht gefunden")
     currency = access.context.default_currency
     doc = {"id": str(uuid.uuid4()),
            "currency": currency, "priceMinor": to_minor(body.price),
@@ -57,6 +59,8 @@ async def update_machine(
     user: Annotated[dict, Depends(require_roles("admin"))],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
 ):
+    if body.productId and not await access.products.find_one({"id": body.productId}):
+        raise HTTPException(status_code=404, detail="Produkt nicht gefunden")
     payload = {**body.model_dump(), "currency": access.context.default_currency,
                "priceMinor": to_minor(body.price)}
     r = await access.machines.update_one({"id": machine_id}, {"$set": payload})
@@ -99,7 +103,18 @@ async def _machine_request_references_visible(
     access: TenantBusinessAccess,
 ) -> bool:
     machine_id = request.get("machineId")
-    if not isinstance(machine_id, str) or not await access.machines.find_one({"id": machine_id}):
+    machine = (
+        await access.machines.find_one({"id": machine_id})
+        if isinstance(machine_id, str)
+        else None
+    )
+    if not machine:
+        return False
+    catalog_product_id = machine.get("productId")
+    if catalog_product_id is not None and (
+        not isinstance(catalog_product_id, str)
+        or not await access.products.find_one({"id": catalog_product_id})
+    ):
         return False
     customer = request.get("customer") or {}
     company_id = customer.get("companyId")
@@ -148,6 +163,7 @@ async def create_machine_request(
     status = "Zahlung offen" if body.type == "kauf" else "Angefragt"
     doc = {
         "id": rid, "machineId": m["id"], "machineName": m["name"],
+        "catalogProductId": m.get("productId"),
         "machineDescription": m.get("description", ""),
         "snapshotVersion": 1,
         "type": body.type, "termMonths": body.termMonths, "message": body.message,
@@ -232,11 +248,13 @@ async def set_machine_terms(
         if not p:
             raise HTTPException(status_code=404, detail="Produkt nicht gefunden")
         coffee_name = f"{p.get('brand', '')} {p.get('name', '')}".strip()
-        # Never bind coffee below the product's absolute floor price.
+        # Keep internal floor details server-side when sales enters a low price.
         floor = p.get("absoluteFloor")
         if body.coffeePricePerKg is not None and floor is not None and to_minor(body.coffeePricePerKg) < amount_minor(p, "absoluteFloor", expected_currency=access.context.default_currency):
-            raise HTTPException(status_code=400,
-                                detail=f"Kaffeepreis darf {floor:.2f} €/kg nicht unterschreiten.")
+            raise HTTPException(
+                status_code=409,
+                detail="Dieser Preis benötigt eine Freigabe durch einen Administrator.",
+            )
 
     terms = {
         "downPayment": body.downPayment, "monthlyRate": body.monthlyRate,

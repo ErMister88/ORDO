@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { View, Text, ScrollView, KeyboardAvoidingView, Platform, Pressable } from "react-native";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { Image } from "expo-image";
 import { Minus, Plus, ImageSquare, CaretDown, Trash } from "phosphor-react-native";
 
@@ -17,11 +17,15 @@ export default function Bestellungen() {
   const { colors } = useTheme();
   const { user } = useAuth();
   const qc = useQueryClient();
-  const companyId = user?.companyId;
+  const params = useLocalSearchParams<{ companyId?: string }>();
+  const isStaff = user?.role === "admin" || user?.role === "sales";
+  const [staffCompanyId, setStaffCompanyId] = useState(params.companyId ?? "");
+  const companyId = isStaff ? staffCompanyId : user?.companyId;
   const router = useRouter();
 
   const orders = useQuery({ queryKey: ["orders"], queryFn: () => apiGet("/orders") });
   const products = useQuery({ queryKey: ["products"], queryFn: () => apiGet("/products") });
+  const companies = useQuery({ queryKey: ["companies"], queryFn: () => apiGet("/companies"), enabled: isStaff });
 
   const prodMap: Record<string, any> = {};
   (products.data ?? []).forEach((p: any) => (prodMap[p.id] = p));
@@ -32,6 +36,9 @@ export default function Bestellungen() {
   const [cart, setCart] = useState<{ productId: string; qty: number }[]>([]);
   const [oSearch, setOSearch] = useState("");
   const [oStatus, setOStatus] = useState("Alle");
+  const [showCompanies, setShowCompanies] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState("bank_transfer");
+  const [createInvoice, setCreateInvoice] = useState(false);
 
   const selProduct = activeProducts.find((p: any) => p.id === selId) ?? activeProducts[0];
 
@@ -64,6 +71,8 @@ export default function Bestellungen() {
       apiPost("/orders", {
         companyId,
         items: cart.map((i) => ({ productId: i.productId, qty: i.qty })),
+        paymentMethod,
+        createInvoice,
       }),
     onSuccess: () => {
       setCart([]);
@@ -76,6 +85,7 @@ export default function Bestellungen() {
       <ScreenHeader title="Bestellungen" subtitle="Nachbestellen & Historie" />
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+          {isStaff ? <Card testID="staff-customer-selection"><SectionTitle>Direktverkauf</SectionTitle><Muted>Kunde auswählen, serverseitig gültige Preise verwenden und optional eine Rechnung erzeugen.</Muted><Pressable testID="staff-company-picker" style={styles.picker} onPress={() => setShowCompanies((value) => !value)}><Text style={styles.optionText}>{(companies.data ?? []).find((company: any) => company.id === companyId)?.name ?? "Kunde auswählen"}</Text><CaretDown size={18} color={colors.muted} /></Pressable>{showCompanies ? (companies.data ?? []).map((company: any) => <Pressable key={company.id} testID={`staff-company-${company.id}`} style={styles.option} onPress={() => { setStaffCompanyId(company.id); setShowCompanies(false); setCart([]); }}><Text style={styles.optionText}>{company.name}</Text></Pressable>) : null}</Card> : null}
           {companyId && selProduct && (
             <Card testID="reorder-card">
               <SectionTitle>Nachbestellen</SectionTitle>
@@ -162,6 +172,7 @@ export default function Bestellungen() {
                     <Text style={styles.totalValue}>{euro(cartTotal)}</Text>
                   </View>
                   {cartQuote.error ? <Text style={{ color: colors.error }}>{(cartQuote.error as Error).message}</Text> : null}
+                  {isStaff ? <><Text style={styles.paymentTitle}>Zahlungsart</Text><View style={styles.paymentRow}>{[["bank_transfer", "Überweisung"], ["cash", "Bar"], ["card", "Karte"], ["other", "Sonstige"]].map(([value, label]) => <Pressable key={value} testID={`payment-${value}`} onPress={() => setPaymentMethod(value)} style={[styles.filterChip, paymentMethod === value && styles.filterChipActive]}><Text style={[styles.filterChipText, paymentMethod === value && styles.filterChipTextActive]}>{label}</Text></Pressable>)}</View><Pressable testID="create-invoice-toggle" onPress={() => setCreateInvoice((value) => !value)} style={[styles.invoiceToggle, createInvoice && styles.invoiceToggleActive]}><Text style={[styles.filterChipText, createInvoice && styles.filterChipTextActive]}>{createInvoice ? "✓ Rechnung wird erstellt" : "+ Rechnung optional erstellen"}</Text></Pressable></> : null}
                   <Button testID="submit-order" title="Bestellung aufgeben" loading={create.isPending || cartQuote.isLoading} disabled={!cartQuote.data} onPress={() => create.mutate()} />
                 </View>
               )}
@@ -275,4 +286,8 @@ const useStyles = makeStyles((c) => ({
   filterChipActive: { backgroundColor: c.brandPrimary },
   filterChipText: { fontSize: 13, fontWeight: "700", color: c.onSurfaceSecondary },
   filterChipTextActive: { color: c.onBrandPrimary },
+  paymentTitle: { color: c.onSurface, fontSize: 13, fontWeight: "800", marginTop: 6 },
+  paymentRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  invoiceToggle: { borderWidth: 1, borderColor: c.border, borderRadius: 10, padding: 11, alignItems: "center" },
+  invoiceToggleActive: { backgroundColor: c.brandPrimary, borderColor: c.brandPrimary },
 }));

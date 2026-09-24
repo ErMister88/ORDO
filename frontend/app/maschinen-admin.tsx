@@ -13,7 +13,7 @@ import { euro } from "@/src/lib/format";
 import { Card, Input, Button, SectionTitle, Muted, EmptyState, StatusBadge, InfoRow } from "@/src/components/ui";
 import { uploadsEnabled } from "@/src/config/features";
 
-const EMPTY = { name: "", description: "", price: "", taxRate: "19", imageUrl: "", active: true };
+const EMPTY = { productId: "", name: "", description: "", price: "", taxRate: "19", imageUrl: "", active: true };
 
 export default function MaschinenAdmin() {
   const styles = useStyles();
@@ -36,7 +36,7 @@ export default function MaschinenAdmin() {
   const startNew = () => { setEditing("new"); setForm({ ...EMPTY }); };
   const startEdit = (m: any) => {
     setEditing(m.id);
-    setForm({ name: m.name, description: m.description ?? "", price: String(m.price), taxRate: String(m.taxRate ?? ""), imageUrl: m.imageUrl ?? "", active: m.active });
+    setForm({ productId: m.productId ?? "", name: m.name, description: m.description ?? "", price: String(m.price), taxRate: String(m.taxRate ?? ""), imageUrl: m.imageUrl ?? "", active: m.active });
   };
 
   const pickImage = async () => {
@@ -62,7 +62,7 @@ export default function MaschinenAdmin() {
 
   const save = useMutation({
     mutationFn: () => {
-      const body = { name: form.name, description: form.description, imageUrl: form.imageUrl, price: num(form.price), taxRate: Math.round(num(form.taxRate)), active: form.active };
+      const body = { productId: form.productId || null, name: form.name, description: form.description, imageUrl: form.imageUrl, price: num(form.price), taxRate: Math.round(num(form.taxRate)), active: form.active };
       return editing === "new" ? apiPost("/machines", body) : apiPut(`/machines/${editing}`, body);
     },
     onSuccess: () => { setEditing(null); qc.invalidateQueries({ queryKey: ["machines"] }); },
@@ -107,6 +107,17 @@ export default function MaschinenAdmin() {
                   <Image source={{ uri: fileUrl(form.imageUrl) }} style={styles.imgPickImg} contentFit="cover" />
                 </View>
               ) : null}
+              <Text style={styles.label}>Universelles Produkt (optional)</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.productLinkRow}>
+                <Pressable onPress={() => set("productId")("")} style={[styles.productLinkChip, !form.productId && styles.productLinkChipActive]}>
+                  <Text style={[styles.productLinkText, !form.productId && styles.productLinkTextActive]}>Keine Verknüpfung</Text>
+                </Pressable>
+                {(products.data ?? []).map((product: any) => (
+                  <Pressable key={product.id} onPress={() => set("productId")(product.id)} style={[styles.productLinkChip, form.productId === product.id && styles.productLinkChipActive]}>
+                    <Text style={[styles.productLinkText, form.productId === product.id && styles.productLinkTextActive]}>{product.brand ? `${product.brand} ` : ""}{product.name}</Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
               <Text style={styles.label}>Name</Text>
               <Input testID="m-name" value={form.name} onChangeText={set("name")} placeholder="z. B. WMF 1500 S+" />
               <Text style={styles.label}>Beschreibung</Text>
@@ -310,6 +321,11 @@ const useStyles = makeStyles((c) => ({
   imgPick: { height: 150, borderRadius: 12, backgroundColor: c.surfaceTertiary, overflow: "hidden", marginTop: 8 },
   imgPickImg: { width: "100%", height: "100%" },
   imgPickPh: { flex: 1, alignItems: "center", justifyContent: "center", gap: 6 },
+  productLinkRow: { gap: 6, paddingVertical: 2 },
+  productLinkChip: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 999, backgroundColor: c.surfaceTertiary, borderWidth: 1, borderColor: c.border },
+  productLinkChipActive: { backgroundColor: c.brandPrimary, borderColor: c.brandPrimary },
+  productLinkText: { fontSize: 12, fontWeight: "700", color: c.onSurfaceSecondary },
+  productLinkTextActive: { color: c.onBrandPrimary },
   switchRow: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 12 },
   checkbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: c.border },
   checkboxOn: { backgroundColor: c.brandPrimary, borderColor: c.brandPrimary },

@@ -105,7 +105,7 @@ export const AGB: LegalSection[] = [
   {
     heading: "§ 3 Preise und Versandkosten",
     body:
-      "Alle Preise verstehen sich inklusive der gesetzlichen Mehrwertsteuer (7% auf Kaffeeprodukte, 19% auf Maschinen). " +
+      "Alle Preise verstehen sich inklusive der für das jeweilige Produkt ausgewiesenen gesetzlichen Mehrwertsteuer. " +
       "Etwaige Versandkosten werden im Warenkorb gesondert ausgewiesen.",
   },
   {

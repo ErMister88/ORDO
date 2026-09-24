@@ -99,7 +99,7 @@ async def shop_products(
     access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
 ):
     prods = await access.products.find(
-        {"active": True, "b2cPrice": {"$gt": 0}}
+        {"active": True, "b2cAvailable": {"$ne": False}, "b2cPrice": {"$gt": 0}}
     ).to_list(1000)
     result = []
     for p in prods:
@@ -108,7 +108,13 @@ async def shop_products(
         except PricingError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         result.append({
-            "id": p["id"], "brand": p["brand"], "name": p["name"], "unit": p.get("unit", "kg"),
+            "id": p["id"], "sku": p.get("sku", ""), "ean": p.get("ean", ""),
+            "brand": p.get("brand", ""), "name": p["name"], "categoryId": p.get("categoryId"),
+            "unit": p.get("unit", "piece"), "packagingUnit": p.get("packagingUnit", ""),
+            "packageQuantity": p.get("packageQuantity"), "contentAmount": p.get("contentAmount"),
+            "contentUnit": p.get("contentUnit", ""), "minimumOrderQuantity": p.get("minimumOrderQuantity"),
+            "directPurchaseAllowed": p.get("directPurchaseAllowed", True),
+            "financingRequestAllowed": p.get("financingRequestAllowed", False),
             "imageUrl": p.get("imageUrl", ""), "description": p.get("description", ""),
             "b2cPrice": quote.public()["baseUnitPrice"],
             "b2cPriceMinor": quote.base_unit_price_minor,

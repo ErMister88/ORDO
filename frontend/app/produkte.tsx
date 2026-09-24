@@ -16,9 +16,21 @@ import { uploadsEnabled } from "@/src/config/features";
 type Tier = { minQty: string; price: string };
 
 type Form = {
+  sku: string;
+  ean: string;
   brand: string;
   name: string;
+  categoryId: string;
   unit: string;
+  packagingUnit: string;
+  packageQuantity: string;
+  contentAmount: string;
+  contentUnit: string;
+  minimumOrderQuantity: string;
+  b2bAvailable: boolean;
+  b2cAvailable: boolean;
+  directPurchaseAllowed: boolean;
+  financingRequestAllowed: boolean;
   standardPrice: string;
   salesFloor: string;
   absoluteFloor: string;
@@ -33,9 +45,21 @@ type Form = {
 };
 
 const EMPTY: Form = {
+  sku: "",
+  ean: "",
   brand: "",
   name: "",
-  unit: "kg",
+  categoryId: "",
+  unit: "piece",
+  packagingUnit: "",
+  packageQuantity: "",
+  contentAmount: "",
+  contentUnit: "",
+  minimumOrderQuantity: "",
+  b2bAvailable: true,
+  b2cAvailable: false,
+  directPurchaseAllowed: true,
+  financingRequestAllowed: false,
   standardPrice: "",
   salesFloor: "",
   absoluteFloor: "",
@@ -57,6 +81,7 @@ export default function Produkte() {
   const qc = useQueryClient();
 
   const products = useQuery({ queryKey: ["products"], queryFn: () => apiGet("/products") });
+  const categories = useQuery({ queryKey: ["product-categories"], queryFn: () => apiGet("/product-categories") });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<Form>(EMPTY);
   const [showForm, setShowForm] = useState(false);
@@ -65,6 +90,9 @@ export default function Produkte() {
   const [uploading, setUploading] = useState(false);
   const [permBlocked, setPermBlocked] = useState(false);
   const [search, setSearch] = useState("");
+  const [showCategories, setShowCategories] = useState(false);
+  const [newCategory, setNewCategory] = useState("");
+  const createCategory = useMutation({ mutationFn: () => apiPost("/product-categories", { name: newCategory }), onSuccess: (category: any) => { qc.invalidateQueries({ queryKey: ["product-categories"] }); setForm((value) => ({ ...value, categoryId: category.id })); setNewCategory(""); } });
 
   const toggleActive = useMutation({
     mutationFn: ({ id, active }: { id: string; active: boolean }) =>
@@ -89,9 +117,21 @@ export default function Produkte() {
   const openEdit = (p: any) => {
     setEditingId(p.id);
     setForm({
-      brand: p.brand,
+      sku: p.sku ?? "",
+      ean: p.ean ?? "",
+      brand: p.brand ?? "",
       name: p.name,
+      categoryId: p.categoryId ?? "",
       unit: p.unit,
+      packagingUnit: p.packagingUnit ?? "",
+      packageQuantity: p.packageQuantity != null ? String(p.packageQuantity) : "",
+      contentAmount: p.contentAmount != null ? String(p.contentAmount) : "",
+      contentUnit: p.contentUnit ?? "",
+      minimumOrderQuantity: p.minimumOrderQuantity != null ? String(p.minimumOrderQuantity) : "",
+      b2bAvailable: p.b2bAvailable !== false,
+      b2cAvailable: p.b2cAvailable !== false && p.b2cPrice != null,
+      directPurchaseAllowed: p.directPurchaseAllowed !== false,
+      financingRequestAllowed: p.financingRequestAllowed === true,
       standardPrice: String(p.standardPrice),
       salesFloor: String(p.salesFloor),
       absoluteFloor: String(p.absoluteFloor),
@@ -163,9 +203,21 @@ export default function Produkte() {
   const save = useMutation({
     mutationFn: () => {
       const body = {
+        sku: form.sku,
+        ean: form.ean,
         brand: form.brand,
         name: form.name,
+        categoryId: form.categoryId || null,
         unit: form.unit,
+        packagingUnit: form.packagingUnit,
+        packageQuantity: form.packageQuantity ? num(form.packageQuantity) : null,
+        contentAmount: form.contentAmount ? num(form.contentAmount) : null,
+        contentUnit: form.contentUnit,
+        minimumOrderQuantity: form.minimumOrderQuantity ? num(form.minimumOrderQuantity) : null,
+        b2bAvailable: form.b2bAvailable,
+        b2cAvailable: form.b2cAvailable,
+        directPurchaseAllowed: form.directPurchaseAllowed,
+        financingRequestAllowed: form.financingRequestAllowed,
         standardPrice: num(form.standardPrice),
         salesFloor: num(form.salesFloor),
         absoluteFloor: num(form.absoluteFloor),
@@ -201,7 +253,7 @@ export default function Produkte() {
   });
 
   const valid =
-    form.brand && form.name && num(form.standardPrice) > 0 && num(form.cost) > 0 && num(form.absoluteFloor) > 0;
+    form.name && form.unit && num(form.standardPrice) > 0 && num(form.cost) >= 0 && num(form.absoluteFloor) > 0;
 
   return (
     <View style={styles.root}>
@@ -265,6 +317,14 @@ export default function Produkte() {
               ) : null}
 
               <View style={styles.row}>
+                <View style={{ flex: 1 }}><Text style={styles.label}>Artikelnummer / SKU</Text><Input testID="p-sku" value={form.sku} onChangeText={set("sku")} placeholder="z. B. ART-1001" /></View>
+                <View style={{ flex: 1 }}><Text style={styles.label}>EAN (optional)</Text><Input testID="p-ean" value={form.ean} onChangeText={set("ean")} placeholder="EAN" /></View>
+              </View>
+              <Text style={styles.label}>Kategorie</Text>
+              <Pressable testID="p-category" style={styles.categoryPicker} onPress={() => setShowCategories((value) => !value)}><Text style={styles.categoryText}>{(categories.data ?? []).find((category: any) => category.id === form.categoryId)?.name ?? "Keine Kategorie"}</Text></Pressable>
+              {showCategories ? <View style={{ gap: 4 }}><Pressable style={styles.categoryOption} onPress={() => { setForm((value) => ({ ...value, categoryId: "" })); setShowCategories(false); }}><Text style={styles.categoryText}>Keine Kategorie</Text></Pressable>{(categories.data ?? []).map((category: any) => <Pressable key={category.id} style={styles.categoryOption} onPress={() => { setForm((value) => ({ ...value, categoryId: category.id })); setShowCategories(false); }}><Text style={styles.categoryText}>{category.name}</Text></Pressable>)}<View style={styles.row}><Input value={newCategory} onChangeText={setNewCategory} placeholder="Neue Kategorie" style={{ flex: 1 }} /><Button title="Anlegen" kind="secondary" disabled={!newCategory.trim()} loading={createCategory.isPending} onPress={() => createCategory.mutate()} /></View></View> : null}
+
+              <View style={styles.row}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.label}>Marke</Text>
                   <Input testID="p-brand" value={form.brand} onChangeText={set("brand")} placeholder="z.B. Gambilongo" />
@@ -276,6 +336,12 @@ export default function Produkte() {
               </View>
               <Text style={styles.label}>Bezeichnung</Text>
               <Input testID="p-name" value={form.name} onChangeText={set("name")} placeholder="z.B. Espresso Bar" />
+
+              <View style={styles.row}><View style={{ flex: 1 }}><Text style={styles.label}>Verpackungseinheit</Text><Input value={form.packagingUnit} onChangeText={set("packagingUnit")} placeholder="z. B. Karton" /></View><View style={{ flex: 1 }}><Text style={styles.label}>Menge je Gebinde</Text><Input value={form.packageQuantity} onChangeText={set("packageQuantity")} keyboardType="decimal-pad" placeholder="z. B. 6" /></View></View>
+              <View style={styles.row}><View style={{ flex: 1 }}><Text style={styles.label}>Inhalt</Text><Input value={form.contentAmount} onChangeText={set("contentAmount")} keyboardType="decimal-pad" placeholder="z. B. 1" /></View><View style={{ flex: 1 }}><Text style={styles.label}>Inhaltseinheit</Text><Input value={form.contentUnit} onChangeText={set("contentUnit")} placeholder="kg, l, Stück" /></View><View style={{ flex: 1 }}><Text style={styles.label}>Mindestmenge</Text><Input value={form.minimumOrderQuantity} onChangeText={set("minimumOrderQuantity")} keyboardType="decimal-pad" /></View></View>
+
+              <Text style={styles.label}>Verfügbarkeit & Aktionen</Text>
+              <View style={styles.toggleGrid}>{[["b2bAvailable", "B2B verfügbar"], ["b2cAvailable", "B2C verfügbar"], ["directPurchaseAllowed", "Direktkauf"], ["financingRequestAllowed", "Finanzierungsanfrage"]].map(([key, label]) => { const field = key as "b2bAvailable" | "b2cAvailable" | "directPurchaseAllowed" | "financingRequestAllowed"; return <Pressable key={key} onPress={() => setForm((value) => ({ ...value, [field]: !value[field] }))} style={[styles.toggle, form[field] && styles.toggleActive]}><Text style={[styles.toggleText, form[field] && styles.toggleTextActive]}>{form[field] ? "✓ " : ""}{label}</Text></Pressable>; })}</View>
 
               <Text style={styles.label}>Beschreibung</Text>
               <Input
@@ -498,6 +564,14 @@ const useStyles = makeStyles((c) => ({
   subtitle: { fontSize: 14, color: c.muted, marginTop: 2 },
   content: { padding: 20, gap: 12, paddingBottom: 32 },
   row: { flexDirection: "row", gap: 12 },
+  categoryPicker: { minHeight: 48, borderRadius: 12, backgroundColor: c.surfaceTertiary, paddingHorizontal: 14, justifyContent: "center" },
+  categoryOption: { minHeight: 42, borderRadius: 10, backgroundColor: c.surfaceTertiary, paddingHorizontal: 14, justifyContent: "center" },
+  categoryText: { color: c.onSurface, fontWeight: "700", fontSize: 14 },
+  toggleGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  toggle: { minHeight: 40, paddingHorizontal: 12, borderRadius: 10, borderWidth: 1, borderColor: c.border, justifyContent: "center", backgroundColor: c.surfaceTertiary },
+  toggleActive: { backgroundColor: c.brandPrimary, borderColor: c.brandPrimary },
+  toggleText: { color: c.onSurfaceSecondary, fontSize: 13, fontWeight: "700" },
+  toggleTextActive: { color: c.onBrandPrimary },
   label: { fontSize: 13, fontWeight: "700", color: c.onSurfaceSecondary, marginTop: 8, marginBottom: 4 },
   textArea: { height: 92, textAlignVertical: "top", paddingTop: 12 },
   err: { color: c.error, fontSize: 14, fontWeight: "600", marginTop: 6 },

@@ -126,13 +126,13 @@ class TestProductRoleHiding:
             assert "salesFloor" in p
             assert "absoluteFloor" in p
 
-    def test_sales_no_cost_but_has_floors(self, api_client, base_url, sales_token):
+    def test_sales_has_no_internal_costs_or_floors(self, api_client, base_url, sales_token):
         r = api_client.get(f"{base_url}/api/products", headers=hdr(sales_token))
         assert r.status_code == 200
         for p in r.json():
             assert "cost" not in p, f"sales unexpectedly sees cost on {p['id']}"
-            assert "salesFloor" in p, f"sales missing salesFloor on {p['id']}"
-            assert "absoluteFloor" in p, f"sales missing absoluteFloor on {p['id']}"
+            assert "salesFloor" not in p, f"sales leaked salesFloor on {p['id']}"
+            assert "absoluteFloor" not in p, f"sales leaked absoluteFloor on {p['id']}"
 
     def test_customer_no_cost_no_floors(self, api_client, base_url, customer_token):
         r = api_client.get(f"{base_url}/api/products", headers=hdr(customer_token))

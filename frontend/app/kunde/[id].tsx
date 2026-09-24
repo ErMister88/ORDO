@@ -21,7 +21,7 @@ export default function KundeDetail() {
   const { user } = useAuth();
   const qc = useQueryClient();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const [tab, setTab] = useState<"uebersicht" | "konditionen" | "vorgaenge" | "rechnungen">("uebersicht");
+  const [tab, setTab] = useState<"uebersicht" | "aktivitaeten" | "konditionen" | "vorgaenge" | "rechnungen">("uebersicht");
   const [editing, setEditing] = useState(false);
   const isAdmin = user?.role === "admin";
 
@@ -33,6 +33,9 @@ export default function KundeDetail() {
   const offers = useQuery({ queryKey: ["offers"], queryFn: () => apiGet("/offers") });
   const contracts = useQuery({ queryKey: ["contracts"], queryFn: () => apiGet("/contracts") });
   const machineRequests = useQuery({ queryKey: ["machine-requests"], queryFn: () => apiGet("/machine-requests") });
+  const activities = useQuery({ queryKey: ["customer-activities", id], queryFn: () => apiGet(`/companies/${id}/activities`) });
+  const tasks = useQuery({ queryKey: ["customer-tasks", id], queryFn: () => apiGet(`/companies/${id}/tasks`) });
+  const salesStaff = useQuery({ queryKey: ["sales-staff"], queryFn: () => apiGet("/staff/sales"), enabled: isAdmin });
   const history = useQuery({
     queryKey: ["price-history", id],
     queryFn: () => apiGet(`/companies/${id}/price-history`),
@@ -136,6 +139,11 @@ export default function KundeDetail() {
             <InfoRow label="USt-ID" value={c.vatId} />
             <InfoRow label="Monatsabsatz" value={`${num(c.monthlyKg)} kg`} />
             <InfoRow label="Bestellzyklus" value={`${num(c.orderCycleDays ?? 30)} Tage`} />
+            <InfoRow label="CRM-Status" value={c.status ?? "Aktiv"} />
+            <InfoRow label="Vertrieb" value={(salesStaff.data ?? []).find((row: any) => row.id === c.assignedSalesRepId)?.name ?? (c.assignedSalesRepId ? "Zugewiesen" : "Kein Vertriebler")} />
+            {(isAdmin || user?.role === "sales") ? (
+              <CustomerControls company={c} salesStaff={salesStaff.data ?? []} isAdmin={isAdmin} onSaved={() => { qc.invalidateQueries({ queryKey: ["company", id] }); qc.invalidateQueries({ queryKey: ["companies"] }); qc.invalidateQueries({ queryKey: ["customer-activities", id] }); }} />
+            ) : null}
             {isAdmin && (
               <Pressable testID="edit-company" style={styles.editBtn} onPress={() => setEditing(true)}>
                 <PencilSimple size={16} color={colors.brandPrimary} weight="bold" />
@@ -158,7 +166,7 @@ export default function KundeDetail() {
         )}
 
         <View style={styles.segment}>
-          {(["uebersicht", "konditionen", "vorgaenge", "rechnungen"] as const).map((t) => (
+          {(["uebersicht", "aktivitaeten", "konditionen", "vorgaenge", "rechnungen"] as const).map((t) => (
             <Pressable
               key={t}
               testID={`segment-${t}`}
@@ -166,7 +174,7 @@ export default function KundeDetail() {
               onPress={() => setTab(t)}
             >
               <Text style={[styles.segText, tab === t && styles.segTextActive]}>
-                {t === "uebersicht" ? "Übersicht" : t === "konditionen" ? "Preise" : t === "vorgaenge" ? "Vorgänge" : "Rechnungen"}
+                {t === "uebersicht" ? "Übersicht" : t === "aktivitaeten" ? "CRM" : t === "konditionen" ? "Preise" : t === "vorgaenge" ? "Vorgänge" : "Rechnungen"}
               </Text>
             </Pressable>
           ))}
@@ -204,6 +212,8 @@ export default function KundeDetail() {
                 </Pressable>
               ))}
           </>
+        ) : tab === "aktivitaeten" ? (
+          <CustomerCRM companyId={id!} activities={activities.data ?? []} tasks={tasks.data ?? []} />
         ) : tab === "konditionen" ? (
           <>
             {isAdmin || user?.role === "sales" ? (
@@ -333,11 +343,21 @@ export default function KundeDetail() {
       </ScrollView>
 
       {(isAdmin || user?.role === "sales") ? <View style={[styles.footer, { paddingBottom: insets.bottom + 12 }]}>
+        <View style={styles.footerActions}>
+        <Button
+          testID="create-order-cta"
+          title="Neue Bestellung"
+          kind="secondary"
+          onPress={() => router.push({ pathname: "/(tabs)/bestellungen", params: { companyId: id } })}
+          style={{ flex: 1 }}
+        />
         <Button
           testID="create-offer-cta"
           title="Neues Angebot erstellen"
           onPress={() => router.push({ pathname: "/(tabs)/angebote", params: { companyId: id } })}
+          style={{ flex: 1 }}
         />
+        </View>
       </View> : null}
     </View>
   );
@@ -378,6 +398,51 @@ function AdminConditions({
   );
 }
 
+const CRM_STATUSES = ["Lead", "Interessent", "Neukunde", "Aktiv", "Inaktiv", "Gesperrt"];
+
+function CustomerControls({ company, salesStaff, isAdmin, onSaved }: { company: any; salesStaff: any[]; isAdmin: boolean; onSaved: () => void }) {
+  const styles = useStyles();
+  const status = useMutation({ mutationFn: (value: string) => apiPut(`/companies/${company.id}/status`, { status: value }), onSuccess: onSaved });
+  const assignment = useMutation({ mutationFn: (value: string | null) => apiPut(`/companies/${company.id}/assignment`, { assignedSalesRepId: value }), onSuccess: onSaved });
+  return (
+    <View style={styles.customerControls}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.controlChips}>
+        {CRM_STATUSES.map((value) => <Pressable key={value} testID={`status-${value}`} onPress={() => status.mutate(value)} style={[styles.controlChip, company.status === value && styles.controlChipActive]}><Text style={[styles.controlChipText, company.status === value && styles.controlChipTextActive]}>{value}</Text></Pressable>)}
+      </ScrollView>
+      {isAdmin ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.controlChips}>
+        <Pressable testID="assign-none" onPress={() => assignment.mutate(null)} style={[styles.controlChip, !company.assignedSalesRepId && styles.controlChipActive]}><Text style={[styles.controlChipText, !company.assignedSalesRepId && styles.controlChipTextActive]}>Kein Vertriebler</Text></Pressable>
+        {salesStaff.map((sales) => <Pressable key={sales.id} testID={`assign-${sales.id}`} onPress={() => assignment.mutate(sales.id)} style={[styles.controlChip, company.assignedSalesRepId === sales.id && styles.controlChipActive]}><Text style={[styles.controlChipText, company.assignedSalesRepId === sales.id && styles.controlChipTextActive]}>{sales.name}</Text></Pressable>)}
+      </ScrollView> : null}
+    </View>
+  );
+}
+
+function CustomerCRM({ companyId, activities, tasks }: { companyId: string; activities: any[]; tasks: any[] }) {
+  const styles = useStyles();
+  const qc = useQueryClient();
+  const [activityTitle, setActivityTitle] = useState("");
+  const [activityNote, setActivityNote] = useState("");
+  const [taskTitle, setTaskTitle] = useState("");
+  const [taskDue, setTaskDue] = useState("");
+  const addActivity = useMutation({
+    mutationFn: () => apiPost(`/companies/${companyId}/activities`, { type: "note", title: activityTitle, note: activityNote, internal: true }),
+    onSuccess: () => { setActivityTitle(""); setActivityNote(""); qc.invalidateQueries({ queryKey: ["customer-activities", companyId] }); },
+  });
+  const addTask = useMutation({
+    mutationFn: () => apiPost(`/companies/${companyId}/tasks`, { title: taskTitle, dueAt: new Date(`${taskDue}T12:00:00`).toISOString() }),
+    onSuccess: () => { setTaskTitle(""); setTaskDue(""); qc.invalidateQueries({ queryKey: ["customer-tasks", companyId] }); },
+  });
+  const finishTask = useMutation({ mutationFn: (taskId: string) => apiPut(`/customer-tasks/${taskId}`, { status: "completed" }), onSuccess: () => qc.invalidateQueries({ queryKey: ["customer-tasks", companyId] }) });
+  return <>
+    <Card><SectionTitle>Aktivität erfassen</SectionTitle><Input testID="activity-title" value={activityTitle} onChangeText={setActivityTitle} placeholder="z. B. Kundengespräch" /><Input testID="activity-note" value={activityNote} onChangeText={setActivityNote} placeholder="Interne Notiz" multiline /><Button title="Aktivität speichern" disabled={!activityTitle.trim()} loading={addActivity.isPending} onPress={() => addActivity.mutate()} /></Card>
+    <Card><SectionTitle>Wiedervorlage</SectionTitle><Input testID="task-title" value={taskTitle} onChangeText={setTaskTitle} placeholder="Aufgabe" /><Input testID="task-due" value={taskDue} onChangeText={setTaskDue} placeholder="YYYY-MM-DD" /><Button title="Aufgabe anlegen" disabled={!taskTitle.trim() || !/^\d{4}-\d{2}-\d{2}$/.test(taskDue)} loading={addTask.isPending} onPress={() => addTask.mutate()} /></Card>
+    <SectionTitle>Offene Aufgaben</SectionTitle>
+    {tasks.filter((task) => task.status === "open").length === 0 ? <EmptyState title="Keine offenen Aufgaben" /> : tasks.filter((task) => task.status === "open").map((task) => <Card key={task.id}><View style={styles.orderTop}><View style={{ flex: 1 }}><Text style={styles.prodTitle}>{task.title}</Text><Muted>Fällig {dateDE(task.dueAt)}</Muted></View><Button title="Erledigt" kind="secondary" onPress={() => finishTask.mutate(task.id)} /></View></Card>)}
+    <SectionTitle>Aktivitäten</SectionTitle>
+    {activities.length === 0 ? <EmptyState title="Noch keine Aktivitäten" /> : activities.map((activity) => <Card key={activity.id}><Text style={styles.prodTitle}>{activity.title}</Text><Muted>{dateDE(activity.occurredAt)} · {activity.createdByName || "System"}</Muted>{activity.note ? <Text style={styles.metaText}>{activity.note}</Text> : null}</Card>)}
+  </>;
+}
+
 function PriceEditorRow({
   product,
   companyId,
@@ -395,6 +460,7 @@ function PriceEditorRow({
   const { colors } = useTheme();
   const [val, setVal] = useState(initial != null ? String(initial) : "");
   const [saved, setSaved] = useState(false);
+  const [feedback, setFeedback] = useState("");
 
   const save = useMutation({
     mutationFn: () =>
@@ -403,15 +469,13 @@ function PriceEditorRow({
         productId: product.id,
         price: Number((val || "").replace(",", ".")),
       }),
-    onSuccess: () => {
-      setSaved(true);
+    onSuccess: (result: any) => {
+      setSaved(!result.approvalRequired);
+      setFeedback(result.approvalRequired ? result.message : "");
       onSaved();
       setTimeout(() => setSaved(false), 1500);
     },
   });
-
-  const parsed = Number((val || "").replace(",", "."));
-  const belowFloor = parsed && parsed < product.absoluteFloor;
 
   return (
     <Card testID={`price-edit-${product.id}`}>
@@ -419,7 +483,7 @@ function PriceEditorRow({
         {product.brand} {product.name}
       </Text>
       <Muted>
-        {quote?.basePriceSource === "customer_price" ? `Aktuell individuell ${euro(quote.finalUnitPrice)}` : `Aktuell B2B-Standard ${euro(quote?.finalUnitPrice ?? product.standardPrice)}`} netto · Grenze {euro(product.absoluteFloor)}
+        {quote?.basePriceSource === "customer_price" ? `Aktuell individuell ${euro(quote.finalUnitPrice)}` : `Aktuell B2B-Standard ${euro(quote?.finalUnitPrice ?? product.standardPrice)}`} netto
       </Muted>
       {quote?.promotion ? <Muted>Temporäre Aktion bis {dateDE(quote.promotion.endsAt)}</Muted> : null}
       <View style={styles.priceRow}>
@@ -433,17 +497,15 @@ function PriceEditorRow({
         />
         <Pressable
           testID={`price-save-${product.id}`}
-          disabled={!!belowFloor || save.isPending}
+          disabled={!Number((val || "").replace(",", ".")) || save.isPending}
           onPress={() => save.mutate()}
-          style={[styles.priceSave, (belowFloor || save.isPending) && { opacity: 0.5 }]}
+          style={[styles.priceSave, save.isPending && { opacity: 0.5 }]}
         >
           <Check size={18} color={colors.onBrandPrimary} weight="bold" />
         </Pressable>
       </View>
       {saved ? <Text style={[styles.savedTxt, { color: colors.success }]}>Gespeichert</Text> : null}
-      {belowFloor ? (
-        <Text style={[styles.savedTxt, { color: colors.error }]}>Unter absoluter Preisgrenze</Text>
-      ) : null}
+      {feedback ? <Text style={[styles.savedTxt, { color: colors.warning }]}>{feedback}</Text> : null}
     </Card>
   );
 }
@@ -561,4 +623,11 @@ const useStyles = makeStyles((c) => ({
     borderTopWidth: 1,
     borderTopColor: c.divider,
   },
+  footerActions: { width: "100%", maxWidth: tokens.layout.narrow, alignSelf: "center", flexDirection: "row", gap: 10 },
+  customerControls: { gap: 8, marginTop: 8 },
+  controlChips: { gap: 6 },
+  controlChip: { borderRadius: 999, backgroundColor: c.surfaceTertiary, borderWidth: 1, borderColor: c.border, paddingHorizontal: 11, paddingVertical: 7 },
+  controlChipActive: { backgroundColor: c.brandPrimary, borderColor: c.brandPrimary },
+  controlChipText: { fontSize: 12, fontWeight: "700", color: c.onSurfaceSecondary },
+  controlChipTextActive: { color: c.onBrandPrimary },
 }));

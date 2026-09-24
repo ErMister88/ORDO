@@ -4,6 +4,7 @@ from typing import Annotated
 from datetime import datetime, timezone
 
 from ..core import api_router, strip_id, next_seq
+from ..customer_activity import record_customer_activity
 from ..deps import require_roles, tenant_business_access, visible_company_ids
 from ..tenant_access import TenantBusinessAccess
 from .invoices import invoice_references_visible
@@ -65,6 +66,41 @@ async def _build_lines(access: TenantBusinessAccess, items):
     )
 
 
+async def create_invoice_record(access: TenantBusinessAccess, order: dict, user: dict) -> dict:
+    """Create the immutable invoice snapshot for an already-authorized order."""
+    lines, net, breakdown, tax_total, gross, net_minor, breakdown_minor, tax_minor_total, gross_minor, currency = await _build_lines(access, order["items"])
+    now = datetime.now(timezone.utc)
+    seq = await next_seq("invoice")
+    inv_no = f"RE-{now.year}-{seq:04d}"
+    payment_term_days = order.get("paymentTermDays")
+    due_date = None
+    if isinstance(payment_term_days, int) and not isinstance(payment_term_days, bool) and payment_term_days >= 0:
+        from datetime import timedelta
+        due_date = (now + timedelta(days=payment_term_days)).date().isoformat()
+    invoice = {
+        "id": inv_no, "companyId": order["companyId"], "orderId": order["id"],
+        "date": now.date().isoformat(), "dueDate": due_date,
+        "paymentMethod": order.get("paymentMethod", "bank_transfer"),
+        "lineItems": lines, "snapshotVersion": 1, "currency": currency,
+        "net": net, "netMinor": net_minor, "taxBreakdown": breakdown,
+        "taxBreakdownMinor": breakdown_minor, "taxTotal": tax_total,
+        "taxTotalMinor": tax_minor_total, "amount": gross, "amountMinor": gross_minor,
+        "paidAmountMinor": 0, "companySnapshot": order.get("companySnapshot"),
+        "salesAttribution": order.get("salesAttribution"), "status": "Offen",
+        "createdBy": user["id"], "createdAt": now.isoformat(),
+    }
+    if not await invoice_references_visible(access, invoice):
+        raise HTTPException(status_code=404, detail="Bestellung nicht gefunden")
+    await access.invoices.insert_one(invoice)
+    await access.orders.update_one({"id": order["id"]}, {"$set": {"invoiceId": inv_no}})
+    await record_customer_activity(
+        access, company_id=order["companyId"], actor=user, activity_type="invoice_created",
+        title=f"Rechnung {inv_no} erstellt", internal=False,
+        reference={"type": "invoice", "id": inv_no},
+    )
+    return invoice
+
+
 @api_router.post("/orders/{order_id}/invoice")
 async def create_invoice_for_order(
     order_id: str,
@@ -79,35 +115,7 @@ async def create_invoice_for_order(
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
     if o.get("invoiceId"):
         raise HTTPException(status_code=400, detail="Für diese Bestellung existiert bereits eine Rechnung")
-    lines, net, breakdown, tax_total, gross, net_minor, breakdown_minor, tax_minor_total, gross_minor, currency = await _build_lines(access, o["items"])
-    now = datetime.now(timezone.utc)
-    seq = await next_seq("invoice")
-    inv_no = f"RE-{now.year}-{seq:04d}"
-    invoice = {
-        "id": inv_no,
-        "companyId": o["companyId"],
-        "orderId": order_id,
-        "date": now.date().isoformat(),
-        "lineItems": lines,
-        "snapshotVersion": 1,
-        "currency": currency,
-        "net": net,
-        "netMinor": net_minor,
-        "taxBreakdown": breakdown,
-        "taxBreakdownMinor": breakdown_minor,
-        "taxTotal": tax_total,
-        "taxTotalMinor": tax_minor_total,
-        "amount": gross,
-        "amountMinor": gross_minor,
-        "companySnapshot": o.get("companySnapshot"),
-        "salesAttribution": o.get("salesAttribution"),
-        "status": "Offen",
-        "createdAt": now.isoformat(),
-    }
-    if not await invoice_references_visible(access, invoice):
-        raise HTTPException(status_code=404, detail="Bestellung nicht gefunden")
-    await access.invoices.insert_one(invoice)
-    await access.orders.update_one({"id": order_id}, {"$set": {"invoiceId": inv_no}})
+    invoice = await create_invoice_record(access, o, user)
     return strip_id(redact_internal_snapshot_fields(invoice))
 
 
