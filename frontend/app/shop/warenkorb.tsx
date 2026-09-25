@@ -27,7 +27,7 @@ import { Card, Input, Button, SectionTitle, Muted } from "@/src/components/ui";
 import { LocalizedText as Text, localizedAlert, useI18n } from "@/src/i18n";
 
 export default function Warenkorb() {
-  useI18n();
+  const { tf } = useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const router = useRouter();
@@ -89,7 +89,7 @@ export default function Warenkorb() {
       const res = await shopApi.validateCode(code);
       if (res.valid) {
         setPromo({ code: code.toUpperCase(), percent: res.percent });
-        setPromoMsg(`${res.percent}% Rabatt aktiviert`);
+        setPromoMsg(tf("{percent}% Rabatt aktiviert", { percent: res.percent }));
       } else {
         setPromo(null);
         setPromoMsg(res.detail || "Code ungültig");
@@ -235,8 +235,11 @@ export default function Warenkorb() {
               <CheckCircle size={40} color={colors.success} weight="fill" />
               <Text style={styles.doneTitle}>Danke für deine Bestellung!</Text>
               <Muted>
-                Bestellnummer {done.id} · Summe {euro(done.total)} ·{" "}
-                {done.paid ? "bezahlt" : "Zahlung wird sicher bestätigt"}
+                {tf("Bestellnummer {id} · Summe {total} · {status}", {
+                  id: done.id,
+                  total: euro(done.total),
+                  status: done.paid ? tf("bezahlt", {}) : tf("Zahlung wird sicher bestätigt", {}),
+                })}
               </Muted>
               {!done.paid && pendingPayment ? (
                 <Button title="Zahlung fortsetzen" loading={busy} onPress={retryPendingPayment} style={{ marginTop: 12 }} />
@@ -257,7 +260,7 @@ export default function Warenkorb() {
                       <Text style={styles.lName} numberOfLines={1}>
                         {l.p.brand} {l.p.name}
                       </Text>
-                      <Muted>{euro(quoteLines[l.productId]?.finalUnitPrice ?? l.p.b2cPrice)} /{l.p.unit} inkl. MwSt.</Muted>
+                      <Muted>{tf("{price} /{unit} inkl. MwSt.", { price: euro(quoteLines[l.productId]?.finalUnitPrice ?? l.p.b2cPrice), unit: l.p.unit })}</Muted>
                     </View>
                     <Pressable testID={`cart-minus-${l.productId}`} style={styles.step} onPress={() => cart.setQty(l.productId, l.qty - 1)} hitSlop={6}>
                       <Minus size={14} color={colors.onSurface} weight="bold" />
@@ -277,7 +280,7 @@ export default function Warenkorb() {
                 </View>
                 {discountPercent > 0 ? (
                   <View style={styles.sumRow}>
-                    <Text style={[styles.sumLabel, { color: colors.success }]}>Rabatt ({discountPercent}%)</Text>
+                    <Text style={[styles.sumLabel, { color: colors.success }]}>{tf("Rabatt ({percent}%)", { percent: discountPercent })}</Text>
                     <Text style={[styles.sumVal, { color: colors.success }]}>-{euro(discount)}</Text>
                   </View>
                 ) : null}
@@ -286,11 +289,11 @@ export default function Warenkorb() {
                   <Text style={styles.sumVal}>{shipping === 0 ? "Gratis" : euro(shipping)}</Text>
                 </View>
                 {shipping > 0 ? (
-                  <Muted>Noch {euro(threshold - discounted)} bis zum Gratis-Versand</Muted>
+                  <Muted>{tf("Noch {amount} bis zum Gratis-Versand", { amount: euro(threshold - discounted) })}</Muted>
                 ) : null}
                 {Object.entries(vatByRate).map(([rate, amt]) => (
                   <View key={rate} style={styles.sumRow}>
-                    <Text style={styles.vatLabel}>inkl. MwSt {rate}%</Text>
+                    <Text style={styles.vatLabel}>{tf("inkl. MwSt {rate}%", { rate })}</Text>
                     <Text style={styles.vatLabel}>{euro(amt as number)}</Text>
                   </View>
                 ))}
@@ -367,7 +370,7 @@ export default function Warenkorb() {
               </Pressable>
 
               {quote.error ? <Text style={{ color: colors.error }}>{(quote.error as Error).message}</Text> : null}
-              <Button testID="shop-checkout" title={`Kostenpflichtig bestellen · ${euro(total)}`} loading={busy || quote.isLoading} disabled={!accepted || !quote.data} onPress={checkout} />
+              <Button testID="shop-checkout" title={tf("Kostenpflichtig bestellen · {total}", { total: euro(total) })} loading={busy || quote.isLoading} disabled={!accepted || !quote.data} onPress={checkout} />
               <Muted>Kartenzahlung über Stripe. Im Vorschaumodus ist die Zahlung noch nicht aktiv.</Muted>
             </>
           )}

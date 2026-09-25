@@ -60,13 +60,21 @@ type I18nContextValue = {
   locale: string;
   setLanguage: (language: SupportedLanguage) => Promise<void>;
   t: (value: string) => string;
+  tf: (value: string, values: Record<string, string | number>) => string;
 };
+
+function interpolate(value: string, replacements: Record<string, string | number>): string {
+  return value.replace(/\{([A-Za-z0-9_]+)\}/g, (match, key: string) => (
+    Object.prototype.hasOwnProperty.call(replacements, key) ? String(replacements[key]) : match
+  ));
+}
 
 const I18nContext = createContext<I18nContextValue>({
   language: "de",
   locale: locales.de,
   setLanguage: async () => undefined,
   t: (value) => value,
+  tf: (value, values) => interpolate(value, values),
 });
 
 export function I18nProvider({ children }: { children: React.ReactNode }) {
@@ -94,6 +102,7 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
     locale: locales[language],
     setLanguage,
     t: (text) => translate(text, language),
+    tf: (text, replacements) => interpolate(translate(text, language), replacements),
   }), [language, setLanguage]);
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;

@@ -20,6 +20,7 @@ import { Card, EmptyState, Muted, Input, Button, PageContainer, LoadingState, Er
 import { LocalizedText as Text, useI18n } from "@/src/i18n";
 
 function NewsletterCard({ percent }: { percent: number }) {
+  const { tf } = useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const [email, setEmail] = useState("");
@@ -57,7 +58,7 @@ function NewsletterCard({ percent }: { percent: number }) {
       ) : done?.code ? (
         <View style={{ alignItems: "center" }}>
           <CheckCircle size={34} color={colors.success} weight="fill" />
-          <Text style={styles.nlTitle}>Willkommen! {done.percent}% Rabatt gesichert</Text>
+          <Text style={styles.nlTitle}>{tf("Willkommen! {percent}% Rabatt gesichert", { percent: done.percent ?? percent })}</Text>
           <Muted style={{ textAlign: "center" }}>Dein Rabattcode – auch per E-Mail verschickt:</Muted>
           <View style={styles.codeBox}>
             <Text style={styles.codeText} selectable testID="newsletter-code">{done.code}</Text>
@@ -68,9 +69,9 @@ function NewsletterCard({ percent }: { percent: number }) {
         <>
           <View style={styles.nlHead}>
             <EnvelopeSimple size={20} color={colors.brandPrimary} weight="bold" />
-            <Text style={styles.nlTitle}>Newsletter & {percent}% Rabatt</Text>
+            <Text style={styles.nlTitle}>{tf("Newsletter & {percent}% Rabatt", { percent })}</Text>
           </View>
-          <Muted>Jetzt anmelden und {percent}% Rabatt auf deine Bestellungen erhalten.</Muted>
+          <Muted>{tf("Jetzt anmelden und {percent}% Rabatt auf deine Bestellungen erhalten.", { percent })}</Muted>
           <Input
             testID="newsletter-email"
             value={email}
@@ -81,7 +82,7 @@ function NewsletterCard({ percent }: { percent: number }) {
             style={{ marginTop: 10 }}
           />
           {err ? <Text style={styles.nlErr}>{err}</Text> : null}
-          <Button testID="newsletter-submit" title={`Anmelden & ${percent}% sichern`} loading={busy} onPress={submit} style={{ marginTop: 10 }} />
+          <Button testID="newsletter-submit" title={tf("Anmelden & {percent}% sichern", { percent })} loading={busy} onPress={submit} style={{ marginTop: 10 }} />
         </>
       )}
     </Card>
@@ -89,7 +90,7 @@ function NewsletterCard({ percent }: { percent: number }) {
 }
 
 export default function Shop() {
-  useI18n();
+  const { tf } = useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const router = useRouter();
@@ -142,7 +143,8 @@ export default function Shop() {
         {settings.data && (
           <View style={styles.banner}>
             <Text style={styles.bannerText}>
-              Gratis-Versand ab {euro(settings.data.freeShippingThreshold)}{settings.data.shippingFee > 0 ? ` · sonst ${euro(settings.data.shippingFee)} Versand` : ""}
+              {tf("Gratis-Versand ab {threshold}", { threshold: euro(settings.data.freeShippingThreshold) })}
+              {settings.data.shippingFee > 0 ? tf(" · sonst {shipping} Versand", { shipping: euro(settings.data.shippingFee) }) : ""}
             </Text>
           </View>
         )}
@@ -174,12 +176,12 @@ export default function Shop() {
                       {euro(p.b2cPrice)}
                       <Text style={styles.perUnit}> /{p.unit}</Text>
                     </Text>
-                    <Text style={styles.vat}>inkl. {p.taxRate}% MwSt</Text>
+                    <Text style={styles.vat}>{tf("inkl. {rate}% MwSt", { rate: p.taxRate })}</Text>
                   </View>
                   {p.stock != null && p.stock <= 0 ? <Text style={styles.soldOut}>Zzt. nicht vorrätig</Text> : null}
                   {p.b2cTiers?.length ? (
                     <View style={styles.tiers}>
-                      {p.b2cTiers.slice(0, 3).map((tier: any) => <Text key={tier.minQty} style={styles.tier}>ab {tier.minQty} · {euro(tier.price)}/{p.unit}</Text>)}
+                      {p.b2cTiers.slice(0, 3).map((tier: any) => <Text key={tier.minQty} style={styles.tier}>{tf("ab {quantity} · {price}/{unit}", { quantity: tier.minQty, price: euro(tier.price), unit: p.unit })}</Text>)}
                     </View>
                   ) : null}
                 </View>

@@ -59,3 +59,21 @@ test("translation catalog contains UI copy only and no tenant payload", () => {
   const serialized = JSON.stringify(catalog);
   assert.doesNotMatch(serialized, /tnt_ss_0001|companyId|customerId|passwordHash|authVersion/);
 });
+
+test("dynamic shop translations preserve every interpolation placeholder", () => {
+  const dynamicKeys = [
+    "Gratis-Versand ab {threshold}",
+    "Newsletter & {percent}% Rabatt",
+    "inkl. {rate}% MwSt",
+    "ab {quantity} · {price}/{unit}",
+    "Bestellnummer {id} · Summe {total} · {status}",
+    "Kostenpflichtig bestellen · {total}",
+  ];
+  const placeholders = (value) => [...value.matchAll(/\{([A-Za-z0-9_]+)\}/g)].map((match) => match[1]).sort();
+
+  for (const source of dynamicKeys) {
+    assert.ok(catalog[source], `missing dynamic translation: ${source}`);
+    assert.deepEqual(placeholders(catalog[source].it), placeholders(source), `Italian placeholders differ for ${source}`);
+    assert.deepEqual(placeholders(catalog[source].en), placeholders(source), `English placeholders differ for ${source}`);
+  }
+});

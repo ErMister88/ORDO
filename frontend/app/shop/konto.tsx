@@ -23,7 +23,7 @@ import { LocalizedText as Text, localizedAlert, useI18n } from "@/src/i18n";
 const EMPTY_ADDR = { name: "", phone: "", street: "", zip: "", city: "" };
 
 export default function ShopKonto() {
-  useI18n();
+  const { tf } = useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const router = useRouter();
@@ -142,7 +142,7 @@ export default function ShopKonto() {
           {!ready ? null : user ? (
             <>
               <Card>
-                <Text style={styles.hi}>Hallo {user.name} 👋</Text>
+                <Text style={styles.hi}>{tf("Hallo {name} 👋", { name: user.name })}</Text>
                 <Muted>{user.email}</Muted>
                 <Pressable testID="shop-logout" style={styles.logout} onPress={onLogout}>
                   <SignOut size={16} color={colors.error} weight="bold" />
@@ -192,7 +192,7 @@ export default function ShopKonto() {
                     </View>
 
                     {o.discount > 0 ? (
-                      <InfoRow label={`Rabatt${o.discountPercent ? ` (${o.discountPercent}%)` : ""}`} value={`-${euro(o.discount)}`} />
+                      <InfoRow label={o.discountPercent ? tf("Rabatt ({percent}%)", { percent: o.discountPercent }) : tf("Rabatt", {})} value={`-${euro(o.discount)}`} />
                     ) : null}
                     <InfoRow label="Versand" value={o.shipping === 0 ? "Gratis" : euro(o.shipping)} />
                     {o.taxTotal != null ? <InfoRow label="enthaltene MwSt" value={euro(o.taxTotal)} /> : null}
@@ -223,7 +223,7 @@ export default function ShopKonto() {
                     {o.trackingNumber ? (
                       <Pressable testID={`track-${o.id}`} style={styles.trackBtn} onPress={() => track && Linking.openURL(track)}>
                         <Truck size={16} color={colors.brandPrimary} weight="bold" />
-                        <Text style={styles.trackText}>Sendung verfolgen · {o.trackingNumber}</Text>
+                        <Text style={styles.trackText}>{tf("Sendung verfolgen · {trackingNumber}", { trackingNumber: o.trackingNumber })}</Text>
                       </Pressable>
                     ) : null}
 
@@ -236,7 +236,7 @@ export default function ShopKonto() {
                         <Text style={styles.addrText}>{o.customer.name}</Text>
                         <Text style={styles.addrText}>{o.customer.street}</Text>
                         <Text style={styles.addrText}>{o.customer.zip} {o.customer.city}</Text>
-                        {o.customer.phone ? <Text style={styles.addrText}>Tel. {o.customer.phone}</Text> : null}
+                        {o.customer.phone ? <Text style={styles.addrText}>{tf("Tel. {phone}", { phone: o.customer.phone })}</Text> : null}
                       </View>
                     ) : null}
 
