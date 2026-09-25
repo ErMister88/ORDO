@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { View, Text, FlatList, Pressable } from "react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { MagnifyingGlass, ArrowRight, MapPin, Plus, X } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
@@ -22,23 +22,30 @@ export default function Kunden() {
   const styles = useStyles();
   const { colors } = useTheme();
   const router = useRouter();
+  const params = useLocalSearchParams<{ new?: string }>();
   const { user } = useAuth();
   const qc = useQueryClient();
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState("alle");
   const [salesFilter, setSalesFilter] = useState("all");
-  const [showCreate, setShowCreate] = useState(false);
+  const [showCreate, setShowCreate] = useState(params.new === "1");
   const [createError, setCreateError] = useState("");
-  const [form, setForm] = useState({ name: "", city: "", email: "", phone: "", vatId: "", status: "Lead" });
+  const emptyForm = { name: "", street: "", houseNumber: "", zip: "", city: "", country: "Deutschland", email: "", phone: "", vatId: "", taxNumber: "", status: "Lead", contactFirstName: "", contactLastName: "", contactTitle: "", contactPhone: "", contactMobile: "", contactEmail: "" };
+  const [form, setForm] = useState(emptyForm);
 
   const { data, isLoading } = useQuery({ queryKey: ["companies"], queryFn: () => apiGet("/companies") });
   const salesStaff = useQuery({ queryKey: ["sales-staff"], queryFn: () => apiGet("/staff/sales"), enabled: user?.role === "admin" });
   const createCustomer = useMutation({
-    mutationFn: () => apiPost("/companies", form),
+    mutationFn: () => apiPost("/companies", {
+      name: form.name, city: form.city, email: form.email, phone: form.phone, vatId: form.vatId,
+      taxNumber: form.taxNumber, status: form.status,
+      primaryAddress: { type: "main", label: "Hauptadresse", street: form.street, houseNumber: form.houseNumber, zip: form.zip, city: form.city, country: form.country, active: true },
+      ...(form.contactFirstName && form.contactLastName && form.contactEmail ? { primaryContact: { firstName: form.contactFirstName, lastName: form.contactLastName, title: form.contactTitle, phone: form.contactPhone, mobile: form.contactMobile, email: form.contactEmail, active: true } } : {}),
+    }),
     onSuccess: (company: any) => {
       qc.invalidateQueries({ queryKey: ["companies"] });
       setShowCreate(false);
-      setForm({ name: "", city: "", email: "", phone: "", vatId: "", status: "Lead" });
+      setForm(emptyForm);
       router.push(`/kunde/${company.id}`);
     },
     onError: (error: Error) => setCreateError(error.message),
@@ -110,17 +117,32 @@ export default function Kunden() {
           <Card testID="create-customer-form" style={styles.createCard}>
             <Text style={styles.formTitle}>B2B-Kunde anlegen</Text>
             <Input testID="customer-name" value={form.name} onChangeText={(name) => setForm((value) => ({ ...value, name }))} placeholder="Unternehmen" />
+            <Text style={styles.formHint}>Hauptadresse</Text>
             <View style={styles.formRow}>
-              <Input testID="customer-city" value={form.city} onChangeText={(city) => setForm((value) => ({ ...value, city }))} placeholder="Ort" style={styles.formInput} />
-              <Input testID="customer-vat" value={form.vatId} onChangeText={(vatId) => setForm((value) => ({ ...value, vatId }))} placeholder="USt-ID" style={styles.formInput} />
+              <Input value={form.street} onChangeText={(street) => setForm((value) => ({ ...value, street }))} placeholder="Straße" style={styles.formInput} />
+              <Input value={form.houseNumber} onChangeText={(houseNumber) => setForm((value) => ({ ...value, houseNumber }))} placeholder="Hausnummer" style={{ flex: 0.45 }} />
             </View>
+            <View style={styles.formRow}>
+              <Input value={form.zip} onChangeText={(zip) => setForm((value) => ({ ...value, zip }))} placeholder="PLZ" style={{ flex: 0.45 }} />
+              <Input testID="customer-city" value={form.city} onChangeText={(city) => setForm((value) => ({ ...value, city }))} placeholder="Ort" style={styles.formInput} />
+            </View>
+            <Input value={form.country} onChangeText={(country) => setForm((value) => ({ ...value, country }))} placeholder="Land" />
             <View style={styles.formRow}>
               <Input testID="customer-email" value={form.email} onChangeText={(email) => setForm((value) => ({ ...value, email }))} placeholder="E-Mail" autoCapitalize="none" style={styles.formInput} />
               <Input testID="customer-phone" value={form.phone} onChangeText={(phone) => setForm((value) => ({ ...value, phone }))} placeholder="Telefon" style={styles.formInput} />
             </View>
+            <View style={styles.formRow}>
+              <Input testID="customer-vat" value={form.vatId} onChangeText={(vatId) => setForm((value) => ({ ...value, vatId }))} placeholder="USt-ID (optional)" style={styles.formInput} />
+              <Input value={form.taxNumber} onChangeText={(taxNumber) => setForm((value) => ({ ...value, taxNumber }))} placeholder="Steuernummer (optional)" style={styles.formInput} />
+            </View>
+            <Text style={styles.formHint}>Erster Ansprechpartner (optional)</Text>
+            <View style={styles.formRow}><Input value={form.contactFirstName} onChangeText={(contactFirstName) => setForm((value) => ({ ...value, contactFirstName }))} placeholder="Vorname" style={styles.formInput} /><Input value={form.contactLastName} onChangeText={(contactLastName) => setForm((value) => ({ ...value, contactLastName }))} placeholder="Nachname" style={styles.formInput} /></View>
+            <Input value={form.contactTitle} onChangeText={(contactTitle) => setForm((value) => ({ ...value, contactTitle }))} placeholder="Funktion / Rolle" />
+            <View style={styles.formRow}><Input value={form.contactPhone} onChangeText={(contactPhone) => setForm((value) => ({ ...value, contactPhone }))} placeholder="Telefon" style={styles.formInput} /><Input value={form.contactMobile} onChangeText={(contactMobile) => setForm((value) => ({ ...value, contactMobile }))} placeholder="Mobil" style={styles.formInput} /></View>
+            <Input value={form.contactEmail} onChangeText={(contactEmail) => setForm((value) => ({ ...value, contactEmail }))} placeholder="E-Mail Ansprechpartner" autoCapitalize="none" />
             <Text style={styles.formHint}>{user?.role === "sales" ? "Sie werden automatisch als zuständiger Vertrieb eingetragen." : "Der Kunde startet ohne Vertriebszuordnung."}</Text>
             {createError ? <Text style={styles.formError}>{createError}</Text> : null}
-            <Button title="Kunde anlegen" loading={createCustomer.isPending} disabled={!form.name.trim()} onPress={() => { setCreateError(""); createCustomer.mutate(); }} />
+            <Button title="Kunde anlegen" loading={createCustomer.isPending} disabled={!form.name.trim() || !form.street.trim() || !form.zip.trim() || !form.city.trim()} onPress={() => { setCreateError(""); createCustomer.mutate(); }} />
           </Card>
         ) : null}
         ListEmptyComponent={

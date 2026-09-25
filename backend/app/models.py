@@ -32,6 +32,7 @@ class OfferItemIn(BaseModel):
     productId: str
     qty: PositiveQuantity
     price: PositiveMoneyValue
+    approvalId: Optional[str] = None
 
 
 class OfferCreate(BaseModel):
@@ -39,6 +40,8 @@ class OfferCreate(BaseModel):
     items: List[OfferItemIn]
     termMonths: int = 48
     reason: Optional[str] = ""
+    billingAddressId: Optional[str] = None
+    deliveryAddressId: Optional[str] = None
 
 
 class OrderItemIn(BaseModel):
@@ -52,6 +55,8 @@ class OrderCreate(BaseModel):
     paymentMethod: Literal["bank_transfer", "cash", "card", "other"] = "bank_transfer"
     createInvoice: bool = False
     paymentTermDays: Optional[Annotated[int, Field(ge=0, le=3650)]] = None
+    billingAddressId: Optional[str] = None
+    deliveryAddressId: Optional[str] = None
 
 
 class DecisionIn(BaseModel):
@@ -69,6 +74,7 @@ class ProductIn(BaseModel):
     brand: str = ""
     name: str
     categoryId: Optional[str] = None
+    collectionIds: List[str] = Field(default_factory=list)
     unit: str = "piece"
     packagingUnit: str = ""
     packageQuantity: Optional[PositiveQuantity] = None
@@ -140,6 +146,14 @@ class ShopSettingsIn(BaseModel):
     newsletterDiscountPercent: PercentValue
     newsletterDiscountEnabled: bool = True
     subscriptionDiscountPercent: Optional[PercentValue] = None
+
+
+class ShopCollectionIn(BaseModel):
+    name: str
+    description: str = ""
+    imageUrl: str = ""
+    sortOrder: int = 0
+    active: bool = True
 
 
 class ShopCustomerIn(BaseModel):
@@ -264,12 +278,34 @@ class NewCompanyIn(BaseModel):
     phone: str = ""
 
 
+class CustomerAddressIn(BaseModel):
+    type: Literal["main", "billing", "shipping"]
+    label: str = ""
+    street: str
+    houseNumber: str = ""
+    zip: str
+    city: str
+    country: str = "DE"
+    active: bool = True
+
+
+class CustomerContactIn(BaseModel):
+    firstName: str
+    lastName: str
+    title: str = ""
+    phone: str = ""
+    mobile: str = ""
+    email: str
+    active: bool = True
+
+
 class CompanyUpdateIn(BaseModel):
     name: str
     city: str = ""
     email: str = ""
     phone: str = ""
     vatId: str = ""
+    taxNumber: str = ""
     assignedSalesRepId: Optional[str] = None
     orderCycleDays: int = 30
     active: bool = True
@@ -282,9 +318,17 @@ class CompanyCreateIn(BaseModel):
     email: str = ""
     phone: str = ""
     vatId: str = ""
+    taxNumber: str = ""
     status: Literal["Lead", "Interessent", "Neukunde", "Aktiv", "Inaktiv", "Gesperrt"] = "Lead"
     assignedSalesRepId: Optional[str] = None
     orderCycleDays: Annotated[int, Field(ge=1, le=3650)] = 30
+    primaryAddress: Optional[CustomerAddressIn] = None
+    primaryContact: Optional[CustomerContactIn] = None
+
+
+class PriceApprovalDecisionIn(BaseModel):
+    note: str = ""
+    persistence: Literal["one_time", "customer_price"] = "customer_price"
 
 
 class CompanyAssignmentIn(BaseModel):

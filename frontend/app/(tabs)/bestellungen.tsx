@@ -17,7 +17,7 @@ export default function Bestellungen() {
   const { colors } = useTheme();
   const { user } = useAuth();
   const qc = useQueryClient();
-  const params = useLocalSearchParams<{ companyId?: string }>();
+  const params = useLocalSearchParams<{ companyId?: string; productId?: string; qty?: string; createInvoice?: string }>();
   const isStaff = user?.role === "admin" || user?.role === "sales";
   const [staffCompanyId, setStaffCompanyId] = useState(params.companyId ?? "");
   const companyId = isStaff ? staffCompanyId : user?.companyId;
@@ -26,19 +26,25 @@ export default function Bestellungen() {
   const orders = useQuery({ queryKey: ["orders"], queryFn: () => apiGet("/orders") });
   const products = useQuery({ queryKey: ["products"], queryFn: () => apiGet("/products") });
   const companies = useQuery({ queryKey: ["companies"], queryFn: () => apiGet("/companies"), enabled: isStaff });
+  const addresses = useQuery({ queryKey: ["customer-addresses", companyId], queryFn: () => apiGet(`/companies/${companyId}/addresses`), enabled: Boolean(companyId) });
 
   const prodMap: Record<string, any> = {};
   (products.data ?? []).forEach((p: any) => (prodMap[p.id] = p));
   const activeProducts = (products.data ?? []).filter((p: any) => p.active !== false);
-  const [selId, setSelId] = useState<string>("");
-  const [qty, setQty] = useState(18);
+  const [selId, setSelId] = useState<string>(params.productId ?? "");
+  const [qty, setQty] = useState(() => {
+    const parsed = Number(params.qty);
+    return parsed > 0 ? parsed : 18;
+  });
   const [showProd, setShowProd] = useState(false);
   const [cart, setCart] = useState<{ productId: string; qty: number }[]>([]);
   const [oSearch, setOSearch] = useState("");
   const [oStatus, setOStatus] = useState("Alle");
   const [showCompanies, setShowCompanies] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState("bank_transfer");
-  const [createInvoice, setCreateInvoice] = useState(false);
+  const [createInvoice, setCreateInvoice] = useState(params.createInvoice === "1");
+  const [billingAddressId, setBillingAddressId] = useState("");
+  const [deliveryAddressId, setDeliveryAddressId] = useState("");
 
   const selProduct = activeProducts.find((p: any) => p.id === selId) ?? activeProducts[0];
 
@@ -73,6 +79,8 @@ export default function Bestellungen() {
         items: cart.map((i) => ({ productId: i.productId, qty: i.qty })),
         paymentMethod,
         createInvoice,
+        billingAddressId: billingAddressId || null,
+        deliveryAddressId: deliveryAddressId || null,
       }),
     onSuccess: () => {
       setCart([]);
@@ -86,6 +94,7 @@ export default function Bestellungen() {
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           {isStaff ? <Card testID="staff-customer-selection"><SectionTitle>Direktverkauf</SectionTitle><Muted>Kunde auswählen, serverseitig gültige Preise verwenden und optional eine Rechnung erzeugen.</Muted><Pressable testID="staff-company-picker" style={styles.picker} onPress={() => setShowCompanies((value) => !value)}><Text style={styles.optionText}>{(companies.data ?? []).find((company: any) => company.id === companyId)?.name ?? "Kunde auswählen"}</Text><CaretDown size={18} color={colors.muted} /></Pressable>{showCompanies ? (companies.data ?? []).map((company: any) => <Pressable key={company.id} testID={`staff-company-${company.id}`} style={styles.option} onPress={() => { setStaffCompanyId(company.id); setShowCompanies(false); setCart([]); }}><Text style={styles.optionText}>{company.name}</Text></Pressable>) : null}</Card> : null}
+          {companyId && (addresses.data ?? []).length > 0 ? <Card><SectionTitle>Dokumentadressen</SectionTitle><Muted>Rechnungs- und Lieferadresse werden als unveränderlicher Snapshot gespeichert.</Muted><Text style={styles.fieldLabel}>Rechnungsadresse</Text><View style={styles.addressChips}>{(addresses.data ?? []).filter((row: any) => row.type === "billing" || row.type === "main").map((row: any) => <Pressable key={row.id} onPress={() => setBillingAddressId(row.id)} style={[styles.addressChip, billingAddressId === row.id && styles.addressChipActive]}><Text style={[styles.addressChipText, billingAddressId === row.id && styles.addressChipTextActive]}>{row.label || `${row.street} ${row.houseNumber}`}</Text></Pressable>)}</View><Text style={styles.fieldLabel}>Lieferadresse</Text><View style={styles.addressChips}>{(addresses.data ?? []).filter((row: any) => row.type === "shipping" || row.type === "main").map((row: any) => <Pressable key={row.id} onPress={() => setDeliveryAddressId(row.id)} style={[styles.addressChip, deliveryAddressId === row.id && styles.addressChipActive]}><Text style={[styles.addressChipText, deliveryAddressId === row.id && styles.addressChipTextActive]}>{row.label || `${row.street} ${row.houseNumber}`}</Text></Pressable>)}</View></Card> : null}
           {companyId && selProduct && (
             <Card testID="reorder-card">
               <SectionTitle>Nachbestellen</SectionTitle>
@@ -287,6 +296,12 @@ const useStyles = makeStyles((c) => ({
   filterChipText: { fontSize: 13, fontWeight: "700", color: c.onSurfaceSecondary },
   filterChipTextActive: { color: c.onBrandPrimary },
   paymentTitle: { color: c.onSurface, fontSize: 13, fontWeight: "800", marginTop: 6 },
+  fieldLabel: { color: c.onSurfaceSecondary, fontSize: 13, fontWeight: "800", marginTop: 8 },
+  addressChips: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 5 },
+  addressChip: { borderWidth: 1, borderColor: c.border, borderRadius: 999, paddingHorizontal: 11, paddingVertical: 7 },
+  addressChipActive: { backgroundColor: c.brandPrimary, borderColor: c.brandPrimary },
+  addressChipText: { color: c.onSurfaceSecondary, fontSize: 12, fontWeight: "700" },
+  addressChipTextActive: { color: c.onBrandPrimary },
   paymentRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   invoiceToggle: { borderWidth: 1, borderColor: c.border, borderRadius: 10, padding: 11, alignItems: "center" },
   invoiceToggleActive: { backgroundColor: c.brandPrimary, borderColor: c.brandPrimary },

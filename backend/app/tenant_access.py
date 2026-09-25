@@ -13,6 +13,8 @@ TENANT_SCOPED_BUSINESS_COLLECTIONS = frozenset({
     "companies",
     "contracts",
     "customer_activities",
+    "customer_addresses",
+    "customer_contacts",
     "customer_prices",
     "customer_tasks",
     "equipment_requests",
@@ -30,6 +32,7 @@ TENANT_SCOPED_BUSINESS_COLLECTIONS = frozenset({
     "push_registrations",
     "settings",
     "shop_orders",
+    "shop_collections",
     "subscriptions",
     "tenant_memberships",
     "uploads",
@@ -124,6 +127,19 @@ class TenantScopedCollection:
             **kwargs,
         )
 
+    async def find_one_and_update(
+        self,
+        query: Mapping[str, Any],
+        update: Mapping[str, Any],
+        *args,
+        **kwargs,
+    ):
+        payload = deepcopy(dict(update))
+        _validate_update(payload)
+        return await self._collection.find_one_and_update(
+            self._filter(query), payload, *args, **kwargs
+        )
+
     async def delete_one(self, query: Mapping[str, Any], *args, **kwargs):
         return await self._collection.delete_one(self._filter(query), *args, **kwargs)
 
@@ -140,6 +156,8 @@ class TenantBusinessAccess:
         self.companies = TenantScopedCollection(database, "companies", context)
         self.contracts = TenantScopedCollection(database, "contracts", context)
         self.customer_activities = TenantScopedCollection(database, "customer_activities", context)
+        self.customer_addresses = TenantScopedCollection(database, "customer_addresses", context)
+        self.customer_contacts = TenantScopedCollection(database, "customer_contacts", context)
         self.customer_tasks = TenantScopedCollection(database, "customer_tasks", context)
         self.equipment_requests = TenantScopedCollection(database, "equipment_requests", context)
         self.products = TenantScopedCollection(database, "products", context)
@@ -157,6 +175,7 @@ class TenantBusinessAccess:
         self.push_registrations = TenantScopedCollection(database, "push_registrations", context)
         self.settings = TenantScopedCollection(database, "settings", context)
         self.shop_orders = TenantScopedCollection(database, "shop_orders", context)
+        self.shop_collections = TenantScopedCollection(database, "shop_collections", context)
         self.subscriptions = TenantScopedCollection(database, "subscriptions", context)
         self.tenant_memberships = TenantScopedCollection(database, "tenant_memberships", context)
         self.uploads = TenantScopedCollection(database, "uploads", context)

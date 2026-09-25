@@ -131,7 +131,7 @@ def test_full_chain_dry_run_is_sequential_and_source_is_unchanged():
 
     report = runner(db).run(dry_run=True).as_dict()
 
-    assert [item["version"] for item in report["plannedMigrations"]] == [1, 2, 6, 3, 4, 5, 7]
+    assert [item["version"] for item in report["plannedMigrations"]] == [1, 2, 6, 3, 4, 5, 7, 8]
     bridge_plan = next(item for item in report["plannedMigrations"] if item["version"] == 6)
     assert bridge_plan["expectedChanges"]["totalDocumentsToBackfill"] == 46
     assert bridge_plan["simulatedResult"]["totalDocumentsBackfilled"] == 46
@@ -149,7 +149,7 @@ def test_full_chain_real_migration_backfills_and_verifies_legacy_fixture():
 
     report = runner(db).run().as_dict()
 
-    assert [item["version"] for item in report["executedMigrations"]] == [1, 2, 6, 3, 4, 5, 7]
+    assert [item["version"] for item in report["executedMigrations"]] == [1, 2, 6, 3, 4, 5, 7, 8]
     assert db.tenants.count_documents({"id": SS, "slug": bridge.SS_TENANT_SLUG, "status": "active"}) == 1
     for collection in bridge.BUSINESS_COLLECTIONS:
         assert db[collection].count_documents({
@@ -362,9 +362,9 @@ def test_bridge_can_resume_after_interrupted_partial_business_writes():
 def test_registry_dependency_order_is_explicit_and_checksums_of_v1_to_v5_are_stable():
     migrations = get_migrations()
 
-    assert [migration.version for migration in migrations] == [1, 2, 6, 3, 4, 5, 7]
+    assert [migration.version for migration in migrations] == [1, 2, 6, 3, 4, 5, 7, 8]
     assert {migration.version: migration.depends_on for migration in migrations} == {
-        1: (), 2: (1,), 6: (2,), 3: (6,), 4: (3,), 5: (4,), 7: (5,),
+        1: (), 2: (1,), 6: (2,), 3: (6,), 4: (3,), 5: (4,), 7: (5,), 8: (7,),
     }
     assert {migration.version: migration.checksum for migration in migrations if migration.version <= 5} == {
         1: "5afb4663dec625f7e02a188a5d3a9c7f42276c2fa18d804b7d4fef7eca1f9548",

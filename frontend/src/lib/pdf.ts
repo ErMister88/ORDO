@@ -7,6 +7,21 @@ import { COMPANY } from "@/src/legal";
 const BRAND = "#0B1B3D";
 const ACCENT = "#1D3B8E";
 
+function html(value: unknown): string {
+  return String(value ?? "").replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[character] ?? character));
+}
+
+function addressText(address?: any): string {
+  if (!address) return "";
+  return [
+    `${html(address.street)} ${html(address.houseNumber)}`.trim(),
+    `${html(address.zip)} ${html(address.city)}`.trim(),
+    html(address.country),
+  ].filter(Boolean).join("<br/>");
+}
+
 function wrap(title: string, inner: string): string {
   return `
   <html><head><meta charset="utf-8"/>
@@ -176,6 +191,7 @@ function shopWrap(title: string, inner: string): string {
 
 export async function shareOfferPdf(offer: any, company: any, products: Record<string, any>) {
   company = offer.companySnapshot || company;
+  const address = offer.billingAddressSnapshot || offer.deliveryAddressSnapshot;
   const rows = offer.items
     .map((i: any) => {
       const p = products[i.productId];
@@ -196,7 +212,7 @@ export async function shareOfferPdf(offer: any, company: any, products: Record<s
     <span class="badge">${offer.status}</span>
     <div class="box" style="margin-top:16px;">
       <strong>${company?.name ?? ""}</strong><br/>
-      <span class="muted">${company?.city ?? ""} · USt-ID: ${company?.vatId ?? "-"}</span>
+      <span class="muted">${addressText(address) || company?.city || ""}<br/>USt-ID: ${company?.vatId ?? "-"}</span>
     </div>
     <table>
       <tr><th>Produkt</th><th class="right">Menge/Monat</th><th class="right">Preis/kg</th><th class="right">Summe/Monat</th></tr>
@@ -228,13 +244,14 @@ function taxSummary(breakdown: Record<string, number>): string {
 
 export async function shareInvoicePdf(invoice: any, company: any) {
   company = invoice.companySnapshot || company;
+  const address = invoice.billingAddressSnapshot || invoice.deliveryAddressSnapshot;
   if (invoice.lineItems && invoice.lineItems.length) {
     const inner = `
       <h1>Rechnung ${invoice.id}</h1>
       <span class="badge">${invoice.status}</span>
       <div class="box" style="margin-top:16px;">
         <strong>${company?.name ?? "Kunde"}</strong><br/>
-        <span class="muted">${company?.city ?? ""} · USt-ID: ${company?.vatId ?? "-"}</span>
+        <span class="muted">${addressText(address) || company?.city || ""}<br/>USt-ID: ${company?.vatId ?? "-"}</span>
       </div>
       <table>
         <tr><th>Position</th><th class="right">Menge</th><th class="right">Preis</th><th class="right">MwSt</th><th class="right">Netto</th></tr>
@@ -252,7 +269,7 @@ export async function shareInvoicePdf(invoice: any, company: any) {
     <span class="badge">${invoice.status}</span>
     <div class="box" style="margin-top:16px;">
       <strong>${company?.name ?? "Kunde"}</strong><br/>
-      <span class="muted">${company?.city ?? ""} · USt-ID: ${company?.vatId ?? "-"}</span>
+      <span class="muted">${addressText(address) || company?.city || ""}<br/>USt-ID: ${company?.vatId ?? "-"}</span>
     </div>
     <table>
       <tr><th>Beschreibung</th><th class="right">Betrag</th></tr>

@@ -110,6 +110,7 @@ async def shop_products(
         result.append({
             "id": p["id"], "sku": p.get("sku", ""), "ean": p.get("ean", ""),
             "brand": p.get("brand", ""), "name": p["name"], "categoryId": p.get("categoryId"),
+            "collectionIds": p.get("collectionIds", []),
             "unit": p.get("unit", "piece"), "packagingUnit": p.get("packagingUnit", ""),
             "packageQuantity": p.get("packageQuantity"), "contentAmount": p.get("contentAmount"),
             "contentUnit": p.get("contentUnit", ""), "minimumOrderQuantity": p.get("minimumOrderQuantity"),

@@ -2,7 +2,7 @@ import { useCallback, useState } from "react";
 import { View, Text, ScrollView, RefreshControl, Pressable, useWindowDimensions } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
-import { SignOut, Warning, ArrowRight, Coffee, Package, UsersThree, FileText, Receipt, Storefront } from "phosphor-react-native";
+import { SignOut, Warning, ArrowRight, Coffee, Package, UsersThree, FileText, Receipt, Storefront, Plus } from "phosphor-react-native";
 
 import { makeStyles, tokens, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
@@ -22,6 +22,7 @@ export default function Dashboard() {
     queryKey: ["dashboard", period],
     queryFn: () => apiGet(`/dashboard?period=${period}`),
   });
+  const salesStaff = useQuery({ queryKey: ["sales-staff"], queryFn: () => apiGet("/staff/sales"), enabled: user?.role === "admin" });
 
   const onSignOut = useCallback(async () => {
     await signOut();
@@ -38,6 +39,7 @@ export default function Dashboard() {
         subtitle={`${user?.name} · ${roleLabel}`}
         right={
           <View style={styles.headerBtns}>
+            {(user?.role === "admin" || user?.role === "sales") && <HeaderButton onPress={() => router.push("/(tabs)/kunden?new=1")} testID="mobile-new-button"><Plus size={20} color={colors.onSurfaceSecondary} weight="bold" /></HeaderButton>}
             {user?.role === "admin" && (
               <HeaderButton onPress={() => router.push("/produkte")} testID="products-button">
                 <Package size={20} color={colors.onSurfaceSecondary} weight="bold" />
@@ -72,9 +74,11 @@ export default function Dashboard() {
         ) : (
           <StaffDash
             data={data}
+            salesNames={Object.fromEntries((salesStaff.data ?? []).map((row: any) => [row.id, row.name]))}
             period={period}
             onPeriod={setPeriod}
-            onCustomer={(id: string) => router.push(`/kunde/${id}`)}
+            onCustomer={(id: string) => router.push({ pathname: "/kunde/[id]", params: { id, period } })}
+            onSales={(id: string) => router.push({ pathname: "/vertrieb/[id]", params: { id, period } })}
             onApprovals={() => router.push("/(tabs)/angebote")}
             onActivity={(row: any) => row.companyId ? router.push(`/kunde/${row.companyId}`) : undefined}
           />
@@ -87,14 +91,18 @@ export default function Dashboard() {
 
 function StaffDash({
   data,
+  salesNames,
   onCustomer,
+  onSales,
   onApprovals,
   onActivity,
   period,
   onPeriod,
 }: {
   data: any;
+  salesNames: Record<string, string>;
   onCustomer: (id: string) => void;
+  onSales: (id: string) => void;
   onApprovals: () => void;
   onActivity: (row: any) => void;
   period: string;
@@ -202,7 +210,7 @@ function StaffDash({
           </Card>
         </>
       )}
-      {data.topSalesReps ? <><SectionTitle>Top Vertrieb</SectionTitle><Card style={{ padding: 0, overflow: "hidden" }}>{data.topSalesReps.length === 0 ? <Muted style={{ padding: 16 }}>Im gewählten Zeitraum liegen keine zugeordneten Bestellungen vor.</Muted> : data.topSalesReps.map((row: any, index: number) => <View key={row.userId} style={[styles.rankingRow, index > 0 && styles.activityBorder]}><Text style={styles.rank}>{index + 1}</Text><View style={{ flex: 1 }}><Text style={styles.activityTitle}>{row.name}</Text><Text style={styles.activityMeta}>{row.orders} Bestellungen · {row.activeCustomers} aktive Kunden</Text></View><View style={{ alignItems: "flex-end" }}><Text style={styles.activityTitle}>{euro(row.revenue)}</Text>{row.marginDataComplete ? <Text style={styles.activityMeta}>DB {euro(row.margin)}</Text> : <Text style={styles.activityMeta}>DB nicht vollständig</Text>}</View></View>)}</Card></> : null}
+      {data.topSalesReps ? <><SectionTitle>Top Vertrieb</SectionTitle><Card style={{ padding: 0, overflow: "hidden" }}>{data.topSalesReps.length === 0 ? <Muted style={{ padding: 16 }}>Im gewählten Zeitraum liegen keine zugeordneten Bestellungen vor.</Muted> : data.topSalesReps.map((row: any, index: number) => <Pressable key={row.userId} onPress={() => onSales(row.userId)} style={[styles.rankingRow, index > 0 && styles.activityBorder]}><Text style={styles.rank}>{index + 1}</Text><View style={{ flex: 1 }}><Text style={styles.activityTitle}>{salesNames[row.userId] || row.name}</Text><Text style={styles.activityMeta}>{row.orders} Bestellungen · {row.activeCustomers} aktive Kunden</Text></View><View style={{ alignItems: "flex-end" }}><Text style={styles.activityTitle}>{euro(row.revenue)}</Text>{row.marginDataComplete ? <Text style={styles.activityMeta}>DB {euro(row.margin)}</Text> : <Text style={styles.activityMeta}>DB nicht vollständig</Text>}</View><ArrowRight size={16} color={colors.muted} /></Pressable>)}</Card></> : null}
       {data.topCustomers?.length ? <><SectionTitle>Top Kunden</SectionTitle><Card style={{ padding: 0, overflow: "hidden" }}>{data.topCustomers.map((row: any, index: number) => <Pressable key={row.companyId} onPress={() => onCustomer(row.companyId)} style={[styles.rankingRow, index > 0 && styles.activityBorder]}><Text style={styles.rank}>{index + 1}</Text><View style={{ flex: 1 }}><Text style={styles.activityTitle}>{row.name}</Text><Text style={styles.activityMeta}>{row.orders} Bestellungen · Menge {num(row.quantity)}</Text></View><Text style={styles.activityTitle}>{euro(row.revenue)}</Text><ArrowRight size={16} color={colors.muted} /></Pressable>)}</Card></> : null}
       {data.managementAlerts?.length ? <><SectionTitle>Handlungsbedarf</SectionTitle><Card>{data.managementAlerts.slice(0, 10).map((alert: any) => <Pressable key={`${alert.type}-${alert.id}`} onPress={() => alert.companyId ? onCustomer(alert.companyId) : undefined} style={styles.systemRow}><Warning size={17} color={colors.warning} /><Text style={styles.systemText}>{alert.type === "invoice_overdue" ? `Rechnung ${alert.id} ist überfällig` : alert.title}</Text></Pressable>)}</Card></> : null}
     </>

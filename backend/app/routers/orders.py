@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from ..core import api_router, strip_id, next_seq, logger, ORDER_STATUS_FLOW
 from ..audit_service import tenant_audit
 from ..customer_activity import record_customer_activity
+from ..customer_master import company_snapshot, resolve_address_snapshot
 from ..deps import current_user, require_roles, tenant_business_access, visible_company_ids
 from ..models import OrderCreate, OrderStatusIn, OrderItemIn  # noqa: F401
 from ..emailer import send_email, email_shell, company_recipient
@@ -117,17 +118,18 @@ async def create_order(
         "snapshotVersion": 1,
         "paymentMethod": body.paymentMethod,
         "paymentTermDays": body.paymentTermDays,
-        "companySnapshot": {
-            "companyId": company["id"],
-            "name": company.get("name", ""),
-            "email": company.get("email", ""),
-            "vatId": company.get("vatId", ""),
-            "city": company.get("city", ""),
-        },
+        "companySnapshot": company_snapshot(company),
+        "billingAddressSnapshot": await resolve_address_snapshot(
+            access, body.companyId, body.billingAddressId, preferred_type="billing"
+        ),
+        "deliveryAddressSnapshot": await resolve_address_snapshot(
+            access, body.companyId, body.deliveryAddressId, preferred_type="shipping"
+        ),
         "salesAttribution": {
             "actorUserId": user["id"], "actorName": user.get("name", ""),
             "actorRole": user.get("role"), "membershipId": access.context.membership_id,
             "salesRepId": company.get("assignedSalesRepId"),
+            "salesRepName": company.get("assignedSalesRepName", ""),
         },
         "createdAt": now.isoformat(),
     }

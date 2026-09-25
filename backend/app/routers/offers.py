@@ -3,9 +3,11 @@ from html import escape
 from fastapi import Depends, HTTPException
 from typing import Annotated
 from datetime import datetime, timezone
+from pymongo import ReturnDocument
 
 from ..core import api_router, strip_id, next_seq, logger
 from ..audit_service import tenant_audit
+from ..customer_master import company_snapshot, resolve_address_snapshot
 from ..deps import current_user, require_roles, tenant_business_access, visible_company_ids
 from ..models import OfferCreate, DecisionIn, AcceptOfferIn
 from ..emailer import send_email, email_shell, company_recipient, items_html
@@ -58,7 +60,9 @@ async def create_offer(
     needs_approval = False
     currency = access.context.default_currency
     snapshots = []
+    approvals_to_consume = []
     for it in body.items:
+        approved_once = False
         try:
             prod, base_quote = await PricingEngine(access).quote_b2b(
                 body.companyId, it.productId, it.qty
@@ -66,6 +70,24 @@ async def create_offer(
         except PricingError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         offer_minor = to_minor(it.price)
+        if it.approvalId:
+            approval_filter = {
+                "id": it.approvalId, "status": "approved", "persistence": "one_time",
+                "companyId": body.companyId, "productId": it.productId,
+                "currency": currency,
+                "consumedAt": {"$exists": False},
+            }
+            if user.get("role") == "sales":
+                approval_filter["requestedBy"] = user["id"]
+            approval = await access.price_approvals.find_one(approval_filter)
+            if not approval:
+                raise HTTPException(status_code=409, detail="Preisfreigabe ist nicht verfügbar")
+            approved_quantity = approval.get("quantity")
+            if approved_quantity is not None and it.qty < approved_quantity:
+                raise HTTPException(status_code=409, detail="Preisfreigabe ist für diese Menge nicht verfügbar")
+            offer_minor = approval["requestedPriceMinor"]
+            approvals_to_consume.append(approval["id"])
+            approved_once = True
         if offer_minor < amount_minor(prod, "absoluteFloor", expected_currency=currency):
             detail = (
                 "Preis unter absoluter Grenze – nicht zulässig"
@@ -73,7 +95,7 @@ async def create_offer(
                 else "Dieser Preis benötigt eine Freigabe durch einen Administrator."
             )
             raise HTTPException(status_code=409, detail=detail)
-        if offer_minor < amount_minor(prod, "salesFloor", expected_currency=currency):
+        if not approved_once and offer_minor < amount_minor(prod, "salesFloor", expected_currency=currency):
             needs_approval = True
         snapshot = product_item_snapshot(
             prod,
@@ -105,17 +127,43 @@ async def create_offer(
             "actorUserId": user["id"], "actorName": user.get("name", ""),
             "actorRole": user.get("role"), "membershipId": access.context.membership_id,
             "salesRepId": company.get("assignedSalesRepId"),
+            "salesRepName": company.get("assignedSalesRepName", ""),
         },
-        "companySnapshot": {
-            "companyId": company["id"], "name": company.get("name", ""),
-            "email": company.get("email", ""), "vatId": company.get("vatId", ""),
-            "city": company.get("city", ""),
-        },
+        "companySnapshot": company_snapshot(company),
+        "billingAddressSnapshot": await resolve_address_snapshot(
+            access, body.companyId, body.billingAddressId, preferred_type="billing"
+        ),
+        "deliveryAddressSnapshot": await resolve_address_snapshot(
+            access, body.companyId, body.deliveryAddressId, preferred_type="shipping"
+        ),
         "reason": body.reason or ("Preis unter Vertriebslimit" if needs_approval else ""),
         "termMonths": body.termMonths,
         "createdAt": now.isoformat(),
     }
-    await access.offers.insert_one(offer)
+    claimed_approvals = []
+    for approval_id in approvals_to_consume:
+        claimed = await access.price_approvals.find_one_and_update(
+            {"id": approval_id, "status": "approved", "consumedAt": {"$exists": False}},
+            {"$set": {"consumedAt": now.isoformat(), "consumedByOfferId": offer_no}},
+            return_document=ReturnDocument.AFTER,
+        )
+        if not claimed:
+            for claimed_id in claimed_approvals:
+                await access.price_approvals.update_one(
+                    {"id": claimed_id, "consumedByOfferId": offer_no},
+                    {"$unset": {"consumedAt": "", "consumedByOfferId": ""}},
+                )
+            raise HTTPException(status_code=409, detail="Preisfreigabe wurde bereits verwendet")
+        claimed_approvals.append(approval_id)
+    try:
+        await access.offers.insert_one(offer)
+    except Exception:
+        for approval_id in claimed_approvals:
+            await access.price_approvals.update_one(
+                {"id": approval_id, "consumedByOfferId": offer_no},
+                {"$unset": {"consumedAt": "", "consumedByOfferId": ""}},
+            )
+        raise
     return _offer_response(offer, user)
 
 
@@ -194,6 +242,8 @@ async def accept_offer(
         "snapshotVersion": 1,
         "salesAttribution": o.get("salesAttribution") or {"actorUserId": o.get("createdBy")},
         "companySnapshot": o.get("companySnapshot"),
+        "billingAddressSnapshot": o.get("billingAddressSnapshot"),
+        "deliveryAddressSnapshot": o.get("deliveryAddressSnapshot"),
         "fromOffer": offer_id,
         "customerNote": (body.note or "").strip(),
         "createdAt": now.isoformat(),

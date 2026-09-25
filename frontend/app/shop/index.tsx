@@ -92,15 +92,15 @@ export default function Shop() {
   const desktop = width >= tokens.layout.tablet;
   const products = useQuery({ queryKey: ["shop-products"], queryFn: () => apiGet("/shop/products") });
   const settings = useQuery({ queryKey: ["shop-settings"], queryFn: () => apiGet("/shop/settings") });
-  const categories = useQuery({ queryKey: ["shop-categories"], queryFn: () => apiGet("/shop/categories") });
-  const [categoryId, setCategoryId] = useState<string | null>(null);
+  const collections = useQuery({ queryKey: ["shop-collections"], queryFn: () => apiGet("/shop/collections") });
+  const [collectionId, setCollectionId] = useState<string | null>(null);
   const [financeProductId, setFinanceProductId] = useState<string | null>(null);
   const [finance, setFinance] = useState({ name: "", email: "", phone: "", message: "" });
   const financing = useMutation({
     mutationFn: () => apiPost("/shop/equipment-requests", { productId: financeProductId, ...finance }),
     onSuccess: () => { setFinanceProductId(null); setFinance({ name: "", email: "", phone: "", message: "" }); },
   });
-  const visibleProducts = (products.data ?? []).filter((product: any) => !categoryId || product.categoryId === categoryId);
+  const visibleProducts = (products.data ?? []).filter((product: any) => !collectionId || (product.collectionIds ?? []).includes(collectionId));
 
   return (
     <View style={styles.root}>
@@ -135,14 +135,14 @@ export default function Shop() {
         {settings.data && (
           <View style={styles.banner}>
             <Text style={styles.bannerText}>
-              Gratis-Versand ab {euro(settings.data.freeShippingThreshold)} · sonst {euro(settings.data.shippingFee)} Versand
+              Gratis-Versand ab {euro(settings.data.freeShippingThreshold)}{settings.data.shippingFee > 0 ? ` · sonst ${euro(settings.data.shippingFee)} Versand` : ""}
             </Text>
           </View>
         )}
         {settings.data?.newsletterDiscountEnabled ? (
           <NewsletterCard percent={settings.data?.newsletterDiscountPercent ?? 10} />
         ) : null}
-        {(categories.data ?? []).length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryRow}><Pressable onPress={() => setCategoryId(null)} style={[styles.categoryChip, !categoryId && styles.categoryChipActive]}><Text style={[styles.categoryText, !categoryId && styles.categoryTextActive]}>Alle</Text></Pressable>{(categories.data ?? []).map((category: any) => <Pressable key={category.id} onPress={() => setCategoryId(category.id)} style={[styles.categoryChip, categoryId === category.id && styles.categoryChipActive]}><Text style={[styles.categoryText, categoryId === category.id && styles.categoryTextActive]}>{category.name}</Text></Pressable>)}</ScrollView> : null}
+        {(collections.data ?? []).length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryRow}><Pressable onPress={() => setCollectionId(null)} style={[styles.categoryChip, !collectionId && styles.categoryChipActive]}><Text style={[styles.categoryText, !collectionId && styles.categoryTextActive]}>Alle</Text></Pressable>{(collections.data ?? []).map((collection: any) => <Pressable key={collection.id} onPress={() => setCollectionId(collection.id)} style={[styles.categoryChip, collectionId === collection.id && styles.categoryChipActive]}><Text style={[styles.categoryText, collectionId === collection.id && styles.categoryTextActive]}>{collection.name}</Text></Pressable>)}</ScrollView> : null}
         {products.isLoading ? <LoadingState label="Produkte werden geladen…" /> : products.isError ? <ErrorState onRetry={() => products.refetch()} /> : (products.data ?? []).length === 0 ? (
           <EmptyState title="Noch keine Produkte" subtitle="Der Shop wird gerade bestückt" />
         ) : (

@@ -7,22 +7,22 @@ test("admin may open all internal route classes directly", () => {
   for (const path of [
     "/",
     "/produkte", "/benutzer", "/abos", "/audit", "/shop-admin", "/maschinen-admin",
-    "/kunden", "/kunde/c1", "/auswertungen", "/angebote", "/bestellungen",
+    "/kunden", "/kunde/c1", "/auswertungen", "/katalog", "/vertrieb/u1", "/angebote", "/bestellungen",
     "/bestellung/B-1", "/mehr", "/maschinen", "/passwort-aendern",
   ]) assert.equal(canAccessRoute(path, "admin"), true, path);
 });
 
 test("sales direct URLs allow staff workflows and reject admin-only routes", () => {
-  for (const path of ["/kunden", "/kunde/c1", "/angebote", "/bestellungen", "/auswertungen", "/maschinen"])
+  for (const path of ["/kunden", "/kunde/c1", "/katalog", "/angebote", "/bestellungen", "/auswertungen", "/maschinen"])
     assert.equal(canAccessRoute(path, "sales"), true, path);
-  for (const path of ["/benutzer", "/produkte", "/abos", "/audit", "/shop-admin", "/maschinen-admin"])
+  for (const path of ["/benutzer", "/produkte", "/abos", "/audit", "/shop-admin", "/maschinen-admin", "/vertrieb/u1"])
     assert.equal(canAccessRoute(path, "sales"), false, path);
 });
 
 test("B2B customer direct URLs allow only customer workflows", () => {
   for (const path of ["/angebote", "/bestellungen", "/bestellung/B-1", "/mehr", "/maschinen"])
     assert.equal(canAccessRoute(path, "customer"), true, path);
-  for (const path of ["/produkte", "/benutzer", "/kunden", "/kunde/c2", "/auswertungen", "/shop-admin"])
+  for (const path of ["/produkte", "/benutzer", "/kunden", "/kunde/c2", "/katalog", "/vertrieb/u1", "/auswertungen", "/shop-admin"])
     assert.equal(canAccessRoute(path, "customer"), false, path);
 });
 

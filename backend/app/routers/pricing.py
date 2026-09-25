@@ -4,12 +4,13 @@ from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import Depends, HTTPException
+from pymongo import ReturnDocument
 
 from ..audit_service import tenant_audit
 from ..core import api_router, strip_id
 from ..customer_activity import record_customer_activity
 from ..deps import current_user, require_roles, tenant_business_access, visible_company_ids
-from ..models import B2BPromotionIn, CustomerPriceIn, PricingQuoteIn
+from ..models import B2BPromotionIn, CustomerPriceIn, PriceApprovalDecisionIn, PricingQuoteIn
 from ..money import MoneyError, amount_minor, from_minor, require_minor, to_minor
 from ..pricing_engine import PricingEngine, PricingError
 from ..tenant_access import TenantBusinessAccess
@@ -150,6 +151,7 @@ async def upsert_customer_price(
                 "companyId": body.companyId, "productId": body.productId,
                 "requestedPriceMinor": to_minor(body.price), "currency": access.context.default_currency,
                 "conditions": _conditions(body, include_internal=False),
+                "quantity": body.minimumQuantity,
                 "status": "pending", "requestedBy": user["id"], "createdAt": now,
             }
             await access.price_approvals.insert_one(approval)
@@ -162,23 +164,120 @@ async def upsert_customer_price(
 @api_router.get("/pricing/approvals")
 async def list_price_approvals(user: Annotated[dict, Depends(require_roles("admin"))], access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)]):
     rows = await access.price_approvals.find({"status": "pending"}).sort("createdAt", -1).to_list(1000)
-    return [strip_id(row) for row in rows]
+    result = []
+    for row in rows:
+        company = await access.companies.find_one({"id": row.get("companyId")})
+        product = await access.products.find_one({"id": row.get("productId")})
+        if not company or not product:
+            continue
+        public = strip_id(row)
+        public.update({
+            "companyName": company.get("name", ""),
+            "productName": f"{product.get('brand', '')} {product.get('name', '')}".strip(),
+            "basePriceMinor": amount_minor(product, "standardPrice", expected_currency=access.context.default_currency),
+            "approvalFloorMinor": amount_minor(product, "salesFloor", expected_currency=access.context.default_currency),
+            "absoluteFloorMinor": amount_minor(product, "absoluteFloor", expected_currency=access.context.default_currency),
+            "costMinor": product.get("costMinor"),
+            "internalNote": (row.get("conditions") or {}).get("internalNote", ""),
+        })
+        result.append(public)
+    return result
+
+
+@api_router.get("/pricing/approvals/mine")
+async def list_my_price_approvals(
+    user: Annotated[dict, Depends(require_roles("sales"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    rows = await access.price_approvals.find({
+        "requestedBy": user["id"], "status": "approved", "persistence": "one_time",
+        "consumedAt": {"$exists": False},
+    }).sort("decidedAt", -1).to_list(1000)
+    return [{
+        "id": row["id"], "companyId": row["companyId"], "productId": row["productId"],
+        "requestedPriceMinor": row["requestedPriceMinor"], "currency": row["currency"],
+        "quantity": row.get("quantity"), "conditions": row.get("conditions") or {},
+        "decidedAt": row.get("decidedAt"),
+    } for row in rows]
 
 
 @api_router.post("/pricing/approvals/{approval_id}/approve")
 async def approve_price(approval_id: str, user: Annotated[dict, Depends(require_roles("admin"))], access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)]):
-    approval = await access.price_approvals.find_one({"id": approval_id, "status": "pending"})
+    return await decide_price_approval(
+        approval_id, PriceApprovalDecisionIn(persistence="customer_price"), user, access
+    )
+
+
+@api_router.post("/pricing/approvals/{approval_id}/decision")
+async def decide_price_approval(
+    approval_id: str,
+    body: PriceApprovalDecisionIn,
+    user: Annotated[dict, Depends(require_roles("admin"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    decision_at = datetime.now(timezone.utc).isoformat()
+    approval = await access.price_approvals.find_one_and_update(
+        {"id": approval_id, "status": "pending"},
+        {"$set": {"status": "processing", "processingBy": user["id"], "processingAt": decision_at}},
+        return_document=ReturnDocument.AFTER,
+    )
     if not approval:
         raise HTTPException(status_code=404, detail="Preisfreigabe nicht gefunden")
-    body = CustomerPriceIn(
-        companyId=approval["companyId"], productId=approval["productId"],
-        price=from_minor(approval["requestedPriceMinor"]), **(approval.get("conditions") or {}),
-    )
-    result = await _persist_customer_price(body, user, access)
-    await access.price_approvals.update_one({"id": approval_id, "status": "pending"}, {"$set": {
-        "status": "approved", "decidedBy": user["id"], "decidedAt": datetime.now(timezone.utc).isoformat(),
-    }})
+    result = {
+        "ok": True, "approvalId": approval_id, "persistence": body.persistence,
+        "companyId": approval["companyId"], "productId": approval["productId"],
+        "price": from_minor(approval["requestedPriceMinor"]),
+        "priceMinor": approval["requestedPriceMinor"], "currency": approval["currency"],
+    }
+    try:
+        product = await access.products.find_one({"id": approval["productId"]})
+        if not product or approval["requestedPriceMinor"] < amount_minor(
+            product, "absoluteFloor", expected_currency=access.context.default_currency
+        ):
+            raise HTTPException(status_code=409, detail="Preis liegt unter der absoluten internen Preisgrenze")
+        if body.persistence == "customer_price":
+            price_body = CustomerPriceIn(
+                companyId=approval["companyId"], productId=approval["productId"],
+                price=from_minor(approval["requestedPriceMinor"]), **(approval.get("conditions") or {}),
+            )
+            result = await _persist_customer_price(price_body, user, access)
+            result["approvalId"] = approval_id
+            result["persistence"] = body.persistence
+        finalized = await access.price_approvals.update_one(
+            {"id": approval_id, "status": "processing", "processingBy": user["id"]},
+            {"$set": {"status": "approved", "decidedBy": user["id"], "decidedAt": decision_at,
+                      "decisionNote": body.note.strip(), "persistence": body.persistence},
+             "$unset": {"processingBy": "", "processingAt": ""}},
+        )
+        if finalized.matched_count == 0:
+            raise HTTPException(status_code=409, detail="Preisfreigabe konnte nicht sicher abgeschlossen werden")
+    except Exception:
+        await access.price_approvals.update_one(
+            {"id": approval_id, "status": "processing", "processingBy": user["id"]},
+            {"$set": {"status": "pending"}, "$unset": {"processingBy": "", "processingAt": ""}},
+        )
+        raise
+    await tenant_audit(access, user, "price.approval.approve", approval_id,
+                       {"persistence": body.persistence, "companyId": approval["companyId"], "productId": approval["productId"]})
     return result
+
+
+@api_router.post("/pricing/approvals/{approval_id}/reject")
+async def reject_price_approval(
+    approval_id: str, body: PriceApprovalDecisionIn,
+    user: Annotated[dict, Depends(require_roles("admin"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    result = await access.price_approvals.update_one(
+        {"id": approval_id, "status": "pending"}, {"$set": {
+            "status": "rejected", "decidedBy": user["id"],
+            "decidedAt": datetime.now(timezone.utc).isoformat(), "decisionNote": body.note.strip(),
+        }}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Preisfreigabe nicht gefunden")
+    await tenant_audit(access, user, "price.approval.reject", approval_id, {})
+    return {"ok": True, "status": "rejected"}
 
 
 @api_router.get("/companies/{company_id}/price-history")

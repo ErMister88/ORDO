@@ -307,6 +307,7 @@ def test_transaction_inputs_ignore_client_supplied_prices():
     assert order.model_dump() == {
         "companyId": "c1", "items": [{"productId": "p1", "qty": 2.0}],
         "paymentMethod": "bank_transfer", "createInvoice": False, "paymentTermDays": None,
+        "billingAddressId": None, "deliveryAddressId": None,
     }
     assert shop_order.model_dump()["items"] == [{"productId": "p1", "qty": 2.0}]
     assert "total" not in shop_order.model_dump()

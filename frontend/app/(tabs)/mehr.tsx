@@ -38,6 +38,7 @@ export default function Mehr() {
     <View style={styles.root}>
       <ScreenHeader title="Mehr" subtitle={user?.name} />
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        {(user?.role === "admin" || user?.role === "sales") ? <Pressable testID="link-sales-catalog" onPress={() => router.push("/katalog")}><Card><View style={styles.linkRow}><Package size={20} color={colors.brandPrimary} weight="bold" /><Text style={styles.linkText}>B2B-Produktkatalog</Text><CaretRight size={18} color={colors.muted} /></View></Card></Pressable> : null}
         <View style={styles.sectionHead}>
           <FileText size={18} color={colors.brandPrimary} weight="fill" />
           <SectionTitle>Verträge</SectionTitle>

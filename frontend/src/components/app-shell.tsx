@@ -1,9 +1,9 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, View, useWindowDimensions } from "react-native";
 import { usePathname, useRouter } from "expo-router";
 import {
   ChartBar, Coffee, FileText, Gauge, Package, Receipt, ShoppingBag,
-  Storefront, Tag, Users, UsersThree, ClockCounterClockwise, SignOut,
+  Storefront, Tag, Users, UsersThree, ClockCounterClockwise, SignOut, Plus, Calculator, CheckSquare,
 } from "phosphor-react-native";
 
 import { useAuth } from "@/src/auth/auth";
@@ -17,28 +17,30 @@ function groups(role?: string): NavGroup[] {
   const staff = role === "admin" || role === "sales";
   if (staff) {
     return [
-      { label: "Arbeitsbereich", items: [
+      { label: "Hauptbereich", items: [
         { label: "Dashboard", path: "/(tabs)", icon: Gauge, match: ["/(tabs)", "/(tabs)/index"] },
-        { label: "Auswertungen", path: "/(tabs)/auswertungen", icon: ChartBar },
-      ] },
-      { label: "Vertrieb", items: [
         { label: "Kunden", path: "/(tabs)/kunden", icon: Users, match: ["/(tabs)/kunden", "/kunde"] },
+        { label: "Produktkatalog", path: "/katalog", icon: Package },
+        ...(role === "admin" ? [{ label: "Vertrieb", path: "/(tabs)/auswertungen", icon: ChartBar }] : []),
+        { label: "Bestellungen", path: "/(tabs)/bestellungen", icon: ShoppingBag },
         { label: "Angebote", path: "/(tabs)/angebote", icon: Tag },
-      ] },
-      { label: "Operations", items: [
-        ...(role === "admin" ? [{ label: "Produkte & Preise", path: "/produkte", icon: Package }] : []),
-        { label: "Verträge & Finanzen", path: "/(tabs)/mehr", icon: FileText },
+        { label: "Rechnungen & Verträge", path: "/(tabs)/mehr", icon: FileText },
         { label: role === "admin" ? "Maschinen & Anfragen" : "Maschinen", path: role === "admin" ? "/maschinen-admin" : "/maschinen", icon: Coffee },
       ] },
+      { label: "CRM", items: [
+        { label: "Aktivitäten & Aufgaben", path: "/(tabs)/kunden", icon: CheckSquare },
+      ] },
       ...(role === "admin" ? [
-        { label: "Commerce", items: [
+        { label: "Management", items: [
+          { label: "Auswertungen", path: "/(tabs)/auswertungen", icon: ChartBar },
+          { label: "Kalkulation & Produkte", path: "/produkte", icon: Calculator },
           { label: "Shop-Verwaltung", path: "/shop-admin", icon: ShoppingBag },
-          { label: "B2C-Shop öffnen", path: "/shop", icon: Storefront },
         ] },
-        { label: "Verwaltung", items: [
+        { label: "System", items: [
           { label: "Benutzer", path: "/benutzer", icon: UsersThree },
           { label: "Abos", path: "/abos", icon: Receipt },
           { label: "Audit-Log", path: "/audit", icon: ClockCounterClockwise },
+          { label: "Einstellungen", path: "/shop-admin", icon: Storefront },
         ] },
       ] : []),
     ];
@@ -87,6 +89,7 @@ function DesktopSidebar() {
   const styles = useStyles();
   const { colors } = useTheme();
   const { user, signOut } = useAuth();
+  const [quickOpen, setQuickOpen] = useState(false);
   const path = usePathname();
   const router = useRouter();
   const active = (item: NavItem) => (item.match ?? [item.path]).some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
@@ -97,6 +100,18 @@ function DesktopSidebar() {
         <View style={styles.mark}><Text style={styles.markText}>O</Text></View>
         <View><Text style={styles.brand}>ORDO</Text><Text style={styles.tenant}>S&S coffee and more</Text></View>
       </View>
+      <Pressable testID="global-new" onPress={() => setQuickOpen((value) => !value)} style={styles.quickButton}>
+        <Plus size={18} color={colors.onBrandPrimary} weight="bold" /><Text style={styles.quickButtonText}>Neu</Text>
+      </Pressable>
+      {quickOpen ? <View style={styles.quickMenu}>
+        {[
+          ["Neuer Kunde", "/(tabs)/kunden?new=1"],
+          ["Neue Bestellung", "/(tabs)/bestellungen"],
+          ["Neues Angebot", "/(tabs)/angebote"],
+          ["Neue Rechnung", "/(tabs)/bestellungen?createInvoice=1"],
+          ["Neue Aufgabe", "/(tabs)/kunden"],
+        ].map(([label, target]) => <Pressable key={label} onPress={() => { setQuickOpen(false); router.push(target as any); }} style={styles.quickItem}><Text style={styles.quickItemText}>{label}</Text></Pressable>)}
+      </View> : null}
       <ScrollView style={styles.nav} contentContainerStyle={styles.navContent} showsVerticalScrollIndicator={false}>
         {groups(user?.role).map((group) => (
           <View key={group.label} style={styles.group}>
@@ -141,6 +156,11 @@ const useStyles = makeStyles((c) => ({
   profile: { flexDirection: "row", alignItems: "center", gap: 10, borderTopWidth: 1, borderTopColor: c.inverseBorder, paddingTop: 16 },
   avatar: { width: 34, height: 34, borderRadius: 9, backgroundColor: c.inverseActive, alignItems: "center", justifyContent: "center" },
   avatarText: { color: c.onSurfaceInverse, fontWeight: "800" },
+  quickButton: { marginHorizontal: 6, marginBottom: 16, minHeight: 42, borderRadius: 10, backgroundColor: c.brandPrimary, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7 },
+  quickButtonText: { color: c.onBrandPrimary, fontWeight: "900" },
+  quickMenu: { marginHorizontal: 6, marginTop: -10, marginBottom: 14, borderRadius: 10, padding: 6, backgroundColor: c.inverseActive },
+  quickItem: { minHeight: 34, justifyContent: "center", paddingHorizontal: 10 },
+  quickItemText: { color: c.onSurfaceInverse, fontWeight: "700", fontSize: 12.5 },
   profileName: { color: c.onSurfaceInverse, fontSize: 12.5, fontWeight: "700" },
   profileRole: { color: c.inverseSubtle, fontSize: 11, marginTop: 1 },
 }));

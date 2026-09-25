@@ -19,11 +19,16 @@ export default function Angebote() {
   const { user } = useAuth();
   const qc = useQueryClient();
   const router = useRouter();
-  const params = useLocalSearchParams<{ companyId?: string }>();
+  const params = useLocalSearchParams<{ companyId?: string; productId?: string; qty?: string }>();
   const isStaff = user?.role === "admin" || user?.role === "sales";
   const isAdmin = user?.role === "admin";
 
   const offers = useQuery({ queryKey: ["offers"], queryFn: () => apiGet("/offers") });
+  const approvals = useQuery({ queryKey: ["price-approvals"], queryFn: () => apiGet("/pricing/approvals"), enabled: isAdmin });
+  const decidePrice = useMutation({
+    mutationFn: ({ id, action, persistence }: { id: string; action: "decision" | "reject"; persistence?: "one_time" | "customer_price" }) => apiPost(`/pricing/approvals/${id}/${action}`, { persistence: persistence ?? "one_time", note: "" }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["price-approvals"] }); qc.invalidateQueries({ queryKey: ["prices"] }); },
+  });
   const [oSearch, setOSearch] = useState("");
   const [oStatus, setOStatus] = useState<string>("Alle");
   const products = useQuery({ queryKey: ["products"], queryFn: () => apiGet("/products") });
@@ -68,9 +73,25 @@ export default function Angebote() {
               products={products.data ?? []}
               companies={companies.data ?? []}
               defaultCompanyId={params.companyId}
+              defaultProductId={params.productId}
+              defaultQuantity={params.qty}
               onCreated={() => qc.invalidateQueries({ queryKey: ["offers"] })}
             />
           )}
+
+          {isAdmin && (approvals.data ?? []).length > 0 ? <>
+            <SectionTitle>Preisfreigaben</SectionTitle>
+            {(approvals.data ?? []).map((approval: any) => <Card key={approval.id} testID={`price-approval-${approval.id}`}>
+              <Text style={styles.offerCompany}>{approval.companyName}</Text>
+              <Muted>{approval.productName} · Vorschlag {euro(approval.requestedPriceMinor / 100)} · Menge {approval.quantity ?? "–"}</Muted>
+              <Muted>B2B-Ausgang {euro(approval.basePriceMinor / 100)} · interne Freigabegrenze {euro(approval.approvalFloorMinor / 100)} · absolute Grenze {euro(approval.absoluteFloorMinor / 100)}{approval.costMinor != null ? ` · EK ${euro(approval.costMinor / 100)}` : ""}</Muted>
+              <View style={styles.approvalActions}>
+                <Button title="Einmalig genehmigen" kind="secondary" loading={decidePrice.isPending} onPress={() => decidePrice.mutate({ id: approval.id, action: "decision", persistence: "one_time" })} style={{ flex: 1 }} />
+                <Button title="Als Kundenpreis" loading={decidePrice.isPending} onPress={() => decidePrice.mutate({ id: approval.id, action: "decision", persistence: "customer_price" })} style={{ flex: 1 }} />
+                <Button title="Ablehnen" kind="secondary" loading={decidePrice.isPending} onPress={() => decidePrice.mutate({ id: approval.id, action: "reject" })} style={{ flex: 1 }} />
+              </View>
+            </Card>)}
+          </> : null}
 
           <SectionTitle style={{ marginTop: 4 }}>
             {isAdmin ? "Alle Angebote" : "Angebote"}
@@ -223,26 +244,38 @@ function CreateOffer({
   products,
   companies,
   defaultCompanyId,
+  defaultProductId,
+  defaultQuantity,
   onCreated,
 }: {
   products: any[];
   companies: any[];
   defaultCompanyId?: string;
+  defaultProductId?: string;
+  defaultQuantity?: string;
   onCreated: () => void;
 }) {
   const styles = useStyles();
   const { colors } = useTheme();
   const { user } = useAuth();
+  const qc = useQueryClient();
   const isAdmin = user?.role === "admin";
   const activeProducts = products.filter((p) => p.active !== false);
   const [companyId, setCompanyId] = useState(defaultCompanyId || companies[0]?.id || "");
-  const [productId, setProductId] = useState(activeProducts[0]?.id || "");
-  const [qty, setQty] = useState("60");
+  const [productId, setProductId] = useState(defaultProductId || activeProducts[0]?.id || "");
+  const [qty, setQty] = useState(() => {
+    const parsed = Number(defaultQuantity);
+    return parsed > 0 ? String(parsed) : "60";
+  });
   const [price, setPrice] = useState("");
-  const [items, setItems] = useState<{ productId: string; qty: number; price: number }[]>([]);
+  const [items, setItems] = useState<{ productId: string; qty: number; price: number; approvalId?: string }[]>([]);
   const [showComp, setShowComp] = useState(false);
   const [showProd, setShowProd] = useState(false);
   const [msg, setMsg] = useState("");
+  const [billingAddressId, setBillingAddressId] = useState("");
+  const [deliveryAddressId, setDeliveryAddressId] = useState("");
+  const addresses = useQuery({ queryKey: ["customer-addresses", companyId], queryFn: () => apiGet(`/companies/${companyId}/addresses`), enabled: Boolean(companyId) });
+  const myApprovals = useQuery({ queryKey: ["my-price-approvals"], queryFn: () => apiGet("/pricing/approvals/mine"), enabled: user?.role === "sales" });
 
   const onQty = (v: string) => {
     setQty(v);
@@ -278,7 +311,8 @@ function CreateOffer({
       setMsg("Position unter absoluter Preisgrenze – nicht zulässig.");
       return;
     }
-    setItems((prev) => [...prev, { productId, qty: q, price: parsed }]);
+    const approved = (myApprovals.data ?? []).find((row: any) => row.companyId === companyId && row.productId === productId && row.requestedPriceMinor === Math.round(parsed * 100));
+    setItems((prev) => [...prev, { productId, qty: q, price: parsed, ...(approved ? { approvalId: approved.id } : {}) }]);
     setPrice("");
     setQty("60");
     setMsg("");
@@ -297,10 +331,13 @@ function CreateOffer({
         companyId,
         termMonths: 48,
         items,
+        billingAddressId: billingAddressId || null,
+        deliveryAddressId: deliveryAddressId || null,
       }),
     onSuccess: (created: any) => {
       setMsg(created.status === "Freigabe nötig" ? "Angebot erstellt und zur Admin-Freigabe eingereicht." : "Angebot erstellt");
       setItems([]);
+      qc.invalidateQueries({ queryKey: ["my-price-approvals"] });
       onCreated();
     },
     onError: (e: any) => setMsg(e.message),
@@ -356,7 +393,11 @@ function CreateOffer({
             );
           })}
         </View>
-      )}
+        )}
+      {(addresses.data ?? []).length > 0 ? <>
+        <Text style={styles.fieldLabel}>Rechnungsadresse</Text><View style={styles.addressChips}>{(addresses.data ?? []).filter((row: any) => row.type === "billing" || row.type === "main").map((row: any) => <Pressable key={row.id} onPress={() => setBillingAddressId(row.id)} style={[styles.addressChip, billingAddressId === row.id && styles.addressChipActive]}><Text style={[styles.addressChipText, billingAddressId === row.id && styles.addressChipTextActive]}>{row.label || `${row.street} ${row.houseNumber}`}</Text></Pressable>)}</View>
+        <Text style={styles.fieldLabel}>Lieferadresse</Text><View style={styles.addressChips}>{(addresses.data ?? []).filter((row: any) => row.type === "shipping" || row.type === "main").map((row: any) => <Pressable key={row.id} onPress={() => setDeliveryAddressId(row.id)} style={[styles.addressChip, deliveryAddressId === row.id && styles.addressChipActive]}><Text style={[styles.addressChipText, deliveryAddressId === row.id && styles.addressChipTextActive]}>{row.label || `${row.street} ${row.houseNumber}`}</Text></Pressable>)}</View>
+      </> : null}
 
       <Text style={styles.fieldLabel}>Produkt</Text>
       <Pressable style={styles.select} testID="select-product" onPress={() => setShowProd((s) => !s)}>
@@ -479,6 +520,11 @@ const useStyles = makeStyles((c) => ({
   },
   optionText: { fontSize: 15, color: c.onSurfaceSecondary },
   inputRow: { flexDirection: "row", gap: 12 },
+  addressChips: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 5 },
+  addressChip: { borderWidth: 1, borderColor: c.border, borderRadius: 999, paddingHorizontal: 11, paddingVertical: 7 },
+  addressChipActive: { backgroundColor: c.brandPrimary, borderColor: c.brandPrimary },
+  addressChipText: { color: c.onSurfaceSecondary, fontSize: 12, fontWeight: "700" },
+  addressChipTextActive: { color: c.onBrandPrimary },
   hint: { fontSize: 14, fontWeight: "700", marginTop: 4 },
   offerTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   offerId: { fontSize: 15, fontWeight: "800", color: c.onSurface },
@@ -492,6 +538,7 @@ const useStyles = makeStyles((c) => ({
   filterChipText: { fontSize: 13, fontWeight: "700", color: c.onSurfaceSecondary },
   filterChipTextActive: { color: c.onBrandPrimary },
   actions: { gap: 10, marginTop: 6, borderTopWidth: 1, borderTopColor: c.divider, paddingTop: 10 },
+  approvalActions: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 },
   actionRow: { flexDirection: "row", gap: 10 },
   shareBtn: {
     flexDirection: "row",

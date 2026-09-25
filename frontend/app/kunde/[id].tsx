@@ -8,7 +8,7 @@ import { ArrowLeft, Phone, EnvelopeSimple, MapPin, Check, PencilSimple, Export, 
 
 import { makeStyles, tokens, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
-import { apiGet, apiPost, apiPut } from "@/src/api/client";
+import { apiDelete, apiGet, apiPost, apiPut } from "@/src/api/client";
 import { euro, num, dateDE } from "@/src/lib/format";
 import { shareInvoicePdf, shareCollectivePdf } from "@/src/lib/pdf";
 import { Card, InfoRow, Button, Input, StatusBadge, EmptyState, Muted, LoadingState, ErrorState, PageContainer, KPICard, SectionTitle } from "@/src/components/ui";
@@ -20,7 +20,7 @@ export default function KundeDetail() {
   const router = useRouter();
   const { user } = useAuth();
   const qc = useQueryClient();
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, period } = useLocalSearchParams<{ id: string; period?: string }>();
   const [tab, setTab] = useState<"uebersicht" | "aktivitaeten" | "konditionen" | "vorgaenge" | "rechnungen">("uebersicht");
   const [editing, setEditing] = useState(false);
   const isAdmin = user?.role === "admin";
@@ -35,11 +35,18 @@ export default function KundeDetail() {
   const machineRequests = useQuery({ queryKey: ["machine-requests"], queryFn: () => apiGet("/machine-requests") });
   const activities = useQuery({ queryKey: ["customer-activities", id], queryFn: () => apiGet(`/companies/${id}/activities`) });
   const tasks = useQuery({ queryKey: ["customer-tasks", id], queryFn: () => apiGet(`/companies/${id}/tasks`) });
+  const addresses = useQuery({ queryKey: ["customer-addresses", id], queryFn: () => apiGet(`/companies/${id}/addresses`) });
+  const contacts = useQuery({ queryKey: ["customer-contacts", id], queryFn: () => apiGet(`/companies/${id}/contacts`) });
   const salesStaff = useQuery({ queryKey: ["sales-staff"], queryFn: () => apiGet("/staff/sales"), enabled: isAdmin });
   const history = useQuery({
     queryKey: ["price-history", id],
     queryFn: () => apiGet(`/companies/${id}/price-history`),
     enabled: isAdmin || user?.role === "sales",
+  });
+  const dashboardDetail = useQuery({
+    queryKey: ["customer-dashboard-detail", id, period],
+    queryFn: () => apiGet(`/dashboard/customers/${id}?period=${period}`),
+    enabled: isAdmin && Boolean(period),
   });
 
   const c = company.data;
@@ -182,6 +189,9 @@ export default function KundeDetail() {
 
         {tab === "uebersicht" ? (
           <>
+            {(isAdmin || user?.role === "sales") ? <CustomerMasterData companyId={id!} addresses={addresses.data ?? []} contacts={contacts.data ?? []} /> : null}
+            <Button testID="show-products" title="Produkte anzeigen" onPress={() => router.push({ pathname: "/katalog", params: { companyId: id } })} />
+            {dashboardDetail.data ? <Card testID="dashboard-customer-breakdown"><SectionTitle>Auswertung im Dashboard-Zeitraum</SectionTitle><InfoRow label="Umsatz" value={euro(dashboardDetail.data.revenue)} /><InfoRow label="Bestellungen" value={num(dashboardDetail.data.orders)} /><InfoRow label="Rechnungen" value={num(dashboardDetail.data.invoices)} /><InfoRow label="Menge" value={num(dashboardDetail.data.quantity)} />{dashboardDetail.data.marginDataComplete ? <InfoRow label="Deckungsbeitrag" value={euro(dashboardDetail.data.margin)} /> : <Muted>Deckungsbeitrag nicht vollständig: historische Kostendaten fehlen.</Muted>}{(dashboardDetail.data.products ?? []).map((row: any) => <InfoRow key={row.productId} label={row.name} value={`${num(row.quantity)} · ${euro(row.revenue)}`} />)}</Card> : null}
             <View style={styles.kpiGrid}>
               <KPICard label="Angebote" value={num(custOffers.length)} accent="warning" />
               <KPICard label="Bestellungen" value={num(custOrders.length)} />
@@ -363,6 +373,30 @@ export default function KundeDetail() {
   );
 }
 
+function CustomerMasterData({ companyId, addresses, contacts }: { companyId: string; addresses: any[]; contacts: any[] }) {
+  const styles = useStyles();
+  const qc = useQueryClient();
+  const [showAddress, setShowAddress] = useState(false);
+  const [showContact, setShowContact] = useState(false);
+  const [address, setAddress] = useState({ type: "shipping", label: "", street: "", houseNumber: "", zip: "", city: "", country: "Deutschland", active: true });
+  const [contact, setContact] = useState({ firstName: "", lastName: "", title: "", phone: "", mobile: "", email: "", active: true });
+  const refreshAddresses = () => qc.invalidateQueries({ queryKey: ["customer-addresses", companyId] });
+  const refreshContacts = () => qc.invalidateQueries({ queryKey: ["customer-contacts", companyId] });
+  const addAddress = useMutation({ mutationFn: () => apiPost(`/companies/${companyId}/addresses`, address), onSuccess: () => { setShowAddress(false); setAddress({ type: "shipping", label: "", street: "", houseNumber: "", zip: "", city: "", country: "Deutschland", active: true }); refreshAddresses(); } });
+  const addContact = useMutation({ mutationFn: () => apiPost(`/companies/${companyId}/contacts`, contact), onSuccess: () => { setShowContact(false); setContact({ firstName: "", lastName: "", title: "", phone: "", mobile: "", email: "", active: true }); refreshContacts(); } });
+  const archiveAddress = useMutation({ mutationFn: (addressId: string) => apiDelete(`/companies/${companyId}/addresses/${addressId}`), onSuccess: refreshAddresses });
+  const archiveContact = useMutation({ mutationFn: (contactId: string) => apiDelete(`/companies/${companyId}/contacts/${contactId}`), onSuccess: refreshContacts });
+  const typeLabel = (type: string) => type === "main" ? "Hauptadresse" : type === "billing" ? "Rechnungsadresse" : "Lieferadresse";
+  return <>
+    <View style={styles.masterHeader}><SectionTitle>Adressen</SectionTitle><Button title="+ Adresse" kind="secondary" onPress={() => setShowAddress((value) => !value)} /></View>
+    {addresses.map((row) => <Card key={row.id}><View style={styles.orderTop}><View style={{ flex: 1 }}><Text style={styles.prodTitle}>{row.label || typeLabel(row.type)}</Text><Muted>{typeLabel(row.type)} · {row.street} {row.houseNumber}, {row.zip} {row.city}, {row.country}</Muted></View><Pressable onPress={() => archiveAddress.mutate(row.id)}><Text style={styles.archiveText}>Archivieren</Text></Pressable></View></Card>)}
+    {showAddress ? <Card><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.controlChips}>{[["main", "Hauptadresse"], ["billing", "Rechnungsadresse"], ["shipping", "Lieferadresse"]].map(([value, label]) => <Pressable key={value} onPress={() => setAddress((current) => ({ ...current, type: value }))} style={[styles.controlChip, address.type === value && styles.controlChipActive]}><Text style={[styles.controlChipText, address.type === value && styles.controlChipTextActive]}>{label}</Text></Pressable>)}</ScrollView><Input value={address.label} onChangeText={(label) => setAddress((current) => ({ ...current, label }))} placeholder="Bezeichnung, z. B. Filiale 1" /><View style={styles.priceRow}><Input value={address.street} onChangeText={(street) => setAddress((current) => ({ ...current, street }))} placeholder="Straße" style={{ flex: 1 }} /><Input value={address.houseNumber} onChangeText={(houseNumber) => setAddress((current) => ({ ...current, houseNumber }))} placeholder="Nr." style={{ width: 90 }} /></View><View style={styles.priceRow}><Input value={address.zip} onChangeText={(zip) => setAddress((current) => ({ ...current, zip }))} placeholder="PLZ" style={{ width: 110 }} /><Input value={address.city} onChangeText={(city) => setAddress((current) => ({ ...current, city }))} placeholder="Ort" style={{ flex: 1 }} /></View><Input value={address.country} onChangeText={(country) => setAddress((current) => ({ ...current, country }))} placeholder="Land" /><Button title="Adresse speichern" loading={addAddress.isPending} disabled={!address.street || !address.zip || !address.city || !address.country} onPress={() => addAddress.mutate()} /></Card> : null}
+    <View style={styles.masterHeader}><SectionTitle>Ansprechpartner</SectionTitle><Button title="+ Ansprechpartner" kind="secondary" onPress={() => setShowContact((value) => !value)} /></View>
+    {contacts.map((row) => <Card key={row.id}><View style={styles.orderTop}><View style={{ flex: 1 }}><Text style={styles.prodTitle}>{row.firstName} {row.lastName}</Text><Muted>{[row.title, row.email, row.phone, row.mobile].filter(Boolean).join(" · ")}</Muted></View><Pressable onPress={() => archiveContact.mutate(row.id)}><Text style={styles.archiveText}>Archivieren</Text></Pressable></View></Card>)}
+    {showContact ? <Card><View style={styles.priceRow}><Input value={contact.firstName} onChangeText={(firstName) => setContact((current) => ({ ...current, firstName }))} placeholder="Vorname" style={{ flex: 1 }} /><Input value={contact.lastName} onChangeText={(lastName) => setContact((current) => ({ ...current, lastName }))} placeholder="Nachname" style={{ flex: 1 }} /></View><Input value={contact.title} onChangeText={(title) => setContact((current) => ({ ...current, title }))} placeholder="Funktion / Rolle" /><View style={styles.priceRow}><Input value={contact.phone} onChangeText={(phone) => setContact((current) => ({ ...current, phone }))} placeholder="Telefon" style={{ flex: 1 }} /><Input value={contact.mobile} onChangeText={(mobile) => setContact((current) => ({ ...current, mobile }))} placeholder="Mobil" style={{ flex: 1 }} /></View><Input value={contact.email} onChangeText={(email) => setContact((current) => ({ ...current, email }))} placeholder="E-Mail" autoCapitalize="none" /><Button title="Ansprechpartner speichern" loading={addContact.isPending} disabled={!contact.firstName || !contact.lastName || !contact.email.includes("@")} onPress={() => addContact.mutate()} /></Card> : null}
+  </>;
+}
+
 function AdminConditions({
   companyId,
   products,
@@ -376,7 +410,8 @@ function AdminConditions({
 }) {
   const qc = useQueryClient();
   const priceMap: Record<string, number> = {};
-  prices.forEach((cp: any) => (priceMap[cp.productId] = cp.price));
+  const priceRecords: Record<string, any> = {};
+  prices.forEach((cp: any) => { priceMap[cp.productId] = cp.price; priceRecords[cp.productId] = cp; });
 
   return (
     <>
@@ -387,6 +422,7 @@ function AdminConditions({
           product={p}
           companyId={companyId}
           initial={priceMap[p.id]}
+          initialRecord={priceRecords[p.id]}
           quote={quoteMap[p.id]}
           onSaved={() => {
             qc.invalidateQueries({ queryKey: ["prices", companyId] });
@@ -447,12 +483,14 @@ function PriceEditorRow({
   product,
   companyId,
   initial,
+  initialRecord,
   quote,
   onSaved,
 }: {
   product: any;
   companyId: string;
   initial?: number;
+  initialRecord?: any;
   quote?: any;
   onSaved: () => void;
 }) {
@@ -461,6 +499,12 @@ function PriceEditorRow({
   const [val, setVal] = useState(initial != null ? String(initial) : "");
   const [saved, setSaved] = useState(false);
   const [feedback, setFeedback] = useState("");
+  const { user } = useAuth();
+  const [deliveryTerms, setDeliveryTerms] = useState(initialRecord?.deliveryTerms ?? "");
+  const [paymentTermDays, setPaymentTermDays] = useState(initialRecord?.paymentTermDays != null ? String(initialRecord.paymentTermDays) : "");
+  const [minimumQuantity, setMinimumQuantity] = useState(initialRecord?.minimumQuantity != null ? String(initialRecord.minimumQuantity) : "");
+  const [validUntil, setValidUntil] = useState(initialRecord?.validUntil?.slice(0, 10) ?? "");
+  const [internalNote, setInternalNote] = useState(initialRecord?.internalNote ?? "");
 
   const save = useMutation({
     mutationFn: () =>
@@ -468,6 +512,11 @@ function PriceEditorRow({
         companyId,
         productId: product.id,
         price: Number((val || "").replace(",", ".")),
+        deliveryTerms,
+        paymentTermDays: paymentTermDays ? Number(paymentTermDays) : null,
+        minimumQuantity: minimumQuantity ? Number(minimumQuantity.replace(",", ".")) : null,
+        validUntil: validUntil ? new Date(`${validUntil}T23:59:59Z`).toISOString() : null,
+        ...(user?.role === "admin" ? { internalNote } : {}),
       }),
     onSuccess: (result: any) => {
       setSaved(!result.approvalRequired);
@@ -504,6 +553,10 @@ function PriceEditorRow({
           <Check size={18} color={colors.onBrandPrimary} weight="bold" />
         </Pressable>
       </View>
+      <Input value={deliveryTerms} onChangeText={setDeliveryTerms} placeholder="Lieferbedingung, z. B. Ab Werk oder Frei Haus" />
+      <View style={styles.priceRow}><Input value={paymentTermDays} onChangeText={setPaymentTermDays} keyboardType="number-pad" placeholder="Zahlungsziel (Tage)" style={{ flex: 1 }} /><Input value={minimumQuantity} onChangeText={setMinimumQuantity} keyboardType="decimal-pad" placeholder="Mindestmenge" style={{ flex: 1 }} /></View>
+      <Input value={validUntil} onChangeText={setValidUntil} placeholder="Gültig bis (YYYY-MM-DD)" />
+      {user?.role === "admin" ? <Input value={internalNote} onChangeText={setInternalNote} placeholder="Interne Admin-Notiz" multiline /> : null}
       {saved ? <Text style={[styles.savedTxt, { color: colors.success }]}>Gespeichert</Text> : null}
       {feedback ? <Text style={[styles.savedTxt, { color: colors.warning }]}>{feedback}</Text> : null}
     </Card>
@@ -519,6 +572,7 @@ function CompanyEditor({ company, onCancel, onSaved }: { company: any; onCancel:
     email: company.email ?? "",
     phone: company.phone ?? "",
     vatId: company.vatId ?? "",
+    taxNumber: company.taxNumber ?? "",
     orderCycleDays: String(company.orderCycleDays ?? 30),
   });
   const set = (k: string) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
@@ -530,6 +584,7 @@ function CompanyEditor({ company, onCancel, onSaved }: { company: any; onCancel:
         email: form.email,
         phone: form.phone,
         vatId: form.vatId,
+        taxNumber: form.taxNumber,
         assignedSalesRepId: company.assignedSalesRepId ?? null,
         orderCycleDays: Number((form.orderCycleDays || "30").replace(",", ".")) || 30,
         active: company.active !== false,
@@ -549,6 +604,8 @@ function CompanyEditor({ company, onCancel, onSaved }: { company: any; onCancel:
       <Input testID="edit-phone" value={form.phone} onChangeText={set("phone")} keyboardType="phone-pad" />
       <Text style={styles.editLabel}>USt-ID</Text>
       <Input testID="edit-vat" value={form.vatId} onChangeText={set("vatId")} autoCapitalize="characters" />
+      <Text style={styles.editLabel}>Steuernummer</Text>
+      <Input value={form.taxNumber} onChangeText={set("taxNumber")} />
       <Text style={styles.editLabel}>Bestellzyklus (Tage)</Text>
       <Input testID="edit-cycle" value={form.orderCycleDays} onChangeText={set("orderCycleDays")} keyboardType="numeric" />
       <Button testID="edit-save" title="Speichern" loading={save.isPending} onPress={() => save.mutate()} style={{ marginTop: 10 }} />
@@ -626,6 +683,8 @@ const useStyles = makeStyles((c) => ({
   },
   footerActions: { width: "100%", maxWidth: tokens.layout.narrow, alignSelf: "center", flexDirection: "row", gap: 10 },
   customerControls: { gap: 8, marginTop: 8 },
+  masterHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 },
+  archiveText: { color: c.error, fontWeight: "700", fontSize: 12 },
   controlChips: { gap: 6 },
   controlChip: { borderRadius: 999, backgroundColor: c.surfaceTertiary, borderWidth: 1, borderColor: c.border, paddingHorizontal: 11, paddingVertical: 7 },
   controlChipActive: { backgroundColor: c.brandPrimary, borderColor: c.brandPrimary },

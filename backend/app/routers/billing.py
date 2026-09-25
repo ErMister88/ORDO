@@ -86,6 +86,8 @@ async def create_invoice_record(access: TenantBusinessAccess, order: dict, user:
         "taxBreakdownMinor": breakdown_minor, "taxTotal": tax_total,
         "taxTotalMinor": tax_minor_total, "amount": gross, "amountMinor": gross_minor,
         "paidAmountMinor": 0, "companySnapshot": order.get("companySnapshot"),
+        "billingAddressSnapshot": order.get("billingAddressSnapshot"),
+        "deliveryAddressSnapshot": order.get("deliveryAddressSnapshot"),
         "salesAttribution": order.get("salesAttribution"), "status": "Offen",
         "createdBy": user["id"], "createdAt": now.isoformat(),
     }

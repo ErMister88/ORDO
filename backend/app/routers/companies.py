@@ -14,7 +14,10 @@ from ..deps import (
     tenant_business_access,
     visible_company_ids,
 )
-from ..models import CompanyAssignmentIn, CompanyCreateIn, CompanyStatusIn, CompanyUpdateIn
+from ..models import (
+    CompanyAssignmentIn, CompanyCreateIn, CompanyStatusIn, CompanyUpdateIn,
+    CustomerAddressIn, CustomerContactIn,
+)
 from ..tenant_access import TenantBusinessAccess
 
 
@@ -52,10 +55,18 @@ async def create_company(
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Kundenname ist erforderlich")
+    # Validate related master data before the company write so a malformed
+    # address/contact cannot leave a partially-created customer behind.
+    if body.primaryAddress is not None:
+        _clean_address(body.primaryAddress)
+    if body.primaryContact is not None:
+        _clean_contact(body.primaryContact)
     if user["role"] == "sales":
         assigned_sales_rep_id = user["id"]
+        assigned_sales_rep_name = user.get("name", "")
     else:
         assigned_sales_rep_id = body.assignedSalesRepId
+        assigned_sales_rep_name = ""
         if assigned_sales_rep_id:
             membership = await active_staff_membership(access, assigned_sales_rep_id)
             if not membership or membership.get("role") != "sales":
@@ -68,8 +79,10 @@ async def create_company(
         "email": body.email.strip().lower(),
         "phone": body.phone.strip(),
         "vatId": body.vatId.strip(),
+        "taxNumber": body.taxNumber.strip(),
         "status": body.status,
         "assignedSalesRepId": assigned_sales_rep_id,
+        "assignedSalesRepName": assigned_sales_rep_name,
         "orderCycleDays": body.orderCycleDays,
         "active": True,
         "monthlyKg": 0,
@@ -77,12 +90,171 @@ async def create_company(
         "createdBy": user["id"],
     }
     await access.companies.insert_one(company)
+    if body.primaryAddress is not None:
+        await _create_address(company["id"], body.primaryAddress, user, access)
+    if body.primaryContact is not None:
+        await _create_contact(company["id"], body.primaryContact, user, access)
     await record_customer_activity(
         access, company_id=company["id"], actor=user, activity_type="customer_created",
         title="Kunde angelegt", internal=True,
     )
     await tenant_audit(access, user, "company.create", company["id"], {"name": name})
     return strip_id(company)
+
+
+async def _require_visible_company(company_id: str, user: dict, access: TenantBusinessAccess) -> dict:
+    company = await access.companies.find_one({"id": company_id})
+    if not company:
+        raise HTTPException(status_code=404, detail="Kunde nicht gefunden")
+    if company_id not in await visible_company_ids(user, access):
+        raise HTTPException(status_code=403, detail="Keine Berechtigung")
+    return company
+
+
+def _clean_address(body: CustomerAddressIn) -> dict:
+    payload = body.model_dump()
+    for key in ("label", "street", "houseNumber", "zip", "city", "country"):
+        payload[key] = payload[key].strip()
+    if not payload["street"] or not payload["zip"] or not payload["city"] or not payload["country"]:
+        raise HTTPException(status_code=400, detail="Straße, PLZ, Ort und Land sind erforderlich")
+    return payload
+
+
+def _clean_contact(body: CustomerContactIn) -> dict:
+    payload = body.model_dump()
+    for key in ("firstName", "lastName", "title", "phone", "mobile", "email"):
+        payload[key] = payload[key].strip()
+    payload["email"] = payload["email"].lower()
+    if not payload["firstName"] or not payload["lastName"] or "@" not in payload["email"]:
+        raise HTTPException(status_code=400, detail="Vorname, Nachname und gültige E-Mail sind erforderlich")
+    return payload
+
+
+async def _create_address(company_id: str, body: CustomerAddressIn, user: dict, access: TenantBusinessAccess) -> dict:
+    payload = _clean_address(body)
+    row = {"id": "addr-" + secrets.token_hex(6), "companyId": company_id, **payload,
+           "createdAt": datetime.now(timezone.utc).isoformat(), "createdBy": user["id"]}
+    await access.customer_addresses.insert_one(row)
+    await tenant_audit(access, user, "company.address.create", company_id,
+                       {"addressId": row["id"], "type": row["type"]})
+    return strip_id(row)
+
+
+async def _create_contact(company_id: str, body: CustomerContactIn, user: dict, access: TenantBusinessAccess) -> dict:
+    payload = _clean_contact(body)
+    row = {"id": "contact-" + secrets.token_hex(6), "companyId": company_id, **payload,
+           "createdAt": datetime.now(timezone.utc).isoformat(), "createdBy": user["id"]}
+    await access.customer_contacts.insert_one(row)
+    await tenant_audit(access, user, "company.contact.create", company_id,
+                       {"contactId": row["id"]})
+    return strip_id(row)
+
+
+@api_router.get("/companies/{company_id}/addresses")
+async def list_company_addresses(
+    company_id: str,
+    user: Annotated[dict, Depends(current_user)],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    await _require_visible_company(company_id, user, access)
+    rows = await access.customer_addresses.find({"companyId": company_id, "active": {"$ne": False}}).sort("createdAt", 1).to_list(1000)
+    return [strip_id(row) for row in rows]
+
+
+@api_router.post("/companies/{company_id}/addresses", status_code=201)
+async def create_company_address(
+    company_id: str, body: CustomerAddressIn,
+    user: Annotated[dict, Depends(require_roles("admin", "sales"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    await _require_visible_company(company_id, user, access)
+    return await _create_address(company_id, body, user, access)
+
+
+@api_router.put("/companies/{company_id}/addresses/{address_id}")
+async def update_company_address(
+    company_id: str, address_id: str, body: CustomerAddressIn,
+    user: Annotated[dict, Depends(require_roles("admin", "sales"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    await _require_visible_company(company_id, user, access)
+    result = await access.customer_addresses.update_one(
+        {"id": address_id, "companyId": company_id}, {"$set": _clean_address(body)}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Adresse nicht gefunden")
+    await tenant_audit(access, user, "company.address.update", company_id,
+                       {"addressId": address_id, "type": body.type})
+    return strip_id(await access.customer_addresses.find_one({"id": address_id, "companyId": company_id}))
+
+
+@api_router.delete("/companies/{company_id}/addresses/{address_id}")
+async def archive_company_address(
+    company_id: str, address_id: str,
+    user: Annotated[dict, Depends(require_roles("admin", "sales"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    await _require_visible_company(company_id, user, access)
+    result = await access.customer_addresses.update_one(
+        {"id": address_id, "companyId": company_id}, {"$set": {"active": False}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Adresse nicht gefunden")
+    await tenant_audit(access, user, "company.address.archive", company_id, {"addressId": address_id})
+    return {"ok": True}
+
+
+@api_router.get("/companies/{company_id}/contacts")
+async def list_company_contacts(
+    company_id: str,
+    user: Annotated[dict, Depends(current_user)],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    await _require_visible_company(company_id, user, access)
+    rows = await access.customer_contacts.find({"companyId": company_id, "active": {"$ne": False}}).sort("createdAt", 1).to_list(1000)
+    return [strip_id(row) for row in rows]
+
+
+@api_router.post("/companies/{company_id}/contacts", status_code=201)
+async def create_company_contact(
+    company_id: str, body: CustomerContactIn,
+    user: Annotated[dict, Depends(require_roles("admin", "sales"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    await _require_visible_company(company_id, user, access)
+    return await _create_contact(company_id, body, user, access)
+
+
+@api_router.put("/companies/{company_id}/contacts/{contact_id}")
+async def update_company_contact(
+    company_id: str, contact_id: str, body: CustomerContactIn,
+    user: Annotated[dict, Depends(require_roles("admin", "sales"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    await _require_visible_company(company_id, user, access)
+    result = await access.customer_contacts.update_one(
+        {"id": contact_id, "companyId": company_id}, {"$set": _clean_contact(body)}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Ansprechpartner nicht gefunden")
+    await tenant_audit(access, user, "company.contact.update", company_id, {"contactId": contact_id})
+    return strip_id(await access.customer_contacts.find_one({"id": contact_id, "companyId": company_id}))
+
+
+@api_router.delete("/companies/{company_id}/contacts/{contact_id}")
+async def archive_company_contact(
+    company_id: str, contact_id: str,
+    user: Annotated[dict, Depends(require_roles("admin", "sales"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    await _require_visible_company(company_id, user, access)
+    result = await access.customer_contacts.update_one(
+        {"id": contact_id, "companyId": company_id}, {"$set": {"active": False}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Ansprechpartner nicht gefunden")
+    await tenant_audit(access, user, "company.contact.archive", company_id, {"contactId": contact_id})
+    return {"ok": True}
 
 
 @api_router.get("/companies/{company_id}")
@@ -136,7 +308,7 @@ async def assign_company_sales_rep(
         if not membership or membership.get("role") != "sales":
             raise HTTPException(status_code=400, detail="Vertrieb ist für diesen Tenant nicht verfügbar")
     await access.companies.update_one(
-        {"id": company_id}, {"$set": {"assignedSalesRepId": body.assignedSalesRepId}}
+        {"id": company_id}, {"$set": {"assignedSalesRepId": body.assignedSalesRepId, "assignedSalesRepName": ""}}
     )
     await record_customer_activity(
         access, company_id=company_id, actor=user, activity_type="assignment_changed",

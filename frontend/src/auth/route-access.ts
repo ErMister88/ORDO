@@ -8,8 +8,9 @@ const ADMIN_ROUTES = [
   "/audit",
   "/shop-admin",
   "/maschinen-admin",
+  "/vertrieb",
 ] as const;
-const STAFF_ROUTES = ["/kunden", "/kunde", "/auswertungen"] as const;
+const STAFF_ROUTES = ["/kunden", "/kunde", "/auswertungen", "/katalog"] as const;
 const INTERNAL_ROUTES = [
   "/",
   "/angebote",

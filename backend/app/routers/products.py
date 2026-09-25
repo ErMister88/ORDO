@@ -2,6 +2,7 @@
 import secrets
 import uuid
 import requests
+from pymongo.errors import DuplicateKeyError
 from fastapi import Depends, HTTPException, UploadFile, File
 from fastapi.responses import Response
 from starlette.concurrency import run_in_threadpool
@@ -16,7 +17,10 @@ from ..deps import (
     require_roles,
     tenant_business_access,
 )
-from ..models import EquipmentFinancingRequestIn, ProductCategoryIn, ProductIn, ActiveIn, StockIn
+from ..models import (
+    EquipmentFinancingRequestIn, ProductCategoryIn, ProductIn, ShopCollectionIn,
+    ActiveIn, StockIn,
+)
 from ..money import to_minor
 from ..storage import put_object, get_object, APP_NAME
 from ..tenant_access import TenantBusinessAccess
@@ -57,10 +61,10 @@ def _product_response(product: dict, role: str) -> dict:
     if role != "admin":
         for field in INTERNAL_PRODUCT_FIELDS:
             payload.pop(field, None)
-    if role == "customer":
-        # B2B customers receive the wholesale catalog only. Their payable
-        # price comes from the authoritative B2B quote endpoint, so exposing
-        # shop prices here would create a second, misleading price context.
+    if role in ("sales", "customer"):
+        # The wholesale catalog receives only B2B data. Its payable price
+        # comes from the authoritative B2B quote endpoint; shop prices belong
+        # exclusively to the public shop API.
         for field in ("b2cPrice", "b2cPriceMinor", "b2cTiers"):
             payload.pop(field, None)
     return payload
@@ -73,6 +77,15 @@ async def _validate_product_references(access: TenantBusinessAccess, body: Produ
         raise HTTPException(status_code=400, detail="Einheit ist erforderlich")
     if body.categoryId and not await access.product_categories.find_one({"id": body.categoryId, "active": {"$ne": False}}):
         raise HTTPException(status_code=400, detail="Kategorie ist nicht verfügbar")
+    collection_ids = list(dict.fromkeys(body.collectionIds))
+    if len(collection_ids) != len(body.collectionIds):
+        raise HTTPException(status_code=400, detail="Shop-Collections dürfen nicht doppelt zugeordnet werden")
+    if collection_ids:
+        available = await access.shop_collections.count_documents({
+            "id": {"$in": collection_ids}, "active": {"$ne": False},
+        })
+        if available != len(collection_ids):
+            raise HTTPException(status_code=400, detail="Shop-Collection ist nicht verfügbar")
     sku = body.sku.strip()
     if sku:
         existing = await access.products.find_one({"sku": sku})
@@ -107,6 +120,7 @@ async def create_product(
     seq = await next_seq("product")
     prod = {"id": f"p{seq}", **_product_payload(body, access.context.default_currency)}
     await access.products.insert_one(prod)
+    await tenant_audit(access, user, "product.create", prod["id"], {"name": prod["name"], "sku": prod.get("sku", "")})
     return strip_id(prod)
 
 
@@ -128,6 +142,9 @@ async def update_product(
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Produkt nicht gefunden")
     p = await access.products.find_one({"id": product_id})
+    await tenant_audit(access, user, "product.update", product_id, {
+        "changedFields": sorted(payload.keys()),
+    })
     return strip_id(p)
 
 
@@ -175,6 +192,83 @@ async def list_public_product_categories(
 ):
     rows = await access.product_categories.find({"active": {"$ne": False}}).sort("name", 1).to_list(1000)
     return [strip_id(row) for row in rows]
+
+
+@api_router.get("/shop/collections")
+async def list_public_shop_collections(
+    access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
+):
+    rows = await access.shop_collections.find({"active": {"$ne": False}}).sort("sortOrder", 1).to_list(1000)
+    return [strip_id(row) for row in rows]
+
+
+@api_router.get("/shop-collections")
+async def list_shop_collections(
+    user: Annotated[dict, Depends(require_roles("admin"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    rows = await access.shop_collections.find({}).sort("sortOrder", 1).to_list(1000)
+    return [strip_id(row) for row in rows]
+
+
+@api_router.post("/shop-collections", status_code=201)
+async def create_shop_collection(
+    body: ShopCollectionIn,
+    user: Annotated[dict, Depends(require_roles("admin"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name der Shop-Collection ist erforderlich")
+    if await access.shop_collections.find_one({"name": name}):
+        raise HTTPException(status_code=409, detail="Shop-Collection existiert bereits")
+    row = {"id": "collection-" + secrets.token_hex(6), **body.model_dump(), "name": name,
+           "createdAt": datetime.now(timezone.utc).isoformat(), "createdBy": user["id"]}
+    try:
+        await access.shop_collections.insert_one(row)
+    except DuplicateKeyError as exc:
+        raise HTTPException(status_code=409, detail="Shop-Collection existiert bereits") from exc
+    await tenant_audit(access, user, "shop_collection.create", row["id"], {"name": name})
+    return strip_id(row)
+
+
+@api_router.put("/shop-collections/{collection_id}")
+async def update_shop_collection(
+    collection_id: str, body: ShopCollectionIn,
+    user: Annotated[dict, Depends(require_roles("admin"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name der Shop-Collection ist erforderlich")
+    duplicate = await access.shop_collections.find_one({"name": name})
+    if duplicate and duplicate.get("id") != collection_id:
+        raise HTTPException(status_code=409, detail="Shop-Collection existiert bereits")
+    try:
+        result = await access.shop_collections.update_one(
+            {"id": collection_id}, {"$set": {**body.model_dump(), "name": name}}
+        )
+    except DuplicateKeyError as exc:
+        raise HTTPException(status_code=409, detail="Shop-Collection existiert bereits") from exc
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Shop-Collection nicht gefunden")
+    await tenant_audit(access, user, "shop_collection.update", collection_id,
+                       {"name": name, "active": body.active, "sortOrder": body.sortOrder})
+    return strip_id(await access.shop_collections.find_one({"id": collection_id}))
+
+
+@api_router.delete("/shop-collections/{collection_id}")
+async def archive_shop_collection(
+    collection_id: str,
+    user: Annotated[dict, Depends(require_roles("admin"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    if not await access.shop_collections.find_one({"id": collection_id}):
+        raise HTTPException(status_code=404, detail="Shop-Collection nicht gefunden")
+    referenced = await access.products.count_documents({"collectionIds": collection_id})
+    await access.shop_collections.update_one({"id": collection_id}, {"$set": {"active": False}})
+    await tenant_audit(access, user, "shop_collection.archive", collection_id, {"referencedProducts": referenced})
+    return {"ok": True, "archived": True, "referencedProducts": referenced}
 
 
 @api_router.post("/product-categories")

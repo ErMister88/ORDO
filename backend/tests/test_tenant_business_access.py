@@ -21,6 +21,9 @@ os.environ["APP_ENV"] = "test"
 from app import audit_service, deps
 from app.models import (
     AcceptOfferIn,
+    CompanyCreateIn,
+    CustomerAddressIn,
+    CustomerContactIn,
     CustomerPriceIn,
     MachineTermsIn,
     MachineIn,
@@ -32,6 +35,8 @@ from app.models import (
     OrderItemIn,
     OrderStatusIn,
     ProductIn,
+    PriceApprovalDecisionIn,
+    ShopCollectionIn,
     SubscriptionIn,
     NewsletterIn,
     PushBroadcastIn,
@@ -104,6 +109,9 @@ class AsyncCollection:
 
     async def update_one(self, *args, **kwargs):
         return self._collection.update_one(*args, **kwargs)
+
+    async def find_one_and_update(self, *args, **kwargs):
+        return self._collection.find_one_and_update(*args, **kwargs)
 
     async def delete_one(self, *args, **kwargs):
         return self._collection.delete_one(*args, **kwargs)
@@ -1679,6 +1687,12 @@ def test_audit_callsites_are_explicitly_classified():
     assert sorted(tenant_calls) == sorted([
             ("companies.py", "company.assignment"),
             ("companies.py", "company.create"),
+            ("companies.py", "company.address.create"),
+            ("companies.py", "company.address.update"),
+            ("companies.py", "company.address.archive"),
+            ("companies.py", "company.contact.create"),
+            ("companies.py", "company.contact.update"),
+            ("companies.py", "company.contact.archive"),
             ("companies.py", "company.status"),
             ("companies.py", "company.update"),
             ("crm.py", "customer.activity.create"),
@@ -1699,9 +1713,16 @@ def test_audit_callsites_are_explicitly_classified():
         ("orders.py", "order.status"),
             ("pricing.py", "price.set"),
             ("pricing.py", "price.approval.request"),
+            ("pricing.py", "price.approval.approve"),
+            ("pricing.py", "price.approval.reject"),
         ("pricing.py", "pricing.promotion.create"),
         ("pricing.py", "pricing.promotion.delete"),
             ("products.py", "product.stock"),
+            ("products.py", "product.create"),
+            ("products.py", "product.update"),
+            ("products.py", "shop_collection.create"),
+            ("products.py", "shop_collection.update"),
+            ("products.py", "shop_collection.archive"),
             ("products.py", "product_category.create"),
         ("shop.py", "shop.settings"),
         ("shop.py", "shop_order_status"),
@@ -1714,6 +1735,231 @@ def test_audit_callsites_are_explicitly_classified():
         ("users.py", "identity.reset"),
     ])
     assert legacy_calls == []
+
+
+def test_customer_master_data_supports_multiple_addresses_contacts_and_immutable_order_snapshot(monkeypatch):
+    database = AsyncDatabase("round2_customer_master")
+    scoped = access(database, TENANT_A)
+    admin = principal(scoped)
+
+    async def no_audit(*_args, **_kwargs):
+        return None
+
+    async def fixed_sequence(_name):
+        return 1
+
+    monkeypatch.setattr(companies, "tenant_audit", no_audit)
+    monkeypatch.setattr(orders, "next_seq", fixed_sequence)
+    company = run(companies.create_company(CompanyCreateIn(
+        name="Alfafood", city="Berlin", email="office@example.test", phone="0301",
+        vatId="DE123", taxNumber="12/345/67890",
+        primaryAddress=CustomerAddressIn(type="main", label="Zentrale", street="Altstraße", houseNumber="1", zip="10115", city="Berlin", country="DE"),
+        primaryContact=CustomerContactIn(firstName="Ada", lastName="Muster", title="Einkauf", phone="0302", mobile="0171", email="ada@example.test"),
+    ), admin, scoped))
+    second = run(companies.create_company_address(company["id"], CustomerAddressIn(
+        type="shipping", label="Filiale 2", street="Lieferweg", houseNumber="2", zip="10117", city="Berlin", country="DE",
+    ), admin, scoped))
+    run(companies.create_company_address(company["id"], CustomerAddressIn(
+        type="billing", label="Buchhaltung", street="Rechnungsallee", houseNumber="3", zip="10119", city="Berlin", country="DE",
+    ), admin, scoped))
+    run(companies.create_company_contact(company["id"], CustomerContactIn(
+        firstName="Ben", lastName="Beispiel", title="Buchhaltung", email="ben@example.test",
+    ), admin, scoped))
+    assert database.raw.customer_addresses.count_documents({"tenantId": TENANT_A, "companyId": company["id"]}) == 3
+    assert database.raw.customer_contacts.count_documents({"tenantId": TENANT_A, "companyId": company["id"]}) == 2
+
+    run(scoped.products.insert_one({
+        "id": "p1", "brand": "Brand", "name": "Produkt", "unit": "kg", "active": True,
+        "b2bAvailable": True, "standardPrice": 19.9, "standardPriceMinor": 1990,
+        "salesFloor": 17.5, "salesFloorMinor": 1750, "absoluteFloor": 15.0,
+        "absoluteFloorMinor": 1500, "cost": 10.0, "costMinor": 1000, "taxRate": 7,
+    }))
+    order = run(orders.create_order(OrderCreate(
+        companyId=company["id"], deliveryAddressId=second["id"], items=[OrderItemIn(productId="p1", qty=2)]
+    ), admin, scoped))
+    run(companies.update_company_address(company["id"], second["id"], CustomerAddressIn(
+        type="shipping", label="Filiale 2", street="Neuer Weg", houseNumber="9", zip="10117", city="Berlin", country="DE",
+    ), admin, scoped))
+    stored = database.raw.orders.find_one({"id": order["id"]})
+    assert stored["deliveryAddressSnapshot"]["street"] == "Lieferweg"
+    assert database.raw.customer_addresses.find_one({"id": second["id"]})["street"] == "Neuer Weg"
+
+
+def test_customer_master_data_is_tenant_isolated(monkeypatch):
+    database = AsyncDatabase("round2_customer_master_isolation")
+    tenant_a = access(database, TENANT_A)
+    tenant_b = access(database, TENANT_B)
+    run(tenant_b.companies.insert_one({"id": "shared", "name": "Other"}))
+    run(tenant_b.customer_addresses.insert_one({"id": "addr", "companyId": "shared", "type": "main", "active": True}))
+    run(tenant_b.customer_contacts.insert_one({"id": "contact", "companyId": "shared", "active": True}))
+    with pytest.raises(HTTPException) as address_error:
+        run(companies.list_company_addresses("shared", principal(tenant_a), tenant_a))
+    with pytest.raises(HTTPException) as contact_error:
+        run(companies.list_company_contacts("shared", principal(tenant_a), tenant_a))
+    assert address_error.value.status_code == contact_error.value.status_code == 404
+
+
+def test_sales_creates_customer_with_server_assignment_and_address(monkeypatch):
+    database = AsyncDatabase("round2_sales_customer_create")
+    scoped = access(database, TENANT_A, actor_user_id="sales-1", role="sales")
+    sales = {**principal(scoped), "name": "Sally Sales"}
+    async def no_audit(*_args, **_kwargs):
+        return None
+    monkeypatch.setattr(companies, "tenant_audit", no_audit)
+    created = run(companies.create_company(CompanyCreateIn(
+        name="Sales Kunde", primaryAddress=CustomerAddressIn(type="main", street="Weg", zip="12345", city="Ort", country="DE")
+    ), sales, scoped))
+    assert created["assignedSalesRepId"] == "sales-1"
+    assert created["assignedSalesRepName"] == "Sally Sales"
+    assert database.raw.customer_addresses.count_documents({"tenantId": TENANT_A, "companyId": created["id"]}) == 1
+
+
+def test_shop_collections_are_configurable_many_to_many_and_tenant_isolated(monkeypatch):
+    database = AsyncDatabase("round2_collections")
+    tenant_a = access(database, TENANT_A)
+    tenant_b = access(database, TENANT_B)
+    admin = principal(tenant_a)
+
+    async def no_audit(*_args, **_kwargs):
+        return None
+
+    async def fixed_sequence(_name):
+        return 1
+
+    monkeypatch.setattr(products, "tenant_audit", no_audit)
+    monkeypatch.setattr(products, "next_seq", fixed_sequence)
+    first = run(products.create_shop_collection(ShopCollectionIn(name="Neuheiten", sortOrder=20), admin, tenant_a))
+    second = run(products.create_shop_collection(ShopCollectionIn(name="Aktionen", sortOrder=10), admin, tenant_a))
+    foreign = run(products.create_shop_collection(ShopCollectionIn(name="Fremd"), principal(tenant_b), tenant_b))
+    body = ProductIn(name="Katalogprodukt", unit="kg", collectionIds=[first["id"], second["id"]], standardPrice=19.9, salesFloor=17.5, absoluteFloor=15, cost=10, taxRate=7)
+    created = run(products.create_product(body, admin, tenant_a))
+    assert created["collectionIds"] == [first["id"], second["id"]]
+    with pytest.raises(HTTPException) as exc:
+        run(products.update_product(created["id"], body.model_copy(update={"collectionIds": [foreign["id"]]}), admin, tenant_a))
+    assert (exc.value.status_code, exc.value.detail) == (400, "Shop-Collection ist nicht verfügbar")
+    run(products.update_shop_collection(first["id"], ShopCollectionIn(name="Neue Produkte", sortOrder=1, active=False), admin, tenant_a))
+    assert [row["name"] for row in run(products.list_public_shop_collections(tenant_a))] == ["Aktionen"]
+    archived = run(products.archive_shop_collection(second["id"], admin, tenant_a))
+    assert archived == {"ok": True, "archived": True, "referencedProducts": 1}
+
+
+def test_sales_price_authority_does_not_leak_floor_and_supports_both_approval_modes(monkeypatch):
+    database = AsyncDatabase("round2_price_authority")
+    sales_access = access(database, TENANT_A, actor_user_id="sales-1", role="sales")
+    admin_access = access(database, TENANT_A, actor_user_id="admin-1", role="admin")
+    sales = principal(sales_access)
+    admin = principal(admin_access)
+    run(sales_access.companies.insert_one({"id": "c1", "name": "Kunde", "active": True, "assignedSalesRepId": "sales-1"}))
+    run(sales_access.products.insert_one({
+        "id": "p1", "brand": "Brand", "name": "Produkt", "unit": "kg", "active": True, "b2bAvailable": True,
+        "standardPrice": 19.9, "standardPriceMinor": 1990, "salesFloor": 17.5, "salesFloorMinor": 1750,
+        "absoluteFloor": 15.0, "absoluteFloorMinor": 1500, "cost": 10.0, "costMinor": 1000, "taxRate": 7,
+        "b2cPrice": 29.9, "b2cPriceMinor": 2990, "b2cTiers": [{"minQty": 2, "price": 27.9}],
+    }))
+    run(sales_access.products.insert_one({"id": "inactive", "name": "Inactive", "active": False, "b2bAvailable": True}))
+    run(sales_access.products.insert_one({"id": "b2c-only", "name": "Shop", "active": True, "b2bAvailable": False}))
+    async def no_audit(*_args, **_kwargs):
+        return None
+    monkeypatch.setattr(pricing, "tenant_audit", no_audit)
+    catalog_rows = run(products.get_products(sales, sales_access))
+    assert [row["id"] for row in catalog_rows] == ["p1"]
+    catalog = catalog_rows[0]
+    assert not ({"salesFloor", "salesFloorMinor", "absoluteFloor", "cost", "costMinor", "b2cPrice", "b2cPriceMinor", "b2cTiers"} & set(catalog))
+    allowed = run(pricing.upsert_customer_price(CustomerPriceIn(companyId="c1", productId="p1", price=17.5), sales, sales_access))
+    assert allowed["ok"] is True
+    requested = run(pricing.upsert_customer_price(CustomerPriceIn(companyId="c1", productId="p1", price=16.9, minimumQuantity=20), sales, sales_access))
+    assert requested == {"ok": False, "approvalRequired": True, "message": "Dieser Preis benötigt eine Freigabe durch einen Administrator."}
+    pending = database.raw.price_approvals.find_one({"status": "pending"})
+    persistent = run(pricing.decide_price_approval(pending["id"], PriceApprovalDecisionIn(persistence="customer_price"), admin, admin_access))
+    assert persistent["persistence"] == "customer_price"
+    assert database.raw.customer_prices.find_one({"companyId": "c1", "productId": "p1"})["priceMinor"] == 1690
+
+    requested_again = run(pricing.upsert_customer_price(CustomerPriceIn(companyId="c1", productId="p1", price=16.5), sales, sales_access))
+    assert requested_again["approvalRequired"] is True
+    pending_again = database.raw.price_approvals.find_one({"status": "pending"})
+    one_time = run(pricing.decide_price_approval(pending_again["id"], PriceApprovalDecisionIn(persistence="one_time"), admin, admin_access))
+    assert one_time["persistence"] == "one_time"
+    assert database.raw.customer_prices.find_one({"companyId": "c1", "productId": "p1"})["priceMinor"] == 1690
+    sales_approvals = run(pricing.list_my_price_approvals(sales, sales_access))
+    assert len(sales_approvals) == 1
+    assert set(sales_approvals[0]) == {
+        "id", "companyId", "productId", "requestedPriceMinor", "currency",
+        "quantity", "conditions", "decidedAt",
+    }
+    assert not ({"salesFloor", "salesFloorMinor", "absoluteFloor", "cost", "costMinor"} & set(sales_approvals[0]))
+
+
+def test_approved_one_time_price_is_server_authoritative_and_consumed_once(monkeypatch):
+    database = AsyncDatabase("round2_one_time_approval")
+    scoped = access(database, TENANT_A, actor_user_id="sales-1", role="sales")
+    actor = principal(scoped)
+    run(scoped.companies.insert_one({"id": "c1", "name": "Kunde", "active": True, "assignedSalesRepId": "sales-1"}))
+    run(scoped.products.insert_one({
+        "id": "p1", "brand": "Brand", "name": "Produkt", "unit": "kg", "active": True, "b2bAvailable": True,
+        "standardPrice": 19.9, "standardPriceMinor": 1990, "salesFloor": 17.5, "salesFloorMinor": 1750,
+        "absoluteFloor": 15.0, "absoluteFloorMinor": 1500, "cost": 10.0, "costMinor": 1000, "taxRate": 7,
+    }))
+    run(scoped.price_approvals.insert_one({
+        "id": "approval-1", "companyId": "c1", "productId": "p1", "requestedPriceMinor": 1690,
+        "currency": "EUR", "status": "approved", "persistence": "one_time",
+        "requestedBy": "sales-1", "quantity": 20,
+    }))
+    sequence = iter((1, 2))
+    async def next_sequence(_name):
+        return next(sequence)
+    monkeypatch.setattr(offers, "next_seq", next_sequence)
+    with pytest.raises(HTTPException) as quantity_error:
+        run(offers.create_offer(OfferCreate(
+            companyId="c1", items=[OfferItemIn(productId="p1", qty=19, price=16.9, approvalId="approval-1")]
+        ), actor, scoped))
+    assert (quantity_error.value.status_code, quantity_error.value.detail) == (
+        409, "Preisfreigabe ist für diese Menge nicht verfügbar",
+    )
+    reassigned_access = access(database, TENANT_A, actor_user_id="sales-2", role="sales")
+    database.raw.companies.update_one({"id": "c1"}, {"$set": {"assignedSalesRepId": "sales-2"}})
+    with pytest.raises(HTTPException) as actor_error:
+        run(offers.create_offer(OfferCreate(
+            companyId="c1", items=[OfferItemIn(productId="p1", qty=20, price=16.9, approvalId="approval-1")]
+        ), principal(reassigned_access), reassigned_access))
+    assert (actor_error.value.status_code, actor_error.value.detail) == (409, "Preisfreigabe ist nicht verfügbar")
+    database.raw.companies.update_one({"id": "c1"}, {"$set": {"assignedSalesRepId": "sales-1"}})
+    first = run(offers.create_offer(OfferCreate(
+        companyId="c1", items=[OfferItemIn(productId="p1", qty=20, price=999, approvalId="approval-1")]
+    ), actor, scoped))
+    assert first["items"][0]["unitPriceMinor"] == 1690
+    assert first["status"] == "Freigegeben"
+    assert database.raw.price_approvals.find_one({"id": "approval-1"})["consumedByOfferId"] == first["id"]
+    with pytest.raises(HTTPException) as exc:
+        run(offers.create_offer(OfferCreate(
+            companyId="c1", items=[OfferItemIn(productId="p1", qty=20, price=16.9, approvalId="approval-1")]
+        ), actor, scoped))
+    assert (exc.value.status_code, exc.value.detail) == (409, "Preisfreigabe ist nicht verfügbar")
+
+def test_admin_dashboard_drilldowns_use_same_period_and_never_invent_margin():
+    database = AsyncDatabase("round2_dashboard_drilldown")
+    scoped = access(database, TENANT_A)
+    admin = principal(scoped)
+    now = datetime.now(timezone.utc).isoformat()
+    run(scoped.companies.insert_one({"id": "c1", "name": "Kunde Eins", "active": True, "assignedSalesRepId": "sales-1"}))
+    run(scoped.companies.insert_one({"id": "c2", "name": "Kunde Zwei", "active": True, "assignedSalesRepId": "sales-1"}))
+    run(scoped.orders.insert_one({
+        "id": "o1", "companyId": "c1", "createdAt": now, "netTotalMinor": 2000,
+        "items": [{"productId": "p1", "productName": "Produkt", "qty": 2, "lineTotalMinor": 2000, "costMinor": 500}],
+        "salesAttribution": {"salesRepId": "sales-1", "salesRepName": "Sally Sales", "actorUserId": "admin-1", "actorName": "Admin", "actorRole": "admin"},
+    }))
+    run(scoped.orders.insert_one({
+        "id": "o2", "companyId": "c2", "createdAt": now, "netTotalMinor": 1000,
+        "items": [{"productId": "p2", "productName": "Ohne historische Kosten", "qty": 1, "lineTotalMinor": 1000}],
+        "salesAttribution": {"salesRepId": "sales-1", "salesRepName": "Sally Sales", "actorUserId": "admin-1", "actorName": "Admin", "actorRole": "admin"},
+    }))
+    summary = run(dashboard_router.dashboard(admin, scoped, period="month"))
+    assert summary["topSalesReps"][0]["name"] == "Sally Sales"
+    assert summary["topSalesReps"][0]["revenue"] == 30
+    assert summary["topSalesReps"][0]["margin"] is None
+    detail = run(dashboard_router.sales_rep_detail("sales-1", admin, scoped, period="month"))
+    assert [row["companyId"] for row in detail["customers"]] == ["c1", "c2"]
+    customer = run(dashboard_router.customer_dashboard_detail("c1", admin, scoped, period="month"))
+    assert (customer["revenue"], customer["orders"], customer["quantity"], customer["margin"]) == (20, 1, 2, 10)
 
 
 def test_global_audit_is_the_only_direct_runtime_audit_persistence_edge():

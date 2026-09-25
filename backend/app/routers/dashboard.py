@@ -4,7 +4,7 @@ from typing import Annotated, Optional
 from datetime import datetime, timezone
 
 from ..core import api_router, strip_id
-from ..deps import current_user, tenant_business_access, visible_company_ids
+from ..deps import current_user, require_roles, tenant_business_access, visible_company_ids
 from ..tenant_access import TenantBusinessAccess
 from ..money import amount_minor, from_minor, line_total_minor, to_minor
 
@@ -167,7 +167,9 @@ async def dashboard(
             if not sales_id:
                 continue
             row = sales_rows.setdefault(sales_id, {
-                "userId": sales_id, "name": attribution.get("actorName") or sales_id,
+                "userId": sales_id, "name": attribution.get("salesRepName") or (
+                    attribution.get("actorName") if attribution.get("actorUserId") == sales_id else None
+                ) or sales_id,
                 "revenue": 0.0, "orders": 0, "quantity": 0.0,
                 "margin": 0.0, "marginDataComplete": True,
             })
@@ -220,4 +222,115 @@ async def dashboard(
         "topCustomers": customer_metrics[:10],
         "topSalesReps": top_sales_reps,
         "managementAlerts": alerts,
+    }
+
+
+def _within_period(row: dict, start: datetime, end: datetime) -> bool:
+    value = row.get("createdAt") or row.get("date")
+    if not isinstance(value, str):
+        return False
+    try:
+        point = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if point.tzinfo is None:
+        point = point.replace(tzinfo=timezone.utc)
+    return start <= point.astimezone(timezone.utc) <= end
+
+
+def _order_value(order: dict) -> float:
+    if isinstance(order.get("netTotalMinor"), int):
+        return from_minor(order["netTotalMinor"])
+    return from_minor(sum(line_total_minor(to_minor(item["price"]), item["qty"]) for item in order.get("items", [])))
+
+
+def _margin(order: dict) -> tuple[float | None, bool]:
+    value = 0.0
+    for item in order.get("items", []):
+        if not isinstance(item.get("costMinor"), int) or not isinstance(item.get("lineTotalMinor"), int):
+            return None, False
+        value += from_minor(item["lineTotalMinor"] - line_total_minor(item["costMinor"], item["qty"]))
+    return value, True
+
+
+@api_router.get("/dashboard/sales/{sales_rep_id}")
+async def sales_rep_detail(
+    sales_rep_id: str,
+    user: Annotated[dict, Depends(require_roles("admin"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    period: str = "month", start: Optional[str] = None, end: Optional[str] = None,
+):
+    summary = await dashboard(user, access, period=period, start=start, end=end)
+    rep = next((row for row in summary.get("topSalesReps") or [] if row["userId"] == sales_rep_id), None)
+    assigned = await access.companies.find({"assignedSalesRepId": sales_rep_id}).to_list(1000)
+    if not rep and not assigned:
+        raise HTTPException(status_code=404, detail="Vertriebler nicht gefunden")
+    start_at = datetime.fromisoformat(summary["period"]["start"])
+    end_at = datetime.fromisoformat(summary["period"]["end"])
+    company_ids = [company["id"] for company in assigned]
+    orders = await access.orders.find({"companyId": {"$in": company_ids}}).to_list(5000)
+    period_orders = [order for order in orders if _within_period(order, start_at, end_at)]
+    customers = []
+    for company in assigned:
+        rows = [order for order in period_orders if order.get("companyId") == company["id"]]
+        margins = [_margin(order) for order in rows]
+        margin_complete = all(complete for _value, complete in margins)
+        customers.append({
+            "companyId": company["id"], "name": company.get("name", ""),
+            "revenue": round(sum(_order_value(order) for order in rows), 2),
+            "orders": len(rows),
+            "quantity": round(sum(float(item.get("qty", 0)) for order in rows for item in order.get("items", [])), 3),
+            "lastOrderAt": max((order.get("createdAt") or "" for order in rows), default=None),
+            "margin": round(sum(value or 0 for value, _complete in margins), 2) if margin_complete else None,
+            "marginDataComplete": margin_complete,
+        })
+    customers.sort(key=lambda row: (-row["revenue"], row["name"]))
+    rep = rep or {
+        "userId": sales_rep_id, "name": sales_rep_id, "revenue": 0,
+        "orders": 0, "quantity": 0, "margin": None, "marginDataComplete": False,
+        "activeCustomers": sum(1 for company in assigned if company.get("active", True)),
+        "newCustomers": 0,
+    }
+    return {"period": summary["period"], "salesRep": rep, "customers": customers}
+
+
+@api_router.get("/dashboard/customers/{company_id}")
+async def customer_dashboard_detail(
+    company_id: str,
+    user: Annotated[dict, Depends(require_roles("admin"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    period: str = "month", start: Optional[str] = None, end: Optional[str] = None,
+):
+    company = await access.companies.find_one({"id": company_id})
+    if not company:
+        raise HTTPException(status_code=404, detail="Kunde nicht gefunden")
+    summary = await dashboard(user, access, period=period, start=start, end=end)
+    start_at = datetime.fromisoformat(summary["period"]["start"])
+    end_at = datetime.fromisoformat(summary["period"]["end"])
+    orders = [row for row in await access.orders.find({"companyId": company_id}).to_list(5000)
+              if _within_period(row, start_at, end_at)]
+    invoices = [row for row in await access.invoices.find({"companyId": company_id}).to_list(2000)
+                if _within_period(row, start_at, end_at)]
+    products: dict[str, dict] = {}
+    for order in orders:
+        for item in order.get("items", []):
+            product_id = item.get("productId")
+            row = products.setdefault(product_id, {
+                "productId": product_id, "name": item.get("productName") or product_id,
+                "quantity": 0.0, "revenue": 0.0,
+            })
+            row["quantity"] += float(item.get("qty", 0))
+            row["revenue"] += from_minor(item.get("lineTotalMinor", 0))
+    margins = [_margin(order) for order in orders]
+    margin_complete = all(complete for _value, complete in margins)
+    return {
+        "period": summary["period"],
+        "company": {"id": company["id"], "name": company.get("name", ""),
+                    "assignedSalesRepId": company.get("assignedSalesRepId")},
+        "revenue": round(sum(_order_value(order) for order in orders), 2),
+        "orders": len(orders), "invoices": len(invoices),
+        "quantity": round(sum(float(item.get("qty", 0)) for order in orders for item in order.get("items", [])), 3),
+        "margin": round(sum(value or 0 for value, _complete in margins), 2) if margin_complete else None,
+        "marginDataComplete": margin_complete,
+        "products": sorted(products.values(), key=lambda row: (-row["revenue"], row["name"])),
     }

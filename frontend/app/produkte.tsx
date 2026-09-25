@@ -21,6 +21,7 @@ type Form = {
   brand: string;
   name: string;
   categoryId: string;
+  collectionIds: string[];
   unit: string;
   packagingUnit: string;
   packageQuantity: string;
@@ -50,6 +51,7 @@ const EMPTY: Form = {
   brand: "",
   name: "",
   categoryId: "",
+  collectionIds: [],
   unit: "piece",
   packagingUnit: "",
   packageQuantity: "",
@@ -82,6 +84,7 @@ export default function Produkte() {
 
   const products = useQuery({ queryKey: ["products"], queryFn: () => apiGet("/products") });
   const categories = useQuery({ queryKey: ["product-categories"], queryFn: () => apiGet("/product-categories") });
+  const collections = useQuery({ queryKey: ["shop-collections-admin"], queryFn: () => apiGet("/shop-collections") });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<Form>(EMPTY);
   const [showForm, setShowForm] = useState(false);
@@ -122,6 +125,7 @@ export default function Produkte() {
       brand: p.brand ?? "",
       name: p.name,
       categoryId: p.categoryId ?? "",
+      collectionIds: p.collectionIds ?? [],
       unit: p.unit,
       packagingUnit: p.packagingUnit ?? "",
       packageQuantity: p.packageQuantity != null ? String(p.packageQuantity) : "",
@@ -208,6 +212,7 @@ export default function Produkte() {
         brand: form.brand,
         name: form.name,
         categoryId: form.categoryId || null,
+        collectionIds: form.collectionIds,
         unit: form.unit,
         packagingUnit: form.packagingUnit,
         packageQuantity: form.packageQuantity ? num(form.packageQuantity) : null,
@@ -324,6 +329,10 @@ export default function Produkte() {
               <Pressable testID="p-category" style={styles.categoryPicker} onPress={() => setShowCategories((value) => !value)}><Text style={styles.categoryText}>{(categories.data ?? []).find((category: any) => category.id === form.categoryId)?.name ?? "Keine Kategorie"}</Text></Pressable>
               {showCategories ? <View style={{ gap: 4 }}><Pressable style={styles.categoryOption} onPress={() => { setForm((value) => ({ ...value, categoryId: "" })); setShowCategories(false); }}><Text style={styles.categoryText}>Keine Kategorie</Text></Pressable>{(categories.data ?? []).map((category: any) => <Pressable key={category.id} style={styles.categoryOption} onPress={() => { setForm((value) => ({ ...value, categoryId: category.id })); setShowCategories(false); }}><Text style={styles.categoryText}>{category.name}</Text></Pressable>)}<View style={styles.row}><Input value={newCategory} onChangeText={setNewCategory} placeholder="Neue Kategorie" style={{ flex: 1 }} /><Button title="Anlegen" kind="secondary" disabled={!newCategory.trim()} loading={createCategory.isPending} onPress={() => createCategory.mutate()} /></View></View> : null}
 
+              <Text style={styles.label}>B2C-Shop-Collections</Text>
+              <Muted>Ein Produkt kann in mehreren frei verwalteten Shopbereichen erscheinen.</Muted>
+              <View style={styles.toggleGrid}>{(collections.data ?? []).map((collection: any) => { const selected = form.collectionIds.includes(collection.id); return <Pressable key={collection.id} onPress={() => setForm((value) => ({ ...value, collectionIds: selected ? value.collectionIds.filter((id) => id !== collection.id) : [...value.collectionIds, collection.id] }))} style={[styles.toggle, selected && styles.toggleActive]}><Text style={[styles.toggleText, selected && styles.toggleTextActive]}>{selected ? "✓ " : ""}{collection.name}</Text></Pressable>; })}</View>
+
               <View style={styles.row}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.label}>Marke</Text>
@@ -356,7 +365,7 @@ export default function Produkte() {
 
               <View style={styles.row}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.label}>Standardpreis €</Text>
+                  <Text style={styles.label}>B2B-Ausgangspreis €</Text>
                   <Input testID="p-standard" value={form.standardPrice} onChangeText={set("standardPrice")} keyboardType="decimal-pad" />
                 </View>
                 <View style={{ flex: 1 }}>
@@ -366,11 +375,11 @@ export default function Produkte() {
               </View>
               <View style={styles.row}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.label}>Vertriebslimit €</Text>
+                  <Text style={styles.label}>Automatische Freigabegrenze € · INTERN</Text>
                   <Input testID="p-salesfloor" value={form.salesFloor} onChangeText={set("salesFloor")} keyboardType="decimal-pad" />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.label}>Absolute Grenze €</Text>
+                  <Text style={styles.label}>Absolute Preisgrenze € · INTERN</Text>
                   <Input testID="p-absfloor" value={form.absoluteFloor} onChangeText={set("absoluteFloor")} keyboardType="decimal-pad" />
                 </View>
               </View>
@@ -473,7 +482,7 @@ export default function Produkte() {
                         </View>
                         {p.description ? <Muted numberOfLines={2}>{p.description}</Muted> : null}
                         <Muted>
-                          Standard {euro(p.standardPrice)} · Limit {euro(p.salesFloor)} · Grenze {euro(p.absoluteFloor)} · EK{" "}
+                          B2B-Ausgang {euro(p.standardPrice)} · Auto-Freigabe {euro(p.salesFloor)} · absolute Grenze {euro(p.absoluteFloor)} · EK{" "}
                           {euro(p.cost)}
                         </Muted>
                         {p.b2cTiers?.length ? (

@@ -11,6 +11,7 @@ from starlette.concurrency import run_in_threadpool
 
 from ..core import api_router, db, strip_id, next_seq, logger
 from ..audit_service import tenant_audit
+from ..customer_master import company_snapshot, resolve_address_snapshot
 from ..deps import current_user, require_roles, tenant_business_access, visible_company_ids
 from ..models import MachineIn, MachineRequestIn, MachineTermsIn, MachineRespondIn
 from ..emailer import send_email, email_shell
@@ -344,6 +345,7 @@ async def accept_machine_offer(
             if t.get("monthlyRate") is not None or t.get("monthlyRateMinor") is not None
             else 0
         )
+        company = await access.companies.find_one({"id": company_id})
         await access.contracts.insert_one({
             "id": contract_id,
             "companyId": company_id,
@@ -361,6 +363,13 @@ async def accept_machine_offer(
             "snapshotVersion": 1,
             "source": "machine_leasing",
             "machineRequestId": r["id"],
+            "companySnapshot": company_snapshot(company),
+            "billingAddressSnapshot": await resolve_address_snapshot(
+                access, company_id, None, preferred_type="billing"
+            ),
+            "deliveryAddressSnapshot": await resolve_address_snapshot(
+                access, company_id, None, preferred_type="shipping"
+            ),
         })
         updates["contractId"] = contract_id
         await tenant_audit(access, user, "machine_contract_created", contract_id, {"requestId": r["id"]})
