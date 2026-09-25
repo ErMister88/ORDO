@@ -6,7 +6,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArrowLeft, CaretDown, Trash, ArrowClockwise } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
-import { apiGet, apiPost, apiPut, apiDelete } from "@/src/api/client";
+import { apiGet, apiPost, apiPostIdempotent, apiPut, apiDelete } from "@/src/api/client";
 import { euro, num, dateDE } from "@/src/lib/format";
 import { Card, Input, Button, SectionTitle, Muted, EmptyState } from "@/src/components/ui";
 
@@ -37,7 +37,7 @@ export default function Abos() {
 
   const create = useMutation({
     mutationFn: () => {
-      return apiPost("/subscriptions", {
+      return apiPostIdempotent("/subscriptions", {
         companyId,
         items: [{ productId, qty: Number(qty.replace(",", ".")) }],
         intervalDays: Number(interval.replace(",", ".")) || 28,
@@ -61,7 +61,7 @@ export default function Abos() {
     qc.invalidateQueries({ queryKey: ["subscriptions"] });
   };
   const run = useMutation({
-    mutationFn: () => apiPost("/subscriptions/run", {}),
+    mutationFn: () => apiPostIdempotent("/subscriptions/run", {}),
     onSuccess: (r: any) => {
       qc.invalidateQueries({ queryKey: ["orders"] });
       Alert.alert("Abos ausgeführt", `${r.count} fällige Bestellung(en) erstellt.`);

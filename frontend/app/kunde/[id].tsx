@@ -8,7 +8,7 @@ import { ArrowLeft, Phone, EnvelopeSimple, MapPin, Check, PencilSimple, Export, 
 
 import { makeStyles, tokens, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
-import { apiDelete, apiGet, apiPost, apiPut } from "@/src/api/client";
+import { apiDelete, apiGet, apiPost, apiPostIdempotent, apiPut, apiPutIdempotent } from "@/src/api/client";
 import { euro, num, dateDE } from "@/src/lib/format";
 import { shareInvoicePdf, shareCollectivePdf } from "@/src/lib/pdf";
 import { Card, InfoRow, Button, Input, StatusBadge, EmptyState, Muted, LoadingState, ErrorState, PageContainer, KPICard, SectionTitle } from "@/src/components/ui";
@@ -38,6 +38,8 @@ export default function KundeDetail() {
   const addresses = useQuery({ queryKey: ["customer-addresses", id], queryFn: () => apiGet(`/companies/${id}/addresses`) });
   const contacts = useQuery({ queryKey: ["customer-contacts", id], queryFn: () => apiGet(`/companies/${id}/contacts`) });
   const salesStaff = useQuery({ queryKey: ["sales-staff"], queryFn: () => apiGet("/staff/sales"), enabled: isAdmin });
+  const customerTypes = useQuery({ queryKey: ["config-customer-types"], queryFn: () => apiGet("/business-config/customer-types"), enabled: user?.role === "admin" || user?.role === "sales" });
+  const customerTags = useQuery({ queryKey: ["config-customer-tags"], queryFn: () => apiGet("/business-config/customer-tags"), enabled: user?.role === "admin" || user?.role === "sales" });
   const history = useQuery({
     queryKey: ["price-history", id],
     queryFn: () => apiGet(`/companies/${id}/price-history`),
@@ -66,7 +68,7 @@ export default function KundeDetail() {
   (pricingQuote.data?.lines ?? []).forEach((line: any) => { quoteMap[line.productId] = line; });
 
   const payInvoice = useMutation({
-    mutationFn: (invId: string) => apiPut(`/invoices/${invId}/pay`, {}),
+    mutationFn: (invId: string) => apiPutIdempotent(`/invoices/${invId}/pay`, {}),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["invoices"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
@@ -77,7 +79,7 @@ export default function KundeDetail() {
   const payOnline = async (invId: string) => {
     setPayingId(invId);
     try {
-      const res = await apiPost(`/invoices/${invId}/checkout`, {});
+      const res = await apiPostIdempotent(`/invoices/${invId}/checkout`, {});
       if (res?.url) {
         await WebBrowser.openBrowserAsync(res.url);
         for (let i = 0; i < 8; i++) {
@@ -148,6 +150,8 @@ export default function KundeDetail() {
             <InfoRow label="Bestellzyklus" value={`${num(c.orderCycleDays ?? 30)} Tage`} />
             <InfoRow label="CRM-Status" value={c.status ?? "Aktiv"} />
             <InfoRow label="Vertrieb" value={(salesStaff.data ?? []).find((row: any) => row.id === c.assignedSalesRepId)?.name ?? (c.assignedSalesRepId ? "Zugewiesen" : "Kein Vertriebler")} />
+            <InfoRow label="Kundentyp" value={(customerTypes.data ?? []).find((row: any) => row.id === c.customerTypeId)?.name ?? "Nicht klassifiziert"} />
+            <InfoRow label="Klassifizierungen" value={(customerTags.data ?? []).filter((row: any) => (c.customerTagIds ?? []).includes(row.id)).map((row: any) => row.name).join(", ") || "Keine"} />
             {(isAdmin || user?.role === "sales") ? (
               <CustomerControls company={c} salesStaff={salesStaff.data ?? []} isAdmin={isAdmin} onSaved={() => { qc.invalidateQueries({ queryKey: ["company", id] }); qc.invalidateQueries({ queryKey: ["companies"] }); qc.invalidateQueries({ queryKey: ["customer-activities", id] }); }} />
             ) : null}
@@ -508,7 +512,7 @@ function PriceEditorRow({
 
   const save = useMutation({
     mutationFn: () =>
-      apiPost("/customer-prices", {
+      apiPostIdempotent("/customer-prices", {
         companyId,
         productId: product.id,
         price: Number((val || "").replace(",", ".")),
@@ -566,6 +570,10 @@ function PriceEditorRow({
 
 function CompanyEditor({ company, onCancel, onSaved }: { company: any; onCancel: () => void; onSaved: () => void }) {
   const styles = useStyles();
+  const types = useQuery<any[]>({ queryKey: ["config-customer-types"], queryFn: () => apiGet("/business-config/customer-types") });
+  const tags = useQuery<any[]>({ queryKey: ["config-customer-tags"], queryFn: () => apiGet("/business-config/customer-tags") });
+  const [customerTypeId, setCustomerTypeId] = useState<string>(company.customerTypeId ?? "");
+  const [customerTagIds, setCustomerTagIds] = useState<string[]>(company.customerTagIds ?? []);
   const [form, setForm] = useState({
     name: company.name ?? "",
     city: company.city ?? "",
@@ -588,6 +596,8 @@ function CompanyEditor({ company, onCancel, onSaved }: { company: any; onCancel:
         assignedSalesRepId: company.assignedSalesRepId ?? null,
         orderCycleDays: Number((form.orderCycleDays || "30").replace(",", ".")) || 30,
         active: company.active !== false,
+        customerTypeId: customerTypeId || null,
+        customerTagIds,
       }),
     onSuccess: onSaved,
   });
@@ -608,6 +618,10 @@ function CompanyEditor({ company, onCancel, onSaved }: { company: any; onCancel:
       <Input value={form.taxNumber} onChangeText={set("taxNumber")} />
       <Text style={styles.editLabel}>Bestellzyklus (Tage)</Text>
       <Input testID="edit-cycle" value={form.orderCycleDays} onChangeText={set("orderCycleDays")} keyboardType="numeric" />
+      <Text style={styles.editLabel}>Kundentyp</Text>
+      <View style={styles.controlRow}><Pressable onPress={() => setCustomerTypeId("")} style={[styles.controlChip, !customerTypeId && styles.controlChipActive]}><Text style={[styles.controlChipText, !customerTypeId && styles.controlChipTextActive]}>Kein Typ</Text></Pressable>{(types.data ?? []).filter((entry: any) => entry.active !== false || entry.id === customerTypeId).map((entry: any) => <Pressable key={entry.id} disabled={entry.active === false} onPress={() => setCustomerTypeId(entry.id)} style={[styles.controlChip, customerTypeId === entry.id && styles.controlChipActive]}><Text style={[styles.controlChipText, customerTypeId === entry.id && styles.controlChipTextActive]}>{entry.name}{entry.active === false ? " (inaktiv)" : ""}</Text></Pressable>)}</View>
+      <Text style={styles.editLabel}>Klassifizierungen</Text>
+      <View style={styles.controlRow}>{(tags.data ?? []).filter((entry: any) => entry.active !== false || customerTagIds.includes(entry.id)).map((entry: any) => { const selected = customerTagIds.includes(entry.id); return <Pressable key={entry.id} disabled={entry.active === false && !selected} onPress={() => setCustomerTagIds((current) => selected ? current.filter((id) => id !== entry.id) : [...current, entry.id])} style={[styles.controlChip, selected && styles.controlChipActive]}><Text style={[styles.controlChipText, selected && styles.controlChipTextActive]}>{selected ? "✓ " : ""}{entry.name}{entry.active === false ? " (inaktiv)" : ""}</Text></Pressable>; })}</View>
       <Button testID="edit-save" title="Speichern" loading={save.isPending} onPress={() => save.mutate()} style={{ marginTop: 10 }} />
       <Button testID="edit-cancel" title="Abbrechen" kind="secondary" onPress={onCancel} style={{ marginTop: 8 }} />
     </Card>
@@ -686,6 +700,7 @@ const useStyles = makeStyles((c) => ({
   masterHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 },
   archiveText: { color: c.error, fontWeight: "700", fontSize: 12 },
   controlChips: { gap: 6 },
+  controlRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   controlChip: { borderRadius: 999, backgroundColor: c.surfaceTertiary, borderWidth: 1, borderColor: c.border, paddingHorizontal: 11, paddingVertical: 7 },
   controlChipActive: { backgroundColor: c.brandPrimary, borderColor: c.brandPrimary },
   controlChipText: { fontSize: 12, fontWeight: "700", color: c.onSurfaceSecondary },

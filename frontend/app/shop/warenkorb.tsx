@@ -7,7 +7,7 @@ import * as WebBrowser from "expo-web-browser";
 import { ArrowLeft, Minus, Plus, Trash, CheckCircle, CheckSquare, Square } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
-import { apiGet, apiPost } from "@/src/api/client";
+import { apiGet, apiPost, apiPostIdempotent } from "@/src/api/client";
 import { euro } from "@/src/lib/format";
 import { useCart } from "@/src/shop/cart";
 import { shopApi } from "@/src/shop/auth";
@@ -124,7 +124,7 @@ export default function Warenkorb() {
       let paid = false;
       try {
         const orderHeaders = { "X-Order-Token": order.token };
-        const res = await apiPost(`/shop/orders/${order.id}/checkout`, {}, orderHeaders);
+        const res = await apiPostIdempotent(`/shop/orders/${order.id}/checkout`, {}, orderHeaders);
         if (res?.url) {
           await WebBrowser.openBrowserAsync(res.url);
           for (let i = 0; i < 8; i++) {

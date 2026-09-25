@@ -6,7 +6,7 @@ import { canAccessRoute, deniedRouteTarget, isPublicRoute } from "../src/auth/ro
 test("admin may open all internal route classes directly", () => {
   for (const path of [
     "/",
-    "/produkte", "/benutzer", "/abos", "/audit", "/shop-admin", "/maschinen-admin",
+    "/produkte", "/benutzer", "/abos", "/audit", "/shop-admin", "/maschinen-admin", "/einstellungen",
     "/kunden", "/kunde/c1", "/auswertungen", "/katalog", "/vertrieb/u1", "/angebote", "/bestellungen",
     "/bestellung/B-1", "/mehr", "/maschinen", "/passwort-aendern",
   ]) assert.equal(canAccessRoute(path, "admin"), true, path);
@@ -15,7 +15,7 @@ test("admin may open all internal route classes directly", () => {
 test("sales direct URLs allow staff workflows and reject admin-only routes", () => {
   for (const path of ["/kunden", "/kunde/c1", "/katalog", "/angebote", "/bestellungen", "/auswertungen", "/maschinen"])
     assert.equal(canAccessRoute(path, "sales"), true, path);
-  for (const path of ["/benutzer", "/produkte", "/abos", "/audit", "/shop-admin", "/maschinen-admin", "/vertrieb/u1"])
+  for (const path of ["/benutzer", "/produkte", "/abos", "/audit", "/shop-admin", "/maschinen-admin", "/einstellungen", "/vertrieb/u1"])
     assert.equal(canAccessRoute(path, "sales"), false, path);
 });
 

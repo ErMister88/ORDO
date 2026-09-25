@@ -40,7 +40,7 @@ function groups(role?: string): NavGroup[] {
           { label: "Benutzer", path: "/benutzer", icon: UsersThree },
           { label: "Abos", path: "/abos", icon: Receipt },
           { label: "Audit-Log", path: "/audit", icon: ClockCounterClockwise },
-          { label: "Einstellungen", path: "/shop-admin", icon: Storefront },
+          { label: "Einstellungen", path: "/einstellungen", icon: Storefront },
         ] },
       ] : []),
     ];

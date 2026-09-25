@@ -1,12 +1,13 @@
 """Products + image upload/serving."""
+import hashlib
 import secrets
 import uuid
 import requests
 from pymongo.errors import DuplicateKeyError
-from fastapi import Depends, HTTPException, UploadFile, File
+from fastapi import Depends, Header, HTTPException, UploadFile, File
 from fastapi.responses import Response
 from starlette.concurrency import run_in_threadpool
-from typing import Annotated
+from typing import Annotated, Optional
 from datetime import datetime, timezone
 
 from ..core import api_router, strip_id, next_seq
@@ -24,6 +25,7 @@ from ..models import (
 from ..money import to_minor
 from ..storage import put_object, get_object, APP_NAME
 from ..tenant_access import TenantBusinessAccess
+from ..idempotency import IdempotencyService
 
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
 
@@ -77,6 +79,10 @@ async def _validate_product_references(access: TenantBusinessAccess, body: Produ
         raise HTTPException(status_code=400, detail="Einheit ist erforderlich")
     if body.categoryId and not await access.product_categories.find_one({"id": body.categoryId, "active": {"$ne": False}}):
         raise HTTPException(status_code=400, detail="Kategorie ist nicht verfügbar")
+    if body.brandId and not await access.business_brands.find_one(
+        {"id": body.brandId, "active": {"$ne": False}}
+    ):
+        raise HTTPException(status_code=400, detail="Marke ist nicht verfügbar")
     collection_ids = list(dict.fromkeys(body.collectionIds))
     if len(collection_ids) != len(body.collectionIds):
         raise HTTPException(status_code=400, detail="Shop-Collections dürfen nicht doppelt zugeordnet werden")
@@ -118,7 +124,10 @@ async def create_product(
 ):
     await _validate_product_references(access, body)
     seq = await next_seq("product")
-    prod = {"id": f"p{seq}", **_product_payload(body, access.context.default_currency)}
+    payload = _product_payload(body, access.context.default_currency)
+    if body.brandId:
+        payload["brand"] = (await access.business_brands.find_one({"id": body.brandId}))["name"]
+    prod = {"id": f"p{seq}", **payload}
     await access.products.insert_one(prod)
     await tenant_audit(access, user, "product.create", prod["id"], {"name": prod["name"], "sku": prod.get("sku", "")})
     return strip_id(prod)
@@ -133,6 +142,8 @@ async def update_product(
 ):
     await _validate_product_references(access, body, product_id)
     payload = _product_payload(body, access.context.default_currency)
+    if body.brandId:
+        payload["brand"] = (await access.business_brands.find_one({"id": body.brandId}))["name"]
     if "metadata" not in body.model_fields_set:
         payload.pop("metadata", None)
     res = await access.products.update_one(
@@ -303,14 +314,37 @@ async def update_product_category(
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Kategorie nicht gefunden")
     row = await access.product_categories.find_one({"id": category_id})
+    await tenant_audit(access, user, "product_category.update", category_id,
+                       {"name": name, "active": body.active, "sortOrder": body.sortOrder})
     return strip_id(row)
 
 
-@api_router.post("/shop/equipment-requests", status_code=201)
+@api_router.delete("/product-categories/{category_id}")
+async def archive_product_category(
+    category_id: str,
+    user: Annotated[dict, Depends(require_roles("admin"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    result = await access.product_categories.update_one(
+        {"id": category_id}, {"$set": {"active": False}}
+    )
+    if result.matched_count != 1:
+        raise HTTPException(status_code=404, detail="Kategorie nicht gefunden")
+    referenced = await access.products.count_documents({"categoryId": category_id})
+    await tenant_audit(access, user, "product_category.archive", category_id, {"referencedProducts": referenced})
+    return {"ok": True, "archived": True, "referencedProducts": referenced}
+
+
 async def create_equipment_financing_request(
     body: EquipmentFinancingRequestIn,
     access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
+    *,
+    operation_id: str | None = None,
 ):
+    if operation_id:
+        existing = await access.equipment_requests.find_one({"operationId": operation_id})
+        if existing:
+            return {"id": existing["id"], "status": existing["status"]}
     product = await access.products.find_one({
         "id": body.productId, "active": {"$ne": False},
         "b2cAvailable": {"$ne": False}, "financingRequestAllowed": True,
@@ -329,8 +363,36 @@ async def create_equipment_financing_request(
         "message": body.message.strip(), "status": "Angefragt",
         "createdAt": datetime.now(timezone.utc).isoformat(),
     }
+    if operation_id:
+        row["operationId"] = operation_id
     await access.equipment_requests.insert_one(row)
     return {"id": row["id"], "status": row["status"]}
+
+
+@api_router.post("/shop/equipment-requests", status_code=201)
+async def create_equipment_financing_request_endpoint(
+    body: EquipmentFinancingRequestIn,
+    access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
+    idempotency_key: Annotated[Optional[str], Header(alias="Idempotency-Key")] = None,
+):
+    email = body.email.strip().lower()
+    actor_id = "guest:" + hashlib.sha256(email.encode("utf-8")).hexdigest()[:24]
+    service = IdempotencyService(
+        access, actor_id=actor_id, operation="equipment_request.create",
+        key=idempotency_key or "", payload=body.model_dump(mode="json"),
+    )
+    claim = await service.claim()
+    if claim.is_replay:
+        return claim.replay_response
+    try:
+        response = await create_equipment_financing_request(
+            body, access, operation_id=claim.record_id
+        )
+        await service.complete(claim, response, {"equipmentRequestId": response["id"]})
+        return response
+    except Exception as exc:
+        await service.fail(claim, error_code="equipment_request_failed", exception=exc)
+        raise
 
 
 @api_router.get("/equipment-requests")

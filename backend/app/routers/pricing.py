@@ -1,10 +1,11 @@
 """Authoritative B2B quotes, customer prices, promotions and price history."""
 import secrets
 from datetime import datetime, timezone
-from typing import Annotated
+from typing import Annotated, Optional
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, Header, HTTPException
 from pymongo import ReturnDocument
+from pymongo.errors import DuplicateKeyError
 
 from ..audit_service import tenant_audit
 from ..core import api_router, strip_id
@@ -14,6 +15,7 @@ from ..models import B2BPromotionIn, CustomerPriceIn, PriceApprovalDecisionIn, P
 from ..money import MoneyError, amount_minor, from_minor, require_minor, to_minor
 from ..pricing_engine import PricingEngine, PricingError
 from ..tenant_access import TenantBusinessAccess
+from ..idempotency import IdempotencyService
 
 
 def _pricing_http(exc: Exception) -> HTTPException:
@@ -53,7 +55,13 @@ def _conditions(body: CustomerPriceIn, *, include_internal: bool) -> dict:
     return payload
 
 
-async def _persist_customer_price(body: CustomerPriceIn, user: dict, access: TenantBusinessAccess) -> dict:
+async def _persist_customer_price(
+    body: CustomerPriceIn,
+    user: dict,
+    access: TenantBusinessAccess,
+    *,
+    operation_id: str | None = None,
+) -> dict:
     existing_rows = await access.customer_prices.find(
         {"companyId": body.companyId, "productId": body.productId, "active": {"$ne": False}}
     ).to_list(2)
@@ -62,25 +70,71 @@ async def _persist_customer_price(body: CustomerPriceIn, user: dict, access: Ten
     existing = existing_rows[0] if existing_rows else None
     currency = access.context.default_currency
     new_minor = to_minor(body.price)
+    conditions = _conditions(body, include_internal=user.get("role") == "admin")
+
+    async def ensure_history(previous_minor: int | None) -> None:
+        if previous_minor == new_minor:
+            return
+        history = {
+            "companyId": body.companyId, "productId": body.productId,
+            "oldPrice": from_minor(previous_minor) if previous_minor is not None else None,
+            "oldPriceMinor": previous_minor, "newPrice": from_minor(new_minor),
+            "newPriceMinor": new_minor, "currency": currency,
+            "changedBy": user["id"], "changedByName": user.get("name", ""),
+            "changedAt": datetime.now(timezone.utc).isoformat(),
+        }
+        if operation_id:
+            history["operationId"] = operation_id
+        try:
+            await access.price_history.insert_one(history)
+        except DuplicateKeyError:
+            if not operation_id or not await access.price_history.find_one({"operationId": operation_id}):
+                raise
+
+    if operation_id and existing and existing.get("lastOperationId") == operation_id:
+        await ensure_history(existing.get("lastOperationPreviousPriceMinor"))
+        recovered = {
+            "ok": True, "companyId": body.companyId, "productId": body.productId,
+            "price": from_minor(new_minor), "priceMinor": new_minor, "currency": currency,
+            **{key: value for key, value in conditions.items() if key != "internalNote" and value not in (None, "")},
+        }
+        if user.get("role") == "admin" and conditions.get("internalNote"):
+            recovered["internalNote"] = conditions["internalNote"]
+        return recovered
     try:
         old_minor = amount_minor(existing, "price", expected_currency=currency) if existing else None
     except MoneyError as exc:
         raise HTTPException(status_code=409, detail="Bestehender Kundenpreis ist beschädigt") from exc
-    if old_minor != new_minor:
-        await access.price_history.insert_one({
-            "companyId": body.companyId, "productId": body.productId,
-            "oldPrice": from_minor(old_minor) if old_minor is not None else None,
-            "oldPriceMinor": old_minor, "newPrice": from_minor(new_minor),
-            "newPriceMinor": new_minor, "currency": currency,
-            "changedBy": user["id"], "changedByName": user.get("name", ""),
-            "changedAt": datetime.now(timezone.utc).isoformat(),
-        })
-    conditions = _conditions(body, include_internal=user.get("role") == "admin")
-    await access.customer_prices.update_one(
-        {"companyId": body.companyId, "productId": body.productId},
-        {"$set": {"price": from_minor(new_minor), "priceMinor": new_minor,
-                  "currency": currency, "active": True, **conditions}}, upsert=True,
+    expected_price = (
+        {"priceMinor": old_minor}
+        if existing and "priceMinor" in existing
+        else {"priceMinor": {"$exists": False}}
     )
+    set_fields = {
+        "price": from_minor(new_minor), "priceMinor": new_minor,
+        "currency": currency, "active": True, **conditions,
+    }
+    if operation_id:
+        set_fields.update({
+            "lastOperationId": operation_id,
+            "lastOperationPreviousPriceMinor": old_minor,
+        })
+    try:
+        updated = await access.customer_prices.update_one(
+            {"companyId": body.companyId, "productId": body.productId, **expected_price},
+            {"$set": set_fields}, upsert=existing is None,
+        )
+    except DuplicateKeyError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Kundenpreis wurde zwischenzeitlich geändert. Bitte neu laden.",
+        ) from exc
+    if existing is not None and updated.matched_count != 1:
+        raise HTTPException(
+            status_code=409,
+            detail="Kundenpreis wurde zwischenzeitlich geändert. Bitte neu laden.",
+        )
+    await ensure_history(old_minor)
     await tenant_audit(access, user, "price.set", body.companyId,
                        {"productId": body.productId, "priceMinor": new_minor, "currency": currency})
     await record_customer_activity(
@@ -127,11 +181,12 @@ async def quote_b2b(
     }
 
 
-@api_router.post("/customer-prices")
 async def upsert_customer_price(
     body: CustomerPriceIn,
     user: Annotated[dict, Depends(require_roles("admin", "sales"))],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    *,
+    operation_id: str | None = None,
 ):
     if not await _can_manage_company(user, access, body.companyId):
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
@@ -140,6 +195,11 @@ async def upsert_customer_price(
     if not company or not product:
         raise HTTPException(status_code=404, detail="Kunde oder Produkt nicht gefunden")
     if user.get("role") == "sales":
+        if operation_id:
+            existing_approval = await access.price_approvals.find_one({"operationId": operation_id})
+            if existing_approval:
+                return {"ok": False, "approvalRequired": True,
+                        "message": "Dieser Preis benötigt eine Freigabe durch einen Administrator."}
         try:
             floor_minor = amount_minor(product, "salesFloor", expected_currency=access.context.default_currency)
         except MoneyError:
@@ -154,11 +214,41 @@ async def upsert_customer_price(
                 "quantity": body.minimumQuantity,
                 "status": "pending", "requestedBy": user["id"], "createdAt": now,
             }
+            if operation_id:
+                approval["operationId"] = operation_id
             await access.price_approvals.insert_one(approval)
             await tenant_audit(access, user, "price.approval.request", approval["id"], {"companyId": body.companyId, "productId": body.productId})
             return {"ok": False, "approvalRequired": True,
                     "message": "Dieser Preis benötigt eine Freigabe durch einen Administrator."}
-    return await _persist_customer_price(body, user, access)
+    return await _persist_customer_price(body, user, access, operation_id=operation_id)
+
+
+@api_router.post("/customer-prices")
+async def upsert_customer_price_endpoint(
+    body: CustomerPriceIn,
+    user: Annotated[dict, Depends(require_roles("admin", "sales"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    idempotency_key: Annotated[Optional[str], Header(alias="Idempotency-Key")] = None,
+):
+    service = IdempotencyService(
+        access, actor_id=user["id"], operation="customer_price.upsert",
+        key=idempotency_key or "", payload=body.model_dump(mode="json"),
+    )
+    claim = await service.claim()
+    if claim.is_replay:
+        return claim.replay_response
+    try:
+        response = await upsert_customer_price(
+            body, user, access, operation_id=claim.record_id
+        )
+        await service.complete(
+            claim, response,
+            {"companyId": body.companyId, "productId": body.productId},
+        )
+        return response
+    except Exception as exc:
+        await service.fail(claim, error_code="customer_price_failed", exception=exc)
+        raise
 
 
 @api_router.get("/pricing/approvals")
@@ -240,7 +330,9 @@ async def decide_price_approval(
                 companyId=approval["companyId"], productId=approval["productId"],
                 price=from_minor(approval["requestedPriceMinor"]), **(approval.get("conditions") or {}),
             )
-            result = await _persist_customer_price(price_body, user, access)
+            result = await _persist_customer_price(
+                price_body, user, access, operation_id=f"approval:{approval_id}"
+            )
             result["approvalId"] = approval_id
             result["persistence"] = body.persistence
         finalized = await access.price_approvals.update_one(

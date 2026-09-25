@@ -6,7 +6,7 @@ import * as WebBrowser from "expo-web-browser";
 import { ArrowLeft, SignOut, MapPin, Receipt, Truck } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
-import { apiGet, apiPost } from "@/src/api/client";
+import { apiGet, apiPostIdempotent } from "@/src/api/client";
 import { euro, dateDE } from "@/src/lib/format";
 import { shopApi, shopSetToken, shopLogout, shopToken } from "@/src/shop/auth";
 import { shareShopInvoicePdf, glsTrackUrl } from "@/src/lib/pdf";
@@ -88,7 +88,11 @@ export default function ShopKonto() {
   const payNow = async (orderId: string) => {
     setPayingId(orderId);
     try {
-      const res = await apiPost(`/shop/orders/${orderId}/checkout`, {});
+      const token = await shopToken();
+      const res = await apiPostIdempotent(
+        `/shop/orders/${orderId}/checkout`, {},
+        token ? { Authorization: `Bearer ${token}` } : {},
+      );
       if (res?.url) {
         await WebBrowser.openBrowserAsync(res.url);
         for (let i = 0; i < 8; i++) {

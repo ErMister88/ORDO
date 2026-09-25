@@ -30,15 +30,18 @@ export default function Kunden() {
   const [salesFilter, setSalesFilter] = useState("all");
   const [showCreate, setShowCreate] = useState(params.new === "1");
   const [createError, setCreateError] = useState("");
-  const emptyForm = { name: "", street: "", houseNumber: "", zip: "", city: "", country: "Deutschland", email: "", phone: "", vatId: "", taxNumber: "", status: "Lead", contactFirstName: "", contactLastName: "", contactTitle: "", contactPhone: "", contactMobile: "", contactEmail: "" };
+  const emptyForm = { name: "", street: "", houseNumber: "", zip: "", city: "", country: "Deutschland", email: "", phone: "", vatId: "", taxNumber: "", status: "Lead", customerTypeId: "", customerTagIds: [] as string[], contactFirstName: "", contactLastName: "", contactTitle: "", contactPhone: "", contactMobile: "", contactEmail: "" };
   const [form, setForm] = useState(emptyForm);
 
   const { data, isLoading } = useQuery({ queryKey: ["companies"], queryFn: () => apiGet("/companies") });
   const salesStaff = useQuery({ queryKey: ["sales-staff"], queryFn: () => apiGet("/staff/sales"), enabled: user?.role === "admin" });
+  const customerTypes = useQuery({ queryKey: ["config-customer-types"], queryFn: () => apiGet("/business-config/customer-types") });
+  const customerTags = useQuery({ queryKey: ["config-customer-tags"], queryFn: () => apiGet("/business-config/customer-tags") });
   const createCustomer = useMutation({
     mutationFn: () => apiPost("/companies", {
       name: form.name, city: form.city, email: form.email, phone: form.phone, vatId: form.vatId,
       taxNumber: form.taxNumber, status: form.status,
+      customerTypeId: form.customerTypeId || null, customerTagIds: form.customerTagIds,
       primaryAddress: { type: "main", label: "Hauptadresse", street: form.street, houseNumber: form.houseNumber, zip: form.zip, city: form.city, country: form.country, active: true },
       ...(form.contactFirstName && form.contactLastName && form.contactEmail ? { primaryContact: { firstName: form.contactFirstName, lastName: form.contactLastName, title: form.contactTitle, phone: form.contactPhone, mobile: form.contactMobile, email: form.contactEmail, active: true } } : {}),
     }),
@@ -135,6 +138,8 @@ export default function Kunden() {
               <Input testID="customer-vat" value={form.vatId} onChangeText={(vatId) => setForm((value) => ({ ...value, vatId }))} placeholder="USt-ID (optional)" style={styles.formInput} />
               <Input value={form.taxNumber} onChangeText={(taxNumber) => setForm((value) => ({ ...value, taxNumber }))} placeholder="Steuernummer (optional)" style={styles.formInput} />
             </View>
+            {(customerTypes.data ?? []).some((entry: any) => entry.active !== false) ? <><Text style={styles.formHint}>Kundentyp (optional)</Text><View style={styles.selectionWrap}>{(customerTypes.data ?? []).filter((entry: any) => entry.active !== false).map((entry: any) => <Pressable key={entry.id} onPress={() => setForm((value) => ({ ...value, customerTypeId: value.customerTypeId === entry.id ? "" : entry.id }))} style={[styles.chip, form.customerTypeId === entry.id && styles.chipActive]}><Text style={[styles.chipText, form.customerTypeId === entry.id && styles.chipTextActive]}>{entry.name}</Text></Pressable>)}</View></> : null}
+            {(customerTags.data ?? []).some((entry: any) => entry.active !== false) ? <><Text style={styles.formHint}>Klassifizierungen (optional, mehrere möglich)</Text><View style={styles.selectionWrap}>{(customerTags.data ?? []).filter((entry: any) => entry.active !== false).map((entry: any) => { const active = form.customerTagIds.includes(entry.id); return <Pressable key={entry.id} onPress={() => setForm((value) => ({ ...value, customerTagIds: active ? value.customerTagIds.filter((id) => id !== entry.id) : [...value.customerTagIds, entry.id] }))} style={[styles.chip, active && styles.chipActive]}><Text style={[styles.chipText, active && styles.chipTextActive]}>{entry.name}</Text></Pressable>; })}</View></> : null}
             <Text style={styles.formHint}>Erster Ansprechpartner (optional)</Text>
             <View style={styles.formRow}><Input value={form.contactFirstName} onChangeText={(contactFirstName) => setForm((value) => ({ ...value, contactFirstName }))} placeholder="Vorname" style={styles.formInput} /><Input value={form.contactLastName} onChangeText={(contactLastName) => setForm((value) => ({ ...value, contactLastName }))} placeholder="Nachname" style={styles.formInput} /></View>
             <Input value={form.contactTitle} onChangeText={(contactTitle) => setForm((value) => ({ ...value, contactTitle }))} placeholder="Funktion / Rolle" />
@@ -226,6 +231,7 @@ const useStyles = makeStyles((c) => ({
   formRow: { flexDirection: "row", gap: 10 },
   formInput: { flex: 1 },
   formHint: { fontSize: 13, color: c.muted },
+  selectionWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   formError: { fontSize: 13, color: c.error, fontWeight: "700" },
   row: {
     flexDirection: "row",

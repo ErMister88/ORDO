@@ -6,7 +6,8 @@ from html import escape
 from typing import Annotated, Optional
 
 import stripe
-from fastapi import Depends, HTTPException
+from fastapi import Depends, Header, HTTPException
+from pymongo.errors import DuplicateKeyError
 from starlette.concurrency import run_in_threadpool
 
 from ..core import api_router, db, strip_id, next_seq, logger
@@ -18,6 +19,7 @@ from ..emailer import send_email, email_shell
 from ..tenant_access import TenantBusinessAccess
 from ..money import MoneyError, amount_minor, currency_code, from_minor, to_minor
 from ..pricing_engine import PricingEngine, PricingError
+from ..idempotency import IdempotencyService
 
 stripe.api_key = os.environ.get("STRIPE_API_KEY", "")
 APP_URL = (os.environ.get("APP_URL") or "https://ordo-connect.preview.emergentagent.com").rstrip("/")
@@ -139,12 +141,17 @@ async def _machine_request_references_visible(
     return True
 
 
-@api_router.post("/machine-requests", status_code=201)
 async def create_machine_request(
     body: MachineRequestIn,
     user: Annotated[dict, Depends(current_user)],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    *,
+    operation_id: str | None = None,
 ):
+    if operation_id:
+        existing = await access.machine_requests.find_one({"operationId": operation_id})
+        if existing:
+            return strip_id(existing)
     if body.type not in TYPE_LABEL:
         raise HTTPException(status_code=400, detail="Ungültiger Erwerbstyp")
     m = await access.machines.find_one({"id": body.machineId})
@@ -176,6 +183,8 @@ async def create_machine_request(
         "status": status, "paymentStatus": "Offen",
         "terms": None, "createdAt": now.isoformat(),
     }
+    if operation_id:
+        doc["operationId"] = operation_id
     if direct_quote is not None:
         doc.update({
             "machinePrice": from_minor(direct_quote.final_unit_price_minor),
@@ -200,6 +209,31 @@ async def create_machine_request(
         except Exception as e:
             logger.warning(f"Anfrage-Mail fehlgeschlagen: {e}")
     return strip_id(doc)
+
+
+@api_router.post("/machine-requests", status_code=201)
+async def create_machine_request_endpoint(
+    body: MachineRequestIn,
+    user: Annotated[dict, Depends(current_user)],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    idempotency_key: Annotated[Optional[str], Header(alias="Idempotency-Key")] = None,
+):
+    service = IdempotencyService(
+        access, actor_id=user["id"], operation="machine_request.create",
+        key=idempotency_key or "", payload=body.model_dump(mode="json"),
+    )
+    claim = await service.claim()
+    if claim.is_replay:
+        return claim.replay_response
+    try:
+        response = await create_machine_request(
+            body, user, access, operation_id=claim.record_id
+        )
+        await service.complete(claim, response, {"machineRequestId": response["id"]})
+        return response
+    except Exception as exc:
+        await service.fail(claim, error_code="machine_request_failed", exception=exc)
+        raise
 
 
 @api_router.get("/machine-requests")
@@ -301,11 +335,12 @@ async def set_machine_terms(
     return strip_id(await access.machine_requests.find_one({"id": req_id}))
 
 
-@api_router.post("/machine-requests/{req_id}/accept")
 async def accept_machine_offer(
     req_id: str,
     user: Annotated[dict, Depends(current_user)],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    *,
+    operation_id: str | None = None,
 ):
     r = await access.machine_requests.find_one({"id": req_id})
     if not r or not await _machine_request_references_visible(r, access):
@@ -314,6 +349,13 @@ async def accept_machine_offer(
         ids = await visible_company_ids(user, access)
         if not _owns(r, user, ids):
             raise HTTPException(status_code=403, detail="Keine Berechtigung")
+    existing_contract = await access.contracts.find_one({"machineRequestId": req_id})
+    if existing_contract:
+        await access.machine_requests.update_one(
+            {"id": req_id},
+            {"$set": {"status": "Bestätigt", "contractId": existing_contract["id"]}},
+        )
+        return strip_id(await access.machine_requests.find_one({"id": req_id}))
     if r.get("status") != "Angebot":
         raise HTTPException(status_code=409, detail="Es liegt kein offenes Angebot vor")
     updates = {"status": "Bestätigt"}
@@ -346,7 +388,7 @@ async def accept_machine_offer(
             else 0
         )
         company = await access.companies.find_one({"id": company_id})
-        await access.contracts.insert_one({
+        contract = {
             "id": contract_id,
             "companyId": company_id,
             "productId": product_id,
@@ -370,13 +412,53 @@ async def accept_machine_offer(
             "deliveryAddressSnapshot": await resolve_address_snapshot(
                 access, company_id, None, preferred_type="shipping"
             ),
-        })
+        }
+        if operation_id:
+            contract["operationId"] = operation_id
+        contract_created = True
+        try:
+            await access.contracts.insert_one(contract)
+        except DuplicateKeyError:
+            existing_contract = await access.contracts.find_one({"machineRequestId": req_id})
+            if not existing_contract:
+                raise
+            contract_id = existing_contract["id"]
+            contract_created = False
         updates["contractId"] = contract_id
-        await tenant_audit(access, user, "machine_contract_created", contract_id, {"requestId": r["id"]})
+        if contract_created:
+            await tenant_audit(access, user, "machine_contract_created", contract_id, {"requestId": r["id"]})
 
     await access.machine_requests.update_one({"id": req_id}, {"$set": updates})
     await tenant_audit(access, user, "machine_accept", req_id)
     return strip_id(await access.machine_requests.find_one({"id": req_id}))
+
+
+@api_router.post("/machine-requests/{req_id}/accept")
+async def accept_machine_offer_endpoint(
+    req_id: str,
+    user: Annotated[dict, Depends(current_user)],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    idempotency_key: Annotated[Optional[str], Header(alias="Idempotency-Key")] = None,
+):
+    service = IdempotencyService(
+        access, actor_id=user["id"], operation="machine_request.accept",
+        key=idempotency_key or "", payload={"machineRequestId": req_id},
+    )
+    claim = await service.claim()
+    if claim.is_replay:
+        return claim.replay_response
+    try:
+        response = await accept_machine_offer(
+            req_id, user, access, operation_id=claim.record_id
+        )
+        refs = {"machineRequestId": req_id}
+        if response.get("contractId"):
+            refs["contractId"] = response["contractId"]
+        await service.complete(claim, response, refs)
+        return response
+    except Exception as exc:
+        await service.fail(claim, error_code="machine_accept_failed", exception=exc)
+        raise
 
 
 def _owns(r: dict, user: dict, ids: list) -> bool:
@@ -453,11 +535,12 @@ async def leasing_contracts(
     return out
 
 
-@api_router.post("/machine-requests/{req_id}/checkout")
 async def machine_checkout(
     req_id: str,
     user: Annotated[dict, Depends(current_user)],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    *,
+    stripe_idempotency_key: str | None = None,
 ):
     r = await access.machine_requests.find_one({"id": req_id})
     if not r or not await _machine_request_references_visible(r, access):
@@ -469,6 +552,8 @@ async def machine_checkout(
         raise HTTPException(status_code=400, detail="Nur Direktkauf ist sofort zahlbar")
     if r.get("paymentStatus") == "Bezahlt":
         raise HTTPException(status_code=409, detail="Bereits bezahlt")
+    if r.get("stripeSessionId") and r.get("stripeCheckoutUrl"):
+        return {"url": r["stripeCheckoutUrl"], "sessionId": r["stripeSessionId"]}
     try:
         currency = currency_code(r.get("currency") or access.context.default_currency)
         amount_cents = amount_minor(r, "machinePrice", expected_currency=currency)
@@ -483,6 +568,7 @@ async def machine_checkout(
             client_reference_id=req_id, metadata={"machineRequestId": req_id},
             success_url=f"{APP_URL}/?payment=success&session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"{APP_URL}/?payment=cancelled",
+            idempotency_key=stripe_idempotency_key,
         )
 
     try:
@@ -490,8 +576,45 @@ async def machine_checkout(
     except Exception as e:
         logger.warning(f"Stripe Checkout (Maschine) fehlgeschlagen: {e}")
         raise HTTPException(status_code=502, detail="Zahlung konnte nicht gestartet werden")
-    await access.machine_requests.update_one({"id": req_id}, {"$set": {"stripeSessionId": session.id}})
+    await access.machine_requests.update_one(
+        {"id": req_id},
+        {"$set": {"stripeSessionId": session.id, "stripeCheckoutUrl": session.url}},
+    )
     return {"url": session.url, "sessionId": session.id}
+
+
+@api_router.post("/machine-requests/{req_id}/checkout")
+async def machine_checkout_endpoint(
+    req_id: str,
+    user: Annotated[dict, Depends(current_user)],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    idempotency_key: Annotated[Optional[str], Header(alias="Idempotency-Key")] = None,
+):
+    request = await access.machine_requests.find_one({"id": req_id})
+    if not request or not await _machine_request_references_visible(request, access):
+        raise HTTPException(status_code=404, detail="Anfrage nicht gefunden")
+    if not _owns(request, user, await visible_company_ids(user, access)):
+        raise HTTPException(status_code=403, detail="Keine Berechtigung")
+    service = IdempotencyService(
+        access, actor_id=user["id"], operation="machine_request.checkout",
+        key=idempotency_key or "", payload={"machineRequestId": req_id},
+    )
+    claim = await service.claim()
+    if claim.is_replay:
+        return claim.replay_response
+    try:
+        response = await machine_checkout(
+            req_id, user, access,
+            stripe_idempotency_key=f"{access.context.tenant_id}:{claim.record_id}",
+        )
+        await service.complete(
+            claim, response,
+            {"machineRequestId": req_id, "stripeSessionId": response["sessionId"]},
+        )
+        return response
+    except Exception as exc:
+        await service.fail(claim, error_code="machine_checkout_failed", exception=exc)
+        raise
 
 
 @api_router.get("/machine-requests/{req_id}/payment-status")

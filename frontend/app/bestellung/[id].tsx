@@ -8,7 +8,7 @@ import { ArrowLeft, Check, Truck, XCircle, ImageSquare, Receipt, Export } from "
 
 import { makeStyles, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
-import { apiGet, apiPut, apiPost, fileUrl } from "@/src/api/client";
+import { apiGet, apiPut, apiPostIdempotent, fileUrl } from "@/src/api/client";
 import { euro, num, dateDE } from "@/src/lib/format";
 import { shareInvoicePdf, shareDeliveryNotePdf } from "@/src/lib/pdf";
 import { Card, InfoRow, Button, StatusBadge, Muted } from "@/src/components/ui";
@@ -54,7 +54,7 @@ export default function BestellungDetail() {
   });
 
   const createInvoice = useMutation({
-    mutationFn: () => apiPost(`/orders/${id}/invoice`, {}),
+    mutationFn: () => apiPostIdempotent(`/orders/${id}/invoice`, {}),
     onSuccess: (inv: any) => {
       qc.invalidateQueries({ queryKey: ["order", id] });
       qc.invalidateQueries({ queryKey: ["invoices"] });

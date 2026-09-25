@@ -1,7 +1,8 @@
 """Invoice generation with VAT + collective (monthly) invoice data."""
-from fastapi import Depends, HTTPException
-from typing import Annotated
+from fastapi import Depends, Header, HTTPException
+from typing import Annotated, Optional
 from datetime import datetime, timezone
+from pymongo.errors import DuplicateKeyError
 
 from ..core import api_router, strip_id, next_seq
 from ..customer_activity import record_customer_activity
@@ -11,6 +12,7 @@ from .invoices import invoice_references_visible
 from .orders import order_references_visible
 from ..money import from_minor, require_minor, tax_minor
 from ..snapshots import SNAPSHOT_VERSION, redact_internal_snapshot_fields
+from ..idempotency import IdempotencyService
 
 
 async def _build_lines(access: TenantBusinessAccess, items):
@@ -66,8 +68,20 @@ async def _build_lines(access: TenantBusinessAccess, items):
     )
 
 
-async def create_invoice_record(access: TenantBusinessAccess, order: dict, user: dict) -> dict:
+async def create_invoice_record(
+    access: TenantBusinessAccess,
+    order: dict,
+    user: dict,
+    *,
+    operation_id: str | None = None,
+) -> dict:
     """Create the immutable invoice snapshot for an already-authorized order."""
+    existing = await access.invoices.find_one({"orderId": order["id"]})
+    if existing:
+        await access.orders.update_one(
+            {"id": order["id"]}, {"$set": {"invoiceId": existing["id"]}}
+        )
+        return existing
     lines, net, breakdown, tax_total, gross, net_minor, breakdown_minor, tax_minor_total, gross_minor, currency = await _build_lines(access, order["items"])
     now = datetime.now(timezone.utc)
     seq = await next_seq("invoice")
@@ -91,19 +105,29 @@ async def create_invoice_record(access: TenantBusinessAccess, order: dict, user:
         "salesAttribution": order.get("salesAttribution"), "status": "Offen",
         "createdBy": user["id"], "createdAt": now.isoformat(),
     }
+    if operation_id:
+        invoice["operationId"] = operation_id
     if not await invoice_references_visible(access, invoice):
         raise HTTPException(status_code=404, detail="Bestellung nicht gefunden")
-    await access.invoices.insert_one(invoice)
-    await access.orders.update_one({"id": order["id"]}, {"$set": {"invoiceId": inv_no}})
-    await record_customer_activity(
-        access, company_id=order["companyId"], actor=user, activity_type="invoice_created",
-        title=f"Rechnung {inv_no} erstellt", internal=False,
-        reference={"type": "invoice", "id": inv_no},
+    try:
+        await access.invoices.insert_one(invoice)
+    except DuplicateKeyError:
+        existing = await access.invoices.find_one({"orderId": order["id"]})
+        if not existing:
+            raise
+        invoice = existing
+    await access.orders.update_one(
+        {"id": order["id"]}, {"$set": {"invoiceId": invoice["id"]}}
     )
+    if invoice["id"] == inv_no:
+        await record_customer_activity(
+            access, company_id=order["companyId"], actor=user, activity_type="invoice_created",
+            title=f"Rechnung {inv_no} erstellt", internal=False,
+            reference={"type": "invoice", "id": inv_no},
+        )
     return invoice
 
 
-@api_router.post("/orders/{order_id}/invoice")
 async def create_invoice_for_order(
     order_id: str,
     user: Annotated[dict, Depends(require_roles("admin", "sales"))],
@@ -119,6 +143,42 @@ async def create_invoice_for_order(
         raise HTTPException(status_code=400, detail="Für diese Bestellung existiert bereits eine Rechnung")
     invoice = await create_invoice_record(access, o, user)
     return strip_id(redact_internal_snapshot_fields(invoice))
+
+
+@api_router.post("/orders/{order_id}/invoice")
+async def create_invoice_for_order_endpoint(
+    order_id: str,
+    user: Annotated[dict, Depends(require_roles("admin", "sales"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    idempotency_key: Annotated[Optional[str], Header(alias="Idempotency-Key")] = None,
+):
+    service = IdempotencyService(
+        access,
+        actor_id=user["id"],
+        operation="invoice.create_for_order",
+        key=idempotency_key or "",
+        payload={"orderId": order_id},
+    )
+    claim = await service.claim()
+    if claim.is_replay:
+        return claim.replay_response
+    try:
+        order = await access.orders.find_one({"id": order_id})
+        if not order or not await order_references_visible(access, order):
+            raise HTTPException(status_code=404, detail="Bestellung nicht gefunden")
+        if order["companyId"] not in await visible_company_ids(user, access):
+            raise HTTPException(status_code=403, detail="Keine Berechtigung")
+        invoice = await create_invoice_record(
+            access, order, user, operation_id=claim.record_id
+        )
+        response = strip_id(redact_internal_snapshot_fields(invoice))
+        await service.complete(
+            claim, response, {"orderId": order_id, "invoiceId": invoice["id"]}
+        )
+        return response
+    except Exception as exc:
+        await service.fail(claim, error_code="invoice_workflow_failed", exception=exc)
+        raise
 
 
 @api_router.get("/companies/{company_id}/collective-invoice")

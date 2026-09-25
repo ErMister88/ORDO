@@ -1,9 +1,10 @@
 """Offers."""
 from html import escape
-from fastapi import Depends, HTTPException
-from typing import Annotated
+from fastapi import Depends, Header, HTTPException
+from typing import Annotated, Optional
 from datetime import datetime, timezone
 from pymongo import ReturnDocument
+from pymongo.errors import DuplicateKeyError
 
 from ..core import api_router, strip_id, next_seq, logger
 from ..audit_service import tenant_audit
@@ -15,6 +16,7 @@ from ..money import amount_minor, from_minor, line_total_minor, to_minor
 from ..pricing_engine import PricingEngine, PricingError
 from ..snapshots import clone_snapshot_items, items_total_minor, product_item_snapshot, redact_internal_snapshot_fields
 from ..tenant_access import TenantBusinessAccess
+from ..idempotency import IdempotencyService
 
 
 def _offer_response(offer: dict, user: dict) -> dict:
@@ -45,15 +47,20 @@ async def get_offers(
     return [_offer_response(o, user) for o in offers]
 
 
-@api_router.post("/offers")
 async def create_offer(
     body: OfferCreate,
     user: Annotated[dict, Depends(require_roles("admin", "sales"))],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    *,
+    operation_id: str | None = None,
 ):
     ids = await visible_company_ids(user, access)
     if body.companyId not in ids:
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
+    if operation_id:
+        existing = await access.offers.find_one({"operationId": operation_id})
+        if existing:
+            return _offer_response(existing, user)
     company = await access.companies.find_one({"id": body.companyId})
     if not company:
         raise HTTPException(status_code=404, detail="Kunde nicht gefunden")
@@ -140,6 +147,8 @@ async def create_offer(
         "termMonths": body.termMonths,
         "createdAt": now.isoformat(),
     }
+    if operation_id:
+        offer["operationId"] = operation_id
     claimed_approvals = []
     for approval_id in approvals_to_consume:
         claimed = await access.price_approvals.find_one_and_update(
@@ -165,6 +174,31 @@ async def create_offer(
             )
         raise
     return _offer_response(offer, user)
+
+
+@api_router.post("/offers")
+async def create_offer_endpoint(
+    body: OfferCreate,
+    user: Annotated[dict, Depends(require_roles("admin", "sales"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    idempotency_key: Annotated[Optional[str], Header(alias="Idempotency-Key")] = None,
+):
+    service = IdempotencyService(
+        access, actor_id=user["id"], operation="offer.create",
+        key=idempotency_key or "", payload=body.model_dump(mode="json"),
+    )
+    claim = await service.claim()
+    if claim.is_replay:
+        return claim.replay_response
+    try:
+        response = await create_offer(
+            body, user, access, operation_id=claim.record_id
+        )
+        await service.complete(claim, response, {"offerId": response["id"]})
+        return response
+    except Exception as exc:
+        await service.fail(claim, error_code="offer_create_failed", exception=exc)
+        raise
 
 
 @api_router.post("/offers/{offer_id}/approve")
@@ -204,12 +238,13 @@ async def approve_offer(
     return {"ok": True, "status": "Freigegeben"}
 
 
-@api_router.post("/offers/{offer_id}/accept")
 async def accept_offer(
     offer_id: str,
     body: AcceptOfferIn,
     user: Annotated[dict, Depends(current_user)],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    *,
+    operation_id: str | None = None,
 ):
     o = await access.offers.find_one({"id": offer_id})
     if not o or not await offer_references_visible(access, o):
@@ -217,6 +252,13 @@ async def accept_offer(
     ids = await visible_company_ids(user, access)
     if o["companyId"] not in ids:
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
+    existing_order = await access.orders.find_one({"fromOffer": offer_id})
+    if existing_order:
+        await access.offers.update_one(
+            {"id": offer_id},
+            {"$set": {"status": "Angenommen", "orderId": existing_order["id"]}},
+        )
+        return strip_id(redact_internal_snapshot_fields(existing_order))
     if o["status"] != "Freigegeben":
         raise HTTPException(status_code=400, detail="Nur freigegebene Angebote können angenommen werden.")
     if o.get("orderId"):
@@ -248,10 +290,53 @@ async def accept_offer(
         "customerNote": (body.note or "").strip(),
         "createdAt": now.isoformat(),
     }
-    await access.orders.insert_one(order)
+    if operation_id:
+        order["operationId"] = operation_id
+    order_created = True
+    try:
+        await access.orders.insert_one(order)
+    except DuplicateKeyError:
+        existing_order = await access.orders.find_one({"fromOffer": offer_id})
+        if not existing_order:
+            raise
+        order = existing_order
+        order_no = order["id"]
+        order_created = False
     await access.offers.update_one({"id": offer_id}, {"$set": {"status": "Angenommen", "orderId": order_no}})
-    await tenant_audit(access, user, "offer.accept", offer_id, {"orderId": order_no})
+    if order_created:
+        await tenant_audit(access, user, "offer.accept", offer_id, {"orderId": order_no})
     return strip_id(redact_internal_snapshot_fields(order))
+
+
+@api_router.post("/offers/{offer_id}/accept")
+async def accept_offer_endpoint(
+    offer_id: str,
+    body: AcceptOfferIn,
+    user: Annotated[dict, Depends(current_user)],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    idempotency_key: Annotated[Optional[str], Header(alias="Idempotency-Key")] = None,
+):
+    service = IdempotencyService(
+        access,
+        actor_id=user["id"],
+        operation="offer.accept",
+        key=idempotency_key or "",
+        payload={"offerId": offer_id, **body.model_dump(mode="json")},
+    )
+    claim = await service.claim()
+    if claim.is_replay:
+        return claim.replay_response
+    try:
+        response = await accept_offer(
+            offer_id, body, user, access, operation_id=claim.record_id
+        )
+        await service.complete(
+            claim, response, {"offerId": offer_id, "orderId": response["id"]}
+        )
+        return response
+    except Exception as exc:
+        await service.fail(claim, error_code="offer_accept_failed", exception=exc)
+        raise
 
 
 @api_router.post("/offers/{offer_id}/reject")

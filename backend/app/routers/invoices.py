@@ -1,7 +1,7 @@
 """Contracts, invoices and tenant-scoped payment records."""
 import secrets
-from fastapi import Depends, HTTPException
-from typing import Annotated
+from fastapi import Depends, Header, HTTPException
+from typing import Annotated, Optional
 from datetime import datetime, timezone
 
 from ..core import api_router, strip_id
@@ -12,6 +12,7 @@ from ..models import InvoiceStatusIn, PaymentRecordIn
 from ..money import amount_minor, from_minor, to_minor
 from .orders import order_references_visible
 from ..snapshots import redact_internal_snapshot_fields
+from ..idempotency import IdempotencyService
 
 
 async def invoice_references_visible(access: TenantBusinessAccess, invoice: dict) -> bool:
@@ -85,7 +86,31 @@ async def _require_manageable_invoice(user: dict, access: TenantBusinessAccess, 
     return invoice
 
 
-async def _record_payment(user: dict, access: TenantBusinessAccess, invoice: dict, body: PaymentRecordIn) -> dict:
+def _existing_payment_response(invoice: dict, operation_id: str | None) -> dict | None:
+    if not operation_id:
+        return None
+    for payment in invoice.get("paymentRecords", []):
+        if payment.get("operationId") == operation_id:
+            return {
+                "ok": True,
+                "status": invoice.get("status", "Offen"),
+                "paidAmount": from_minor(invoice.get("paidAmountMinor", 0)),
+                "paidAmountMinor": invoice.get("paidAmountMinor", 0),
+            }
+    return None
+
+
+async def _record_payment(
+    user: dict,
+    access: TenantBusinessAccess,
+    invoice: dict,
+    body: PaymentRecordIn,
+    *,
+    operation_id: str | None = None,
+) -> dict:
+    recovered = _existing_payment_response(invoice, operation_id)
+    if recovered:
+        return recovered
     currency = invoice.get("currency", access.context.default_currency)
     amount_minor_value = to_minor(body.amount)
     invoice_total = amount_minor(invoice, "amount", expected_currency=currency)
@@ -108,6 +133,8 @@ async def _record_payment(user: dict, access: TenantBusinessAccess, invoice: dic
         "reference": body.reference.strip(), "paidAt": paid_at.astimezone(timezone.utc).isoformat(),
         "createdBy": user["id"], "createdAt": datetime.now(timezone.utc).isoformat(),
     }
+    if operation_id:
+        payment["operationId"] = operation_id
     update = {"paidAmountMinor": new_paid, "status": status, "paymentMethod": body.method}
     if status == "Bezahlt":
         update["paidAt"] = payment["paidAt"]
@@ -132,7 +159,6 @@ async def _record_payment(user: dict, access: TenantBusinessAccess, invoice: dic
     return {"ok": True, "status": status, "paidAmount": from_minor(new_paid), "paidAmountMinor": new_paid}
 
 
-@api_router.put("/invoices/{invoice_id}/pay")
 async def mark_invoice_paid(
     invoice_id: str,
     user: Annotated[dict, Depends(require_roles("admin", "sales"))],
@@ -147,7 +173,6 @@ async def mark_invoice_paid(
     ))
 
 
-@api_router.post("/invoices/{invoice_id}/payments")
 async def record_invoice_payment(
     invoice_id: str,
     body: PaymentRecordIn,
@@ -156,6 +181,86 @@ async def record_invoice_payment(
 ):
     invoice = await _require_manageable_invoice(user, access, invoice_id)
     return await _record_payment(user, access, invoice, body)
+
+
+async def _idempotent_payment(
+    *,
+    invoice_id: str,
+    body: PaymentRecordIn | None,
+    full_balance: bool,
+    user: dict,
+    access: TenantBusinessAccess,
+    idempotency_key: str | None,
+):
+    payload = {"invoiceId": invoice_id, "fullBalance": full_balance}
+    if body is not None:
+        payload["payment"] = body.model_dump(mode="json")
+    service = IdempotencyService(
+        access,
+        actor_id=user["id"],
+        operation="invoice.payment",
+        key=idempotency_key or "",
+        payload=payload,
+    )
+    claim = await service.claim()
+    if claim.is_replay:
+        return claim.replay_response
+    try:
+        invoice = await _require_manageable_invoice(user, access, invoice_id)
+        recovered = _existing_payment_response(invoice, claim.record_id)
+        if recovered:
+            response = recovered
+        else:
+            payment_body = body
+            if full_balance:
+                total = amount_minor(
+                    invoice, "amount",
+                    expected_currency=invoice.get("currency", access.context.default_currency),
+                )
+                paid = invoice.get("paidAmountMinor", 0)
+                if paid >= total or invoice.get("status") in ("Bezahlt", "Storniert"):
+                    raise HTTPException(status_code=409, detail="Für diese Rechnung kann keine Zahlung erfasst werden")
+                payment_body = PaymentRecordIn(
+                    amount=from_minor(total - paid),
+                    method=invoice.get("paymentMethod", "other")
+                    if invoice.get("paymentMethod") in ("bank_transfer", "cash", "card", "other")
+                    else "other",
+                )
+            response = await _record_payment(
+                user, access, invoice, payment_body, operation_id=claim.record_id
+            )
+        await service.complete(claim, response, {"invoiceId": invoice_id})
+        return response
+    except Exception as exc:
+        await service.fail(claim, error_code="invoice_payment_failed", exception=exc)
+        raise
+
+
+@api_router.put("/invoices/{invoice_id}/pay")
+async def mark_invoice_paid_endpoint(
+    invoice_id: str,
+    user: Annotated[dict, Depends(require_roles("admin", "sales"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    idempotency_key: Annotated[Optional[str], Header(alias="Idempotency-Key")] = None,
+):
+    return await _idempotent_payment(
+        invoice_id=invoice_id, body=None, full_balance=True, user=user, access=access,
+        idempotency_key=idempotency_key,
+    )
+
+
+@api_router.post("/invoices/{invoice_id}/payments")
+async def record_invoice_payment_endpoint(
+    invoice_id: str,
+    body: PaymentRecordIn,
+    user: Annotated[dict, Depends(require_roles("admin", "sales"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    idempotency_key: Annotated[Optional[str], Header(alias="Idempotency-Key")] = None,
+):
+    return await _idempotent_payment(
+        invoice_id=invoice_id, body=body, full_balance=False, user=user, access=access,
+        idempotency_key=idempotency_key,
+    )
 
 
 @api_router.get("/invoices/{invoice_id}/payments")

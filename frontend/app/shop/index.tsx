@@ -7,7 +7,7 @@ import { Image } from "expo-image";
 import { ArrowLeft, ShoppingCart, ImageSquare, Plus, UserCircle, EnvelopeSimple, CheckCircle } from "phosphor-react-native";
 
 import { makeStyles, tokens, useTheme } from "@/src/theme";
-import { apiGet, apiPost, fileUrl, API_BASE } from "@/src/api/client";
+import { apiGet, apiPostIdempotent, fileUrl, API_BASE } from "@/src/api/client";
 import { euro } from "@/src/lib/format";
 import { useCart } from "@/src/shop/cart";
 import { shopApi } from "@/src/shop/auth";
@@ -97,7 +97,7 @@ export default function Shop() {
   const [financeProductId, setFinanceProductId] = useState<string | null>(null);
   const [finance, setFinance] = useState({ name: "", email: "", phone: "", message: "" });
   const financing = useMutation({
-    mutationFn: () => apiPost("/shop/equipment-requests", { productId: financeProductId, ...finance }),
+    mutationFn: () => apiPostIdempotent("/shop/equipment-requests", { productId: financeProductId, ...finance }),
     onSuccess: () => { setFinanceProductId(null); setFinance({ name: "", email: "", phone: "", message: "" }); },
   });
   const visibleProducts = (products.data ?? []).filter((product: any) => !collectionId || (product.collectionIds ?? []).includes(collectionId));

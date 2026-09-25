@@ -1,5 +1,5 @@
 import { storage } from "@/src/utils/storage";
-import { API_BASE } from "@/src/api/client";
+import { API_BASE, apiPostIdempotent } from "@/src/api/client";
 import { queryClient } from "@/src/query-client";
 
 const KEY = "shop_token";
@@ -47,7 +47,14 @@ export const shopApi = {
   login: (b: { email: string; password: string }) => req("/shop/login", "POST", b, false),
   me: () => req("/shop/me", "GET", undefined, true),
   myOrders: () => req("/shop/my-orders", "GET", undefined, true),
-  createOrder: (b: any) => req("/shop/orders", "POST", b, true),
+  createOrder: async (b: any) => {
+    const token = await shopToken();
+    return apiPostIdempotent(
+      "/shop/orders",
+      b,
+      token ? { Authorization: `Bearer ${token}` } : {},
+    );
+  },
   newsletter: (b: { email: string; name?: string; baseUrl?: string }) => req("/newsletter/subscribe", "POST", b, false),
   validateCode: (code: string) => req("/shop/validate-code", "POST", { code }, false),
   saveAddress: (b: { name: string; phone: string; street: string; zip: string; city: string }) =>

@@ -64,6 +64,64 @@ export async function apiPost<T = any>(path: string, body?: any, extraHeaders: R
   return res.json();
 }
 
+const pendingIdempotencyKeys = new Map<string, string>();
+
+function newIdempotencyKey(): string {
+  const randomUUID = globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
+  return randomUUID
+    ? `ordo-${randomUUID()}`
+    : `ordo-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+}
+
+async function apiIdempotent<T>(
+  method: "POST" | "PUT",
+  path: string,
+  body?: any,
+  extraHeaders: Record<string, string> = {},
+): Promise<T> {
+  const serialized = JSON.stringify(body ?? {});
+  const intent = `${method}:${path}:${serialized}`;
+  const key = pendingIdempotencyKeys.get(intent) ?? newIdempotencyKey();
+  pendingIdempotencyKeys.set(intent, key);
+  const { headers, token } = await authContext();
+  try {
+    const res = await fetch(`${API}/api${path}`, {
+      method,
+      headers: {
+        ...headers,
+        ...extraHeaders,
+        "Content-Type": "application/json",
+        "Idempotency-Key": key,
+      },
+      body: serialized,
+    });
+    await handleAuthFailure(res, token);
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const retryable = res.status >= 500 || (res.status === 409 && res.headers.has("Retry-After"));
+      if (!retryable) pendingIdempotencyKeys.delete(intent);
+      throw new Error(payload.detail || `Fehler ${res.status}`);
+    }
+    pendingIdempotencyKeys.delete(intent);
+    return payload as T;
+  } catch (error) {
+    // Keep the key on transport failure so a user retry recovers the same server operation.
+    throw error;
+  }
+}
+
+export function apiPostIdempotent<T = any>(
+  path: string,
+  body?: any,
+  extraHeaders: Record<string, string> = {},
+): Promise<T> {
+  return apiIdempotent<T>("POST", path, body, extraHeaders);
+}
+
+export function apiPutIdempotent<T = any>(path: string, body?: any): Promise<T> {
+  return apiIdempotent<T>("PUT", path, body);
+}
+
 export async function apiPut<T = any>(path: string, body?: any): Promise<T> {
   const { headers, token } = await authContext();
   const res = await fetch(`${API}/api${path}`, {

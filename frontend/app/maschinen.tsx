@@ -8,7 +8,7 @@ import * as WebBrowser from "expo-web-browser";
 import { ArrowLeft, Coffee, CurrencyEur, ImageSquare, Receipt, FileText } from "phosphor-react-native";
 
 import { makeStyles, tokens, useTheme } from "@/src/theme";
-import { apiGet, apiPost, fileUrl } from "@/src/api/client";
+import { apiGet, apiPost, apiPostIdempotent, fileUrl } from "@/src/api/client";
 import { euro } from "@/src/lib/format";
 import { shareMachineContractPdf, shareMachineInvoicePdf } from "@/src/lib/pdf";
 import { Card, Button, Input, SectionTitle, Muted, EmptyState, InfoRow, StatusBadge, PageContainer, LoadingState, ErrorState } from "@/src/components/ui";
@@ -52,7 +52,7 @@ export default function Maschinen() {
   };
 
   const requestOffer = useMutation({
-    mutationFn: (b: { machineId: string; type: string; termMonths: number; productId?: string; expectedCoffeeKgMonth?: number; companyName?: string; contactName?: string; contactEmail?: string; contactPhone?: string; message?: string }) => apiPost("/machine-requests", b),
+    mutationFn: (b: { machineId: string; type: string; termMonths: number; productId?: string; expectedCoffeeKgMonth?: number; companyName?: string; contactName?: string; contactEmail?: string; contactPhone?: string; message?: string }) => apiPostIdempotent("/machine-requests", b),
     onSuccess: () => {
       setPanel(null);
       refresh();
@@ -62,7 +62,7 @@ export default function Maschinen() {
   });
 
   const accept = useMutation({
-    mutationFn: (id: string) => apiPost(`/machine-requests/${id}/accept`, {}),
+    mutationFn: (id: string) => apiPostIdempotent(`/machine-requests/${id}/accept`, {}),
     onSuccess: () => { refresh(); Alert.alert("Angebot angenommen", "Vielen Dank! Wir setzen uns mit Ihnen in Verbindung."); },
     onError: (e: any) => Alert.alert("Fehler", e.message || "Konnte nicht angenommen werden"),
   });
@@ -78,8 +78,8 @@ export default function Maschinen() {
   const buy = async (machineId: string) => {
     setPayingId(machineId);
     try {
-      const req = await apiPost("/machine-requests", { machineId, type: "kauf" });
-      const res = await apiPost(`/machine-requests/${req.id}/checkout`, {});
+      const req = await apiPostIdempotent("/machine-requests", { machineId, type: "kauf" });
+      const res = await apiPostIdempotent(`/machine-requests/${req.id}/checkout`, {});
       if (res?.url) {
         await WebBrowser.openBrowserAsync(res.url);
         for (let i = 0; i < 8; i++) {
@@ -100,7 +100,7 @@ export default function Maschinen() {
   const payExisting = async (reqId: string) => {
     setPayingId(reqId);
     try {
-      const res = await apiPost(`/machine-requests/${reqId}/checkout`, {});
+      const res = await apiPostIdempotent(`/machine-requests/${reqId}/checkout`, {});
       if (res?.url) {
         await WebBrowser.openBrowserAsync(res.url);
         for (let i = 0; i < 8; i++) {

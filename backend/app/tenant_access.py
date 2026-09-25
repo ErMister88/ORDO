@@ -17,8 +17,12 @@ TENANT_SCOPED_BUSINESS_COLLECTIONS = frozenset({
     "customer_contacts",
     "customer_prices",
     "customer_tasks",
+    "customer_types",
+    "customer_tags",
+    "business_brands",
     "equipment_requests",
     "invoices",
+    "idempotency_records",
     "machine_requests",
     "machines",
     "newsletter",
@@ -159,11 +163,15 @@ class TenantBusinessAccess:
         self.customer_addresses = TenantScopedCollection(database, "customer_addresses", context)
         self.customer_contacts = TenantScopedCollection(database, "customer_contacts", context)
         self.customer_tasks = TenantScopedCollection(database, "customer_tasks", context)
+        self.customer_types = TenantScopedCollection(database, "customer_types", context)
+        self.customer_tags = TenantScopedCollection(database, "customer_tags", context)
+        self.business_brands = TenantScopedCollection(database, "business_brands", context)
         self.equipment_requests = TenantScopedCollection(database, "equipment_requests", context)
         self.products = TenantScopedCollection(database, "products", context)
         self.product_categories = TenantScopedCollection(database, "product_categories", context)
         self.customer_prices = TenantScopedCollection(database, "customer_prices", context)
         self.invoices = TenantScopedCollection(database, "invoices", context)
+        self.idempotency_records = TenantScopedCollection(database, "idempotency_records", context)
         self.machine_requests = TenantScopedCollection(database, "machine_requests", context)
         self.machines = TenantScopedCollection(database, "machines", context)
         self.newsletter = TenantScopedCollection(database, "newsletter", context)

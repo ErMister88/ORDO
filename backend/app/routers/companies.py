@@ -21,6 +21,31 @@ from ..models import (
 from ..tenant_access import TenantBusinessAccess
 
 
+async def _validate_customer_classifications(
+    access: TenantBusinessAccess,
+    customer_type_id: str | None,
+    customer_tag_ids: list[str],
+    *,
+    existing_type_id: str | None = None,
+    existing_tag_ids: list[str] | None = None,
+) -> tuple[str | None, list[str]]:
+    tag_ids = list(dict.fromkeys(customer_tag_ids))
+    if len(tag_ids) != len(customer_tag_ids):
+        raise HTTPException(status_code=400, detail="Kundenklassifizierungen dürfen nicht doppelt zugeordnet werden")
+    if customer_type_id and customer_type_id != existing_type_id and not await access.customer_types.find_one(
+        {"id": customer_type_id, "active": {"$ne": False}}
+    ):
+        raise HTTPException(status_code=400, detail="Kundentyp ist nicht verfügbar")
+    new_tag_ids = [tag_id for tag_id in tag_ids if tag_id not in set(existing_tag_ids or [])]
+    if new_tag_ids:
+        count = await access.customer_tags.count_documents(
+            {"id": {"$in": new_tag_ids}, "active": {"$ne": False}}
+        )
+        if count != len(new_tag_ids):
+            raise HTTPException(status_code=400, detail="Kundenklassifizierung ist nicht verfügbar")
+    return customer_type_id, tag_ids
+
+
 @api_router.get("/companies")
 async def get_companies(
     user: Annotated[dict, Depends(require_roles("admin", "sales"))],
@@ -61,6 +86,9 @@ async def create_company(
         _clean_address(body.primaryAddress)
     if body.primaryContact is not None:
         _clean_contact(body.primaryContact)
+    customer_type_id, customer_tag_ids = await _validate_customer_classifications(
+        access, body.customerTypeId, body.customerTagIds
+    )
     if user["role"] == "sales":
         assigned_sales_rep_id = user["id"]
         assigned_sales_rep_name = user.get("name", "")
@@ -84,6 +112,8 @@ async def create_company(
         "assignedSalesRepId": assigned_sales_rep_id,
         "assignedSalesRepName": assigned_sales_rep_name,
         "orderCycleDays": body.orderCycleDays,
+        "customerTypeId": customer_type_id,
+        "customerTagIds": customer_tag_ids,
         "active": True,
         "monthlyKg": 0,
         "createdAt": now,
@@ -286,7 +316,20 @@ async def update_company(
         membership = await active_staff_membership(access, body.assignedSalesRepId)
         if not membership or membership.get("role") != "sales":
             raise HTTPException(status_code=400, detail="Vertrieb ist für diesen Tenant nicht verfügbar")
+    customer_type_id, customer_tag_ids = await _validate_customer_classifications(
+        access, body.customerTypeId, body.customerTagIds,
+        existing_type_id=c.get("customerTypeId"),
+        existing_tag_ids=c.get("customerTagIds", []),
+    )
     update = body.model_dump(exclude_none=True)
+    if "customerTypeId" in body.model_fields_set:
+        update["customerTypeId"] = customer_type_id
+    else:
+        update.pop("customerTypeId", None)
+    if "customerTagIds" in body.model_fields_set:
+        update["customerTagIds"] = customer_tag_ids
+    else:
+        update.pop("customerTagIds", None)
     await access.companies.update_one({"id": company_id}, {"$set": update})
     updated = await access.companies.find_one({"id": company_id})
     await tenant_audit(access, user, "company.update", company_id, {"name": body.name})

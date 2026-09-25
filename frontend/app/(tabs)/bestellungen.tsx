@@ -7,7 +7,7 @@ import { Minus, Plus, ImageSquare, CaretDown, Trash } from "phosphor-react-nativ
 
 import { makeStyles, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
-import { apiGet, apiPost, fileUrl } from "@/src/api/client";
+import { apiGet, apiPost, apiPostIdempotent, fileUrl } from "@/src/api/client";
 import { euro, num, dateDE } from "@/src/lib/format";
 import { ScreenHeader } from "@/src/components/screen-header";
 import { Card, Button, Input, StatusBadge, SectionTitle, EmptyState, Muted } from "@/src/components/ui";
@@ -74,7 +74,7 @@ export default function Bestellungen() {
 
   const create = useMutation({
     mutationFn: () =>
-      apiPost("/orders", {
+      apiPostIdempotent("/orders", {
         companyId,
         items: cart.map((i) => ({ productId: i.productId, qty: i.qty })),
         paymentMethod,

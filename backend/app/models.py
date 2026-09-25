@@ -72,6 +72,7 @@ class ProductIn(BaseModel):
     sku: str = ""
     ean: str = ""
     brand: str = ""
+    brandId: Optional[str] = None
     name: str
     categoryId: Optional[str] = None
     collectionIds: List[str] = Field(default_factory=list)
@@ -309,6 +310,8 @@ class CompanyUpdateIn(BaseModel):
     assignedSalesRepId: Optional[str] = None
     orderCycleDays: int = 30
     active: bool = True
+    customerTypeId: Optional[str] = None
+    customerTagIds: List[str] = Field(default_factory=list)
     status: Optional[Literal["Lead", "Interessent", "Neukunde", "Aktiv", "Inaktiv", "Gesperrt"]] = None
 
 
@@ -322,6 +325,8 @@ class CompanyCreateIn(BaseModel):
     status: Literal["Lead", "Interessent", "Neukunde", "Aktiv", "Inaktiv", "Gesperrt"] = "Lead"
     assignedSalesRepId: Optional[str] = None
     orderCycleDays: Annotated[int, Field(ge=1, le=3650)] = 30
+    customerTypeId: Optional[str] = None
+    customerTagIds: List[str] = Field(default_factory=list)
     primaryAddress: Optional[CustomerAddressIn] = None
     primaryContact: Optional[CustomerContactIn] = None
 
@@ -361,6 +366,14 @@ class CustomerTaskUpdateIn(BaseModel):
 class ProductCategoryIn(BaseModel):
     name: str
     description: str = ""
+    sortOrder: int = 0
+    active: bool = True
+
+
+class BusinessClassificationIn(BaseModel):
+    name: str
+    description: str = ""
+    sortOrder: int = 0
     active: bool = True
 
 

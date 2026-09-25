@@ -1,7 +1,7 @@
 """Orders."""
 from html import escape
-from fastapi import Depends, HTTPException
-from typing import Annotated
+from fastapi import Depends, Header, HTTPException
+from typing import Annotated, Optional
 from datetime import datetime, timedelta, timezone
 
 from ..core import api_router, strip_id, next_seq, logger, ORDER_STATUS_FLOW
@@ -15,6 +15,7 @@ from ..money import from_minor
 from ..pricing_engine import PricingEngine, PricingError
 from ..snapshots import items_total_minor, redact_internal_snapshot_fields
 from ..tenant_access import TenantBusinessAccess
+from ..idempotency import IdempotencyClaim, IdempotencyService
 
 
 async def order_references_visible(access: TenantBusinessAccess, order: dict) -> bool:
@@ -76,11 +77,13 @@ async def _resolve_unit_money(
     return quote.final_unit_price_minor, quote.price_source
 
 
-@api_router.post("/orders")
 async def create_order(
     body: OrderCreate,
     user: Annotated[dict, Depends(current_user)],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    *,
+    operation_id: str | None = None,
+    workflow: tuple[IdempotencyService, IdempotencyClaim] | None = None,
 ):
     ids = await visible_company_ids(user, access)
     if body.companyId not in ids:
@@ -94,6 +97,22 @@ async def create_order(
     company = await access.companies.find_one({"id": body.companyId})
     if not company:
         raise HTTPException(status_code=404, detail="Kunde nicht gefunden")
+    if operation_id:
+        existing = await access.orders.find_one({"operationId": operation_id})
+        if existing:
+            response = strip_id(redact_internal_snapshot_fields(existing))
+            if workflow:
+                await workflow[0].checkpoint(
+                    workflow[1], "order_recovered", {"orderId": existing["id"]}
+                )
+            if body.createInvoice:
+                from .billing import create_invoice_record
+                invoice = await create_invoice_record(
+                    access, existing, user, operation_id=operation_id
+                )
+                response["invoice"] = strip_id(redact_internal_snapshot_fields(invoice))
+                response["invoiceId"] = invoice["id"]
+            return response
     for it in body.items:
         if it.qty <= 0:
             raise HTTPException(status_code=400, detail="Ungültige Menge")
@@ -133,7 +152,11 @@ async def create_order(
         },
         "createdAt": now.isoformat(),
     }
+    if operation_id:
+        order["operationId"] = operation_id
     await access.orders.insert_one(order)
+    if workflow:
+        await workflow[0].checkpoint(workflow[1], "order_created", {"orderId": order_no})
     await record_customer_activity(
         access, company_id=body.companyId, actor=user, activity_type="order_created",
         title=f"Bestellung {order_no} erstellt", internal=False,
@@ -146,6 +169,37 @@ async def create_order(
         response["invoice"] = strip_id(redact_internal_snapshot_fields(invoice))
         response["invoiceId"] = invoice["id"]
     return response
+
+
+@api_router.post("/orders")
+async def create_order_endpoint(
+    body: OrderCreate,
+    user: Annotated[dict, Depends(current_user)],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    idempotency_key: Annotated[Optional[str], Header(alias="Idempotency-Key")] = None,
+):
+    service = IdempotencyService(
+        access,
+        actor_id=user["id"],
+        operation="order.create",
+        key=idempotency_key or "",
+        payload=body.model_dump(mode="json"),
+    )
+    claim = await service.claim()
+    if claim.is_replay:
+        return claim.replay_response
+    try:
+        response = await create_order(
+            body, user, access, operation_id=claim.record_id, workflow=(service, claim)
+        )
+        refs = {"orderId": response["id"]}
+        if response.get("invoiceId"):
+            refs["invoiceId"] = response["invoiceId"]
+        await service.complete(claim, response, refs)
+        return response
+    except Exception as exc:
+        await service.fail(claim, error_code="order_workflow_failed", exception=exc)
+        raise
 
 
 @api_router.get("/orders/{order_id}")

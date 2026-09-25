@@ -7,7 +7,7 @@ import { CaretDown, Export, Plus, ImageSquare } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
-import { apiGet, apiPost, fileUrl } from "@/src/api/client";
+import { apiGet, apiPost, apiPostIdempotent, fileUrl } from "@/src/api/client";
 import { euro, num } from "@/src/lib/format";
 import { shareOfferPdf } from "@/src/lib/pdf";
 import { ScreenHeader } from "@/src/components/screen-header";
@@ -50,7 +50,7 @@ export default function Angebote() {
   });
 
   const accept = useMutation({
-    mutationFn: ({ id, note }: { id: string; note: string }) => apiPost(`/offers/${id}/accept`, { note }),
+    mutationFn: ({ id, note }: { id: string; note: string }) => apiPostIdempotent(`/offers/${id}/accept`, { note }),
     onSuccess: (order: any) => {
       qc.invalidateQueries({ queryKey: ["offers"] });
       qc.invalidateQueries({ queryKey: ["orders"] });
@@ -327,7 +327,7 @@ function CreateOffer({
 
   const create = useMutation({
     mutationFn: () =>
-      apiPost("/offers", {
+      apiPostIdempotent("/offers", {
         companyId,
         termMonths: 48,
         items,

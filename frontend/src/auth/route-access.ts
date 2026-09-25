@@ -9,6 +9,7 @@ const ADMIN_ROUTES = [
   "/shop-admin",
   "/maschinen-admin",
   "/vertrieb",
+  "/einstellungen",
 ] as const;
 const STAFF_ROUTES = ["/kunden", "/kunde", "/auswertungen", "/katalog"] as const;
 const INTERNAL_ROUTES = [

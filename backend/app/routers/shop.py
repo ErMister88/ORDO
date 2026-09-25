@@ -2,6 +2,8 @@
 import os
 import secrets
 import hashlib
+import base64
+import hmac
 import stripe
 from fastapi import Depends, Header, HTTPException, Request
 from pymongo.errors import DuplicateKeyError
@@ -9,7 +11,7 @@ from typing import Annotated, Optional
 from datetime import datetime, timedelta, timezone
 from starlette.concurrency import run_in_threadpool
 
-from ..core import (api_router, db, strip_id, next_seq, logger,
+from ..core import (api_router, db, strip_id, next_seq, logger, JWT_SECRET,
                     DUMMY_HASH, hash_pw, verify_pw)
 from ..audit_service import tenant_audit
 from ..auth_security import (
@@ -35,6 +37,7 @@ from ..tenant_access import TenantBusinessAccess
 from ..money import MoneyError, amount_minor, currency_code, from_minor, included_tax_minor, to_minor
 from ..pricing_engine import BasketQuote, PricingEngine, PricingError
 from ..snapshots import redact_internal_snapshot_fields
+from ..idempotency import IdempotencyService
 from html import escape
 
 
@@ -64,6 +67,15 @@ ORDER_TOKEN_TTL_DAYS = 30
 
 def _order_token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _operation_order_token(operation_id: str) -> str:
+    digest = hmac.new(
+        JWT_SECRET.encode("utf-8"),
+        f"shop-order:{operation_id}".encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
+    return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
 
 
 def _public_shop_order(document: dict) -> dict:
@@ -172,11 +184,12 @@ async def shop_quote(
     return (await _quote(body, access)).public()
 
 
-@api_router.post("/shop/orders")
 async def create_shop_order(
     body: ShopOrderIn,
     access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
     uid: Annotated[Optional[str], Depends(optional_shop_actor_id)] = None,
+    *,
+    operation_id: str | None = None,
 ):
     if not body.items:
         raise HTTPException(status_code=400, detail="Warenkorb ist leer")
@@ -186,6 +199,20 @@ async def create_shop_order(
         ordering_user = await db.users.find_one({"id": uid}) if uid else None
         if not ordering_user or ordering_user.get("role") != "shopuser":
             raise HTTPException(status_code=401, detail="Monats-Abos erfordern ein Shop-Konto")
+    if operation_id:
+        existing = await access.shop_orders.find_one({"operationId": operation_id})
+        if existing:
+            token = _operation_order_token(operation_id)
+            return {
+                "id": existing["id"], "token": token,
+                "subtotal": existing["subtotal"], "shipping": existing["shipping"],
+                "total": existing["total"], "subtotalMinor": existing["subtotalMinor"],
+                "shippingMinor": existing["shippingMinor"], "totalMinor": existing["totalMinor"],
+                "currency": existing["currency"], "discount": existing.get("discount", 0),
+                "discountPercent": existing.get("discountPercent", 0),
+                "taxBreakdown": existing.get("taxBreakdown", {}),
+                "taxTotal": existing.get("taxTotal", 0),
+            }
     basket = await _quote(body, access)
     currency = basket.currency
     lines = []
@@ -212,7 +239,7 @@ async def create_shop_order(
     now = datetime.now(timezone.utc)
     seq = await next_seq("shop")
     oid = f"S-{now.year}-{seq:05d}"
-    order_token = secrets.token_urlsafe(32)
+    order_token = _operation_order_token(operation_id) if operation_id else secrets.token_urlsafe(32)
     doc = {
         "id": oid, "items": lines, "customer": body.customer.model_dump(),
         "subtotal": subtotal, "shipping": shipping, "total": total,
@@ -233,6 +260,8 @@ async def create_shop_order(
         "statusHistory": [{"status": "Neu", "at": now.isoformat()}],
         "createdAt": now.isoformat(),
     }
+    if operation_id:
+        doc["operationId"] = operation_id
     await access.shop_orders.insert_one(doc)
     try:
         email = (body.customer.email or "").strip()
@@ -271,6 +300,35 @@ async def create_shop_order(
             "taxBreakdown": tax_map, "taxTotal": tax_total}
 
 
+@api_router.post("/shop/orders")
+async def create_shop_order_endpoint(
+    body: ShopOrderIn,
+    access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
+    uid: Annotated[Optional[str], Depends(optional_shop_actor_id)] = None,
+    idempotency_key: Annotated[Optional[str], Header(alias="Idempotency-Key")] = None,
+):
+    email_hash = hashlib.sha256(body.customer.email.strip().lower().encode("utf-8")).hexdigest()[:24]
+    service = IdempotencyService(
+        access,
+        actor_id=uid or f"guest:{email_hash}",
+        operation="shop_order.create",
+        key=idempotency_key or "",
+        payload=body.model_dump(mode="json"),
+    )
+    claim = await service.claim()
+    if claim.is_replay:
+        return claim.replay_response
+    try:
+        response = await create_shop_order(
+            body, access, uid, operation_id=claim.record_id
+        )
+        await service.complete(claim, response, {"shopOrderId": response["id"]})
+        return response
+    except Exception as exc:
+        await service.fail(claim, error_code="shop_order_failed", exception=exc)
+        raise
+
+
 def _authorize_shop_order(o: dict, token: Optional[str], uid: Optional[str]) -> None:
     """Owner (registered shop user) or a valid per-order token may access it."""
     if o.get("userId") and uid and o["userId"] == uid:
@@ -291,12 +349,13 @@ def _authorize_shop_order(o: dict, token: Optional[str], uid: Optional[str]) -> 
     raise HTTPException(status_code=404, detail="Bestellung nicht gefunden")
 
 
-@api_router.post("/shop/orders/{order_id}/checkout")
 async def shop_checkout(
     order_id: str,
     access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
     token: Annotated[Optional[str], Header(alias="X-Order-Token")] = None,
     uid: Annotated[Optional[str], Depends(optional_shop_actor_id)] = None,
+    *,
+    stripe_idempotency_key: str | None = None,
 ):
     o = await access.shop_orders.find_one({"id": order_id})
     if not o:
@@ -304,6 +363,8 @@ async def shop_checkout(
     _authorize_shop_order(o, token, uid)
     if o["paymentStatus"] == "Bezahlt":
         raise HTTPException(status_code=409, detail="Bereits bezahlt")
+    if o.get("stripeSessionId") and o.get("stripeCheckoutUrl"):
+        return {"url": o["stripeCheckoutUrl"], "sessionId": o["stripeSessionId"]}
     try:
         currency = currency_code(o.get("currency", "EUR"))
         checkout_total_minor = amount_minor(o, "total", expected_currency=currency)
@@ -327,13 +388,52 @@ async def shop_checkout(
                 success_url=f"{APP_URL}/?shop_paid={order_id}",
                 cancel_url=f"{APP_URL}/?shop_cancel={order_id}",
                 metadata={"shopOrderId": order_id},
+                idempotency_key=stripe_idempotency_key,
             )
         )
-        await access.shop_orders.update_one({"id": order_id}, {"$set": {"stripeSessionId": session.id}})
-        return {"url": session.url}
+        await access.shop_orders.update_one(
+            {"id": order_id},
+            {"$set": {"stripeSessionId": session.id, "stripeCheckoutUrl": session.url}},
+        )
+        return {"url": session.url, "sessionId": session.id}
     except Exception as e:
         logger.warning(f"Shop-Checkout fehlgeschlagen: {e}")
         raise HTTPException(status_code=502, detail="Zahlung konnte nicht gestartet werden (Stripe-Testschlüssel erst nach Deploy aktiv).")
+
+
+@api_router.post("/shop/orders/{order_id}/checkout")
+async def shop_checkout_endpoint(
+    order_id: str,
+    access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
+    token: Annotated[Optional[str], Header(alias="X-Order-Token")] = None,
+    uid: Annotated[Optional[str], Depends(optional_shop_actor_id)] = None,
+    idempotency_key: Annotated[Optional[str], Header(alias="Idempotency-Key")] = None,
+):
+    order = await access.shop_orders.find_one({"id": order_id})
+    if not order:
+        raise HTTPException(status_code=404, detail="Bestellung nicht gefunden")
+    _authorize_shop_order(order, token, uid)
+    actor = uid or f"shop-order:{order_id}"
+    service = IdempotencyService(
+        access, actor_id=actor, operation="shop_order.checkout",
+        key=idempotency_key or "", payload={"shopOrderId": order_id},
+    )
+    claim = await service.claim()
+    if claim.is_replay:
+        return claim.replay_response
+    try:
+        response = await shop_checkout(
+            order_id, access, token, uid,
+            stripe_idempotency_key=f"{access.context.tenant_id}:{claim.record_id}",
+        )
+        await service.complete(
+            claim, response,
+            {"shopOrderId": order_id, "stripeSessionId": response["sessionId"]},
+        )
+        return response
+    except Exception as exc:
+        await service.fail(claim, error_code="shop_checkout_failed", exception=exc)
+        raise
 
 
 @api_router.get("/shop/orders/{order_id}/payment-status")

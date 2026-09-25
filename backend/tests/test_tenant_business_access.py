@@ -1685,7 +1685,10 @@ def test_audit_callsites_are_explicitly_classified():
                 legacy_calls.append(f"{path}:{node.lineno}")
 
     assert sorted(tenant_calls) == sorted([
-            ("companies.py", "company.assignment"),
+        ("business_config.py", "business_config.create"),
+        ("business_config.py", "business_config.update"),
+        ("business_config.py", "business_config.archive"),
+        ("companies.py", "company.assignment"),
             ("companies.py", "company.create"),
             ("companies.py", "company.address.create"),
             ("companies.py", "company.address.update"),
@@ -1723,7 +1726,9 @@ def test_audit_callsites_are_explicitly_classified():
             ("products.py", "shop_collection.create"),
             ("products.py", "shop_collection.update"),
             ("products.py", "shop_collection.archive"),
-            ("products.py", "product_category.create"),
+                ("products.py", "product_category.create"),
+                ("products.py", "product_category.update"),
+                ("products.py", "product_category.archive"),
         ("shop.py", "shop.settings"),
         ("shop.py", "shop_order_status"),
         ("users.py", "membership.create"),

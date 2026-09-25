@@ -38,6 +38,7 @@ class AsyncCollection:
     async def find_one(self, *args, **kwargs): return self.collection.find_one(*args, **kwargs)
     async def insert_one(self, document, *args, **kwargs): return self.collection.insert_one(deepcopy(document), *args, **kwargs)
     async def update_one(self, *args, **kwargs): return self.collection.update_one(*args, **kwargs)
+    async def find_one_and_update(self, *args, **kwargs): return self.collection.find_one_and_update(*args, **kwargs)
     async def delete_one(self, *args, **kwargs): return self.collection.delete_one(*args, **kwargs)
     async def count_documents(self, *args, **kwargs): return self.collection.count_documents(*args, **kwargs)
 

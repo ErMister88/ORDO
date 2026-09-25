@@ -19,6 +19,7 @@ type Form = {
   sku: string;
   ean: string;
   brand: string;
+  brandId: string;
   name: string;
   categoryId: string;
   collectionIds: string[];
@@ -49,6 +50,7 @@ const EMPTY: Form = {
   sku: "",
   ean: "",
   brand: "",
+  brandId: "",
   name: "",
   categoryId: "",
   collectionIds: [],
@@ -85,6 +87,7 @@ export default function Produkte() {
   const products = useQuery({ queryKey: ["products"], queryFn: () => apiGet("/products") });
   const categories = useQuery({ queryKey: ["product-categories"], queryFn: () => apiGet("/product-categories") });
   const collections = useQuery({ queryKey: ["shop-collections-admin"], queryFn: () => apiGet("/shop-collections") });
+  const brands = useQuery({ queryKey: ["config-brands"], queryFn: () => apiGet("/business-config/brands") });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<Form>(EMPTY);
   const [showForm, setShowForm] = useState(false);
@@ -94,6 +97,7 @@ export default function Produkte() {
   const [permBlocked, setPermBlocked] = useState(false);
   const [search, setSearch] = useState("");
   const [showCategories, setShowCategories] = useState(false);
+  const [showBrands, setShowBrands] = useState(false);
   const [newCategory, setNewCategory] = useState("");
   const createCategory = useMutation({ mutationFn: () => apiPost("/product-categories", { name: newCategory }), onSuccess: (category: any) => { qc.invalidateQueries({ queryKey: ["product-categories"] }); setForm((value) => ({ ...value, categoryId: category.id })); setNewCategory(""); } });
 
@@ -123,6 +127,7 @@ export default function Produkte() {
       sku: p.sku ?? "",
       ean: p.ean ?? "",
       brand: p.brand ?? "",
+      brandId: p.brandId ?? "",
       name: p.name,
       categoryId: p.categoryId ?? "",
       collectionIds: p.collectionIds ?? [],
@@ -210,6 +215,7 @@ export default function Produkte() {
         sku: form.sku,
         ean: form.ean,
         brand: form.brand,
+        brandId: form.brandId || null,
         name: form.name,
         categoryId: form.categoryId || null,
         collectionIds: form.collectionIds,
@@ -336,7 +342,7 @@ export default function Produkte() {
               <View style={styles.row}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.label}>Marke</Text>
-                  <Input testID="p-brand" value={form.brand} onChangeText={set("brand")} placeholder="z.B. Gambilongo" />
+                  {(brands.data ?? []).length ? <><Pressable testID="p-brand" style={styles.categoryPicker} onPress={() => setShowBrands((value) => !value)}><Text style={styles.categoryText}>{((brands.data ?? []).find((brand: any) => brand.id === form.brandId)?.name ?? form.brand) || "Keine Marke"}</Text></Pressable>{showBrands ? <View style={{ gap: 4 }}><Pressable style={styles.categoryOption} onPress={() => { setForm((value) => ({ ...value, brandId: "", brand: "" })); setShowBrands(false); }}><Text style={styles.categoryText}>Keine Marke</Text></Pressable>{(brands.data ?? []).filter((brand: any) => brand.active !== false).map((brand: any) => <Pressable key={brand.id} style={styles.categoryOption} onPress={() => { setForm((value) => ({ ...value, brandId: brand.id, brand: brand.name })); setShowBrands(false); }}><Text style={styles.categoryText}>{brand.name}</Text></Pressable>)}</View> : null}</> : <Input testID="p-brand" value={form.brand} onChangeText={set("brand")} placeholder="Marke in Einstellungen anlegen" />}
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.label}>Einheit</Text>
