@@ -1,5 +1,11 @@
 import { useState } from "react";
-import { View, Text, ScrollView, Pressable, KeyboardAvoidingView, Platform } from "react-native";
+import {
+  View,
+  ScrollView,
+  Pressable,
+  KeyboardAvoidingView,
+  Platform,
+} from "react-native";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -8,6 +14,7 @@ import { ArrowLeft, Plus, Key, CaretDown, ShieldCheck } from "phosphor-react-nat
 import { makeStyles, useTheme } from "@/src/theme";
 import { apiGet, apiPost } from "@/src/api/client";
 import { Card, Input, Button, SectionTitle, Muted } from "@/src/components/ui";
+import { LocalizedText as Text } from "@/src/i18n";
 
 type Role = "sales" | "customer";
 type CompanyMode = "existing" | "new";

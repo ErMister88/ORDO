@@ -1,21 +1,14 @@
-"""Stripe (test mode) — pay an outstanding invoice via hosted Checkout."""
-import os
-import stripe
+"""Pay an outstanding invoice via provider-hosted Checkout."""
 from fastapi import Depends, Header, HTTPException
-from starlette.concurrency import run_in_threadpool
 from typing import Annotated, Optional
 
-from ..core import api_router, logger
+from ..core import api_router
 from ..deps import current_user, tenant_business_access, visible_company_ids
 from ..tenant_access import TenantBusinessAccess
 from .invoices import invoice_references_visible
 from ..money import MoneyError, amount_minor, currency_code
 from ..idempotency import IdempotencyService
-
-stripe.api_key = os.environ.get("STRIPE_API_KEY", "")
-APP_URL = (os.environ.get("APP_URL") or "https://ordo-connect.preview.emergentagent.com").rstrip("/")
-SUCCESS_URL = f"{APP_URL}/?payment=success&session_id={{CHECKOUT_SESSION_ID}}"
-CANCEL_URL = f"{APP_URL}/?payment=cancelled"
+from ..payment_integrity import checkout_return_urls, create_stripe_checkout, PaymentIntegrityError
 
 
 async def create_checkout(
@@ -23,7 +16,7 @@ async def create_checkout(
     user: Annotated[dict, Depends(current_user)],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
     *,
-    stripe_idempotency_key: str | None = None,
+    operation_id: str | None = None,
 ):
     inv = await access.invoices.find_one({"id": invoice_id})
     if not inv or not await invoice_references_visible(access, inv):
@@ -33,46 +26,32 @@ async def create_checkout(
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
     if inv.get("status") == "Bezahlt":
         raise HTTPException(status_code=409, detail="Rechnung ist bereits bezahlt")
-    if inv.get("stripeSessionId") and inv.get("stripeCheckoutUrl"):
-        return {"url": inv["stripeCheckoutUrl"], "sessionId": inv["stripeSessionId"]}
     try:
         currency = currency_code(inv.get("currency") or access.context.default_currency)
-        amount_cents = amount_minor(inv, "amount", expected_currency=currency)
+        invoice_total_minor = amount_minor(inv, "amount", expected_currency=currency)
     except MoneyError as exc:
         raise HTTPException(status_code=409, detail="Rechnung besitzt keinen gültigen Zahlungsbetrag") from exc
+    paid_minor = inv.get("paidAmountMinor", 0)
+    if not isinstance(paid_minor, int) or isinstance(paid_minor, bool) or paid_minor < 0:
+        raise HTTPException(status_code=409, detail="Rechnung besitzt keinen gültigen Zahlungsstand")
+    amount_cents = invoice_total_minor - paid_minor
     if amount_cents <= 0:
         raise HTTPException(status_code=400, detail="Ungültiger Rechnungsbetrag")
-
-    def _create():
-        return stripe.checkout.Session.create(
-            mode="payment",
-            currency=currency.lower(),
-            locale="de",
-            line_items=[{
-                "price_data": {
-                    "currency": currency.lower(),
-                    "unit_amount": amount_cents,
-                    "product_data": {"name": f"Rechnung {invoice_id}"},
-                },
-                "quantity": 1,
-            }],
-            client_reference_id=invoice_id,
-            metadata={"invoiceId": invoice_id},
-            success_url=SUCCESS_URL,
-            cancel_url=CANCEL_URL,
-            idempotency_key=stripe_idempotency_key,
-        )
-
     try:
-        session = await run_in_threadpool(_create)
-    except Exception as e:
-        logger.warning(f"Stripe Checkout fehlgeschlagen: {e}")
-        raise HTTPException(status_code=502, detail="Zahlung konnte nicht gestartet werden")
-    await access.invoices.update_one(
-        {"id": invoice_id},
-        {"$set": {"stripeSessionId": session.id, "stripeCheckoutUrl": session.url}},
+        success_url, cancel_url = checkout_return_urls("invoice", invoice_id)
+    except PaymentIntegrityError as exc:
+        raise HTTPException(status_code=503, detail="Zahlungsdienst ist nicht vollständig konfiguriert") from exc
+    return await create_stripe_checkout(
+        access,
+        resource_type="invoice",
+        resource_id=invoice_id,
+        operation_id=operation_id or f"direct-invoice-checkout:{invoice_id}",
+        expected_amount_minor=amount_cents,
+        currency=currency,
+        product_name=f"Rechnung {invoice_id}",
+        success_url=success_url,
+        cancel_url=cancel_url,
     )
-    return {"url": session.url, "sessionId": session.id}
 
 
 @api_router.post("/invoices/{invoice_id}/checkout")
@@ -98,7 +77,7 @@ async def create_checkout_endpoint(
     try:
         response = await create_checkout(
             invoice_id, user, access,
-            stripe_idempotency_key=f"{access.context.tenant_id}:{claim.record_id}",
+            operation_id=claim.record_id,
         )
         await service.complete(claim, response, {"invoiceId": invoice_id, "stripeSessionId": response["sessionId"]})
         return response
@@ -121,18 +100,9 @@ async def payment_status(
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
     if inv.get("status") == "Bezahlt":
         return {"status": "Bezahlt", "paidAt": inv.get("paidAt")}
-    session_id = inv.get("stripeSessionId")
-    if session_id:
-        try:
-            session = await run_in_threadpool(stripe.checkout.Session.retrieve, session_id)
-        except Exception as e:
-            logger.warning(f"Stripe Status-Abruf fehlgeschlagen: {e}")
-            session = None
-        if session and session.get("payment_status") in ("paid", "no_payment_required"):
-            from datetime import datetime, timezone
-            await access.invoices.update_one(
-                {"id": invoice_id, "status": {"$ne": "Bezahlt"}},
-                {"$set": {"status": "Bezahlt", "paidAt": datetime.now(timezone.utc).isoformat()}},
-            )
-            return {"status": "Bezahlt"}
-    return {"status": inv.get("status", "Offen")}
+    response = {"status": inv.get("status", "Offen")}
+    if inv.get("stripeCheckoutState") is not None:
+        response["checkoutState"] = inv["stripeCheckoutState"]
+    if inv.get("stripePaymentStatus") is not None:
+        response["providerStatus"] = inv["stripePaymentStatus"]
+    return response

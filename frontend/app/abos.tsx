@@ -1,5 +1,11 @@
 import { useState } from "react";
-import { View, Text, ScrollView, Pressable, KeyboardAvoidingView, Platform, Alert } from "react-native";
+import {
+  View,
+  ScrollView,
+  Pressable,
+  KeyboardAvoidingView,
+  Platform,
+} from "react-native";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -9,8 +15,10 @@ import { makeStyles, useTheme } from "@/src/theme";
 import { apiGet, apiPost, apiPostIdempotent, apiPut, apiDelete } from "@/src/api/client";
 import { euro, num, dateDE } from "@/src/lib/format";
 import { Card, Input, Button, SectionTitle, Muted, EmptyState } from "@/src/components/ui";
+import { LocalizedText as Text, localizedAlert, useI18n } from "@/src/i18n";
 
 export default function Abos() {
+  useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const router = useRouter();
@@ -64,7 +72,7 @@ export default function Abos() {
     mutationFn: () => apiPostIdempotent("/subscriptions/run", {}),
     onSuccess: (r: any) => {
       qc.invalidateQueries({ queryKey: ["orders"] });
-      Alert.alert("Abos ausgeführt", `${r.count} fällige Bestellung(en) erstellt.`);
+      localizedAlert("Abos ausgeführt", `${r.count} fällige Bestellung(en) erstellt.`);
     },
   });
 

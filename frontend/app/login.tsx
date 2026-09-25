@@ -1,7 +1,6 @@
 import { useState } from "react";
 import {
   View,
-  Text,
   ScrollView,
   KeyboardAvoidingView,
   Platform,
@@ -17,6 +16,7 @@ import { Coffee } from "phosphor-react-native";
 import { makeStyles, tokens, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
 import { Button, Input } from "@/src/components/ui";
+import { LocalizedText as Text } from "@/src/i18n";
 
 const HERO =
   "https://images.unsplash.com/photo-1653668168018-0ee2c5756bca?crop=entropy&cs=srgb&fm=jpg&q=85&w=1200";

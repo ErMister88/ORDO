@@ -1,14 +1,12 @@
 """B2B machines: admin catalog + acquisition (Kauf / Finanzierung / Leasing)."""
-import os
 import uuid
+import stripe
 from datetime import datetime, timezone
 from html import escape
 from typing import Annotated, Optional
 
-import stripe
 from fastapi import Depends, Header, HTTPException
 from pymongo.errors import DuplicateKeyError
-from starlette.concurrency import run_in_threadpool
 
 from ..core import api_router, db, strip_id, next_seq, logger
 from ..audit_service import tenant_audit
@@ -20,9 +18,7 @@ from ..tenant_access import TenantBusinessAccess
 from ..money import MoneyError, amount_minor, currency_code, from_minor, to_minor
 from ..pricing_engine import PricingEngine, PricingError
 from ..idempotency import IdempotencyService
-
-stripe.api_key = os.environ.get("STRIPE_API_KEY", "")
-APP_URL = (os.environ.get("APP_URL") or "https://ordo-connect.preview.emergentagent.com").rstrip("/")
+from ..payment_integrity import checkout_return_urls, create_stripe_checkout, PaymentIntegrityError
 
 TYPE_LABEL = {"kauf": "Kauf", "finanzierung": "Finanzierung", "leasing": "Leasing (Kaffeebindung)",
               "bereitstellung": "Bereitstellung"}
@@ -540,7 +536,7 @@ async def machine_checkout(
     user: Annotated[dict, Depends(current_user)],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
     *,
-    stripe_idempotency_key: str | None = None,
+    operation_id: str | None = None,
 ):
     r = await access.machine_requests.find_one({"id": req_id})
     if not r or not await _machine_request_references_visible(r, access):
@@ -552,35 +548,27 @@ async def machine_checkout(
         raise HTTPException(status_code=400, detail="Nur Direktkauf ist sofort zahlbar")
     if r.get("paymentStatus") == "Bezahlt":
         raise HTTPException(status_code=409, detail="Bereits bezahlt")
-    if r.get("stripeSessionId") and r.get("stripeCheckoutUrl"):
-        return {"url": r["stripeCheckoutUrl"], "sessionId": r["stripeSessionId"]}
     try:
         currency = currency_code(r.get("currency") or access.context.default_currency)
         amount_cents = amount_minor(r, "machinePrice", expected_currency=currency)
     except MoneyError as exc:
         raise HTTPException(status_code=409, detail="Maschinenanfrage besitzt keinen gültigen Zahlungsbetrag") from exc
 
-    def _create():
-        return stripe.checkout.Session.create(
-            mode="payment", currency=currency.lower(), locale="de",
-            line_items=[{"price_data": {"currency": currency.lower(), "unit_amount": amount_cents,
-                                         "product_data": {"name": r["machineName"]}}, "quantity": 1}],
-            client_reference_id=req_id, metadata={"machineRequestId": req_id},
-            success_url=f"{APP_URL}/?payment=success&session_id={{CHECKOUT_SESSION_ID}}",
-            cancel_url=f"{APP_URL}/?payment=cancelled",
-            idempotency_key=stripe_idempotency_key,
-        )
-
     try:
-        session = await run_in_threadpool(_create)
-    except Exception as e:
-        logger.warning(f"Stripe Checkout (Maschine) fehlgeschlagen: {e}")
-        raise HTTPException(status_code=502, detail="Zahlung konnte nicht gestartet werden")
-    await access.machine_requests.update_one(
-        {"id": req_id},
-        {"$set": {"stripeSessionId": session.id, "stripeCheckoutUrl": session.url}},
+        success_url, cancel_url = checkout_return_urls("machine_request", req_id)
+    except PaymentIntegrityError as exc:
+        raise HTTPException(status_code=503, detail="Zahlungsdienst ist nicht vollständig konfiguriert") from exc
+    return await create_stripe_checkout(
+        access,
+        resource_type="machine_request",
+        resource_id=req_id,
+        operation_id=operation_id or f"direct-machine-checkout:{req_id}",
+        expected_amount_minor=amount_cents,
+        currency=currency,
+        product_name=r["machineName"],
+        success_url=success_url,
+        cancel_url=cancel_url,
     )
-    return {"url": session.url, "sessionId": session.id}
 
 
 @api_router.post("/machine-requests/{req_id}/checkout")
@@ -605,7 +593,7 @@ async def machine_checkout_endpoint(
     try:
         response = await machine_checkout(
             req_id, user, access,
-            stripe_idempotency_key=f"{access.context.tenant_id}:{claim.record_id}",
+            operation_id=claim.record_id,
         )
         await service.complete(
             claim, response,
@@ -631,18 +619,9 @@ async def machine_payment_status(
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
     if r.get("paymentStatus") == "Bezahlt":
         return {"status": "Bezahlt"}
-    sid = r.get("stripeSessionId")
-    if sid:
-        try:
-            session = await run_in_threadpool(stripe.checkout.Session.retrieve, sid)
-        except Exception as e:
-            logger.warning(f"Stripe Status (Maschine) fehlgeschlagen: {e}")
-            session = None
-        if session and session.get("payment_status") in ("paid", "no_payment_required"):
-            await access.machine_requests.update_one(
-                {"id": req_id, "paymentStatus": {"$ne": "Bezahlt"}},
-                {"$set": {"paymentStatus": "Bezahlt", "status": "Gekauft",
-                          "paidAt": datetime.now(timezone.utc).isoformat()}},
-            )
-            return {"status": "Bezahlt"}
-    return {"status": r.get("paymentStatus", "Offen")}
+    response = {"status": r.get("paymentStatus", "Offen")}
+    if r.get("stripeCheckoutState") is not None:
+        response["checkoutState"] = r["stripeCheckoutState"]
+    if r.get("stripePaymentStatus") is not None:
+        response["providerStatus"] = r["stripePaymentStatus"]
+    return response

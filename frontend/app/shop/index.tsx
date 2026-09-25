@@ -1,5 +1,10 @@
 import { useState } from "react";
-import { View, Text, ScrollView, Pressable, useWindowDimensions } from "react-native";
+import {
+  View,
+  ScrollView,
+  Pressable,
+  useWindowDimensions,
+} from "react-native";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -12,6 +17,7 @@ import { euro } from "@/src/lib/format";
 import { useCart } from "@/src/shop/cart";
 import { shopApi } from "@/src/shop/auth";
 import { Card, EmptyState, Muted, Input, Button, PageContainer, LoadingState, ErrorState } from "@/src/components/ui";
+import { LocalizedText as Text, useI18n } from "@/src/i18n";
 
 function NewsletterCard({ percent }: { percent: number }) {
   const styles = useStyles();
@@ -83,6 +89,7 @@ function NewsletterCard({ percent }: { percent: number }) {
 }
 
 export default function Shop() {
+  useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const router = useRouter();

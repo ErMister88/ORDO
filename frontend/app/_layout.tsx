@@ -15,6 +15,7 @@ import { CartProvider } from "@/src/shop/cart";
 import { AppShell } from "@/src/components/app-shell";
 import { useTheme } from "@/src/theme";
 import { registerForPush } from "@/src/push";
+import { I18nProvider } from "@/src/i18n";
 
 LogBox.ignoreAllLogs(true);
 
@@ -72,11 +73,12 @@ export default function RootLayout() {
     <ErrorBoundary>
       <GestureHandlerRootView style={{ flex: 1 }}>
         <SafeAreaProvider>
-          <QueryClientProvider client={queryClient}>
-            <AuthProvider>
-              <CartProvider>
-                <StatusBar style="dark" />
-                <AppShell><Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.surfaceSecondary } }}>
+          <I18nProvider>
+            <QueryClientProvider client={queryClient}>
+              <AuthProvider>
+                <CartProvider>
+                  <StatusBar style="dark" />
+                  <AppShell><Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.surfaceSecondary } }}>
                   <Stack.Screen name="index" />
                   <Stack.Screen name="login" />
                   <Stack.Screen name="(tabs)" />
@@ -101,10 +103,12 @@ export default function RootLayout() {
                   <Stack.Screen name="maschinen" options={{ presentation: "card" }} />
                   <Stack.Screen name="maschinen-admin" options={{ presentation: "card" }} />
                   <Stack.Screen name="einstellungen" options={{ presentation: "card" }} />
-                </Stack></AppShell>
-              </CartProvider>
-            </AuthProvider>
-          </QueryClientProvider>
+                  <Stack.Screen name="zahlung" options={{ presentation: "card" }} />
+                  </Stack></AppShell>
+                </CartProvider>
+              </AuthProvider>
+            </QueryClientProvider>
+          </I18nProvider>
         </SafeAreaProvider>
       </GestureHandlerRootView>
     </ErrorBoundary>

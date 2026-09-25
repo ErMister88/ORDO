@@ -13,6 +13,7 @@ os.environ["MONGO_URL"] = "mongodb://127.0.0.1:1"
 os.environ["DB_NAME"] = "ordo_test_money_import"
 os.environ["JWT_SECRET"] = "test-only-money-secret-at-least-32-bytes"
 os.environ["APP_ENV"] = "test"
+os.environ["STRIPE_API_KEY"] = "sk_test_money_snapshots"
 
 from app.money import (  # noqa: E402
     MoneyError,

@@ -1,7 +1,6 @@
 import React from "react";
 import {
   View,
-  Text,
   Pressable,
   ActivityIndicator,
   TextInput,
@@ -9,6 +8,7 @@ import {
   type TextProps,
 } from "react-native";
 import { makeStyles, tokens, useTheme } from "@/src/theme";
+import { LocalizedText as Text, useI18n } from "@/src/i18n";
 
 // ---------------------------------------------------------------------------
 // Card
@@ -161,12 +161,14 @@ export function Button({
 export const Input = React.forwardRef<TextInput, TextInputProps>(function Input({ style, ...props }, ref) {
   const styles = useStyles();
   const { colors } = useTheme();
+  const { t } = useI18n();
   return (
     <TextInput
       ref={ref}
       placeholderTextColor={colors.muted}
       style={[styles.input, style]}
       {...props}
+      placeholder={props.placeholder ? t(props.placeholder) : undefined}
     />
   );
 });

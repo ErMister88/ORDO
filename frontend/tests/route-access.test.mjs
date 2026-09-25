@@ -27,7 +27,7 @@ test("B2B customer direct URLs allow only customer workflows", () => {
 });
 
 test("B2C and anonymous users cannot enter internal routes", () => {
-  for (const path of ["/shop", "/shop/warenkorb", "/shop/konto", "/legal/impressum", "/login"])
+  for (const path of ["/shop", "/shop/warenkorb", "/shop/konto", "/legal/impressum", "/login", "/zahlung"])
     assert.equal(canAccessRoute(path, null), true, path);
   for (const path of ["/produkte", "/benutzer", "/kunden", "/angebote", "/bestellungen", "/maschinen"])
     assert.equal(canAccessRoute(path, null), false, path);

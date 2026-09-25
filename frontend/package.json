@@ -10,6 +10,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "build:web": "node ./scripts/check-build-env.cjs && expo export --platform web --output-dir dist",
+    "test:i18n": "node --test tests/i18n.test.mjs",
     "test:route-guards": "node --test tests/route-access.test.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "expo lint"

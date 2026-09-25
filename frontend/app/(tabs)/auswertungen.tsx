@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { View, Text, ScrollView, Pressable, useWindowDimensions } from "react-native";
+import {
+  View,
+  ScrollView,
+  Pressable,
+  useWindowDimensions,
+} from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { BarChart, LineChart } from "react-native-gifted-charts";
 import { TrendUp } from "phosphor-react-native";
@@ -10,6 +15,7 @@ import { apiGet } from "@/src/api/client";
 import { euro, num } from "@/src/lib/format";
 import { ScreenHeader } from "@/src/components/screen-header";
 import { Card, SectionTitle, Muted } from "@/src/components/ui";
+import { LocalizedText as Text, useI18n } from "@/src/i18n";
 
 const TIMEFRAMES = [
   { key: 3, label: "3M" },
@@ -23,6 +29,7 @@ const METRICS = [
 ];
 
 export default function Auswertungen() {
+  useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const { user } = useAuth();

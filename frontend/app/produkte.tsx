@@ -1,5 +1,14 @@
 import { useState } from "react";
-import { View, Text, ScrollView, Pressable, KeyboardAvoidingView, Platform, ActivityIndicator, Linking, TextInput } from "react-native";
+import {
+  View,
+  ScrollView,
+  Pressable,
+  KeyboardAvoidingView,
+  Platform,
+  ActivityIndicator,
+  Linking,
+  TextInput,
+} from "react-native";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -12,6 +21,7 @@ import { apiGet, apiPost, apiPut, apiUpload, fileUrl } from "@/src/api/client";
 import { euro } from "@/src/lib/format";
 import { Card, Input, Button, SectionTitle, Muted } from "@/src/components/ui";
 import { uploadsEnabled } from "@/src/config/features";
+import { LocalizedText as Text, useI18n } from "@/src/i18n";
 
 type Tier = { minQty: string; price: string };
 
@@ -78,6 +88,7 @@ const EMPTY: Form = {
 };
 
 export default function Produkte() {
+  useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const router = useRouter();

@@ -1,5 +1,11 @@
 import { useState } from "react";
-import { View, Text, ScrollView, Pressable, KeyboardAvoidingView, Platform } from "react-native";
+import {
+  View,
+  ScrollView,
+  Pressable,
+  KeyboardAvoidingView,
+  Platform,
+} from "react-native";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArrowLeft, CheckCircle } from "phosphor-react-native";
@@ -7,6 +13,7 @@ import { ArrowLeft, CheckCircle } from "phosphor-react-native";
 import { makeStyles, useTheme } from "@/src/theme";
 import { apiPost } from "@/src/api/client";
 import { Card, Input, Button, SectionTitle, Muted } from "@/src/components/ui";
+import { LocalizedText as Text } from "@/src/i18n";
 
 export default function PasswortVergessen() {
   const styles = useStyles();

@@ -1,5 +1,11 @@
 import { useMemo, useState } from "react";
-import { View, Text, ScrollView, Pressable, KeyboardAvoidingView, Platform } from "react-native";
+import {
+  View,
+  ScrollView,
+  Pressable,
+  KeyboardAvoidingView,
+  Platform,
+} from "react-native";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Image } from "expo-image";
@@ -12,8 +18,10 @@ import { euro, num } from "@/src/lib/format";
 import { shareOfferPdf } from "@/src/lib/pdf";
 import { ScreenHeader } from "@/src/components/screen-header";
 import { Card, Input, Button, StatusBadge, SectionTitle, EmptyState, Muted } from "@/src/components/ui";
+import { LocalizedText as Text, useI18n } from "@/src/i18n";
 
 export default function Angebote() {
+  useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const { user } = useAuth();

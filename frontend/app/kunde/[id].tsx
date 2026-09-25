@@ -1,5 +1,9 @@
 import { useState } from "react";
-import { View, Text, ScrollView, Pressable, Alert } from "react-native";
+import {
+  View,
+  ScrollView,
+  Pressable,
+} from "react-native";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -12,8 +16,10 @@ import { apiDelete, apiGet, apiPost, apiPostIdempotent, apiPut, apiPutIdempotent
 import { euro, num, dateDE } from "@/src/lib/format";
 import { shareInvoicePdf, shareCollectivePdf } from "@/src/lib/pdf";
 import { Card, InfoRow, Button, Input, StatusBadge, EmptyState, Muted, LoadingState, ErrorState, PageContainer, KPICard, SectionTitle } from "@/src/components/ui";
+import { LocalizedText as Text, localizedAlert, useI18n } from "@/src/i18n";
 
 export default function KundeDetail() {
+  useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
@@ -82,18 +88,23 @@ export default function KundeDetail() {
       const res = await apiPostIdempotent(`/invoices/${invId}/checkout`, {});
       if (res?.url) {
         await WebBrowser.openBrowserAsync(res.url);
+        let confirmed = false;
         for (let i = 0; i < 8; i++) {
           await new Promise((r) => setTimeout(r, 1500));
           const st = await apiGet(`/invoices/${invId}/payment-status`);
           if (st.status === "Bezahlt") {
+            confirmed = true;
             qc.invalidateQueries({ queryKey: ["invoices"] });
             qc.invalidateQueries({ queryKey: ["dashboard"] });
             break;
           }
         }
+        if (!confirmed) {
+          localizedAlert("Zahlung wird bestätigt", "ORDO wartet noch auf die sichere Bestätigung des Zahlungsdienstes.");
+        }
       }
     } catch (e: any) {
-      Alert.alert("Zahlung", e.message || "Online-Zahlung ist erst nach dem Deploy verfügbar.");
+      localizedAlert("Zahlung", e.message || "Online-Zahlung ist erst nach dem Deploy verfügbar.");
     } finally {
       setPayingId(null);
     }
@@ -107,7 +118,7 @@ export default function KundeDetail() {
       const data = await apiGet(`/companies/${id}/collective-invoice?year=${now.getFullYear()}&month=${now.getMonth() + 1}`);
       await shareCollectivePdf(data);
     } catch (e: any) {
-      Alert.alert("Sammelrechnung", e.message || "Fehler");
+      localizedAlert("Sammelrechnung", e.message || "Fehler");
     } finally {
       setSammelBusy(false);
     }

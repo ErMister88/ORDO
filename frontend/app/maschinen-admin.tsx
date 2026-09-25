@@ -1,5 +1,11 @@
 import { useState } from "react";
-import { View, Text, ScrollView, Pressable, Alert, KeyboardAvoidingView, Platform } from "react-native";
+import {
+  View,
+  ScrollView,
+  Pressable,
+  KeyboardAvoidingView,
+  Platform,
+} from "react-native";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -12,10 +18,12 @@ import { apiGet, apiPost, apiPut, apiDelete, apiUpload, fileUrl } from "@/src/ap
 import { euro } from "@/src/lib/format";
 import { Card, Input, Button, SectionTitle, Muted, EmptyState, StatusBadge, InfoRow } from "@/src/components/ui";
 import { uploadsEnabled } from "@/src/config/features";
+import { LocalizedText as Text, localizedAlert, useI18n } from "@/src/i18n";
 
 const EMPTY = { productId: "", name: "", description: "", price: "", taxRate: "19", imageUrl: "", active: true };
 
 export default function MaschinenAdmin() {
+  useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const router = useRouter();
@@ -44,7 +52,7 @@ export default function MaschinenAdmin() {
     if (perm.status === "undetermined" || (perm.status === "denied" && perm.canAskAgain)) {
       perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     }
-    if (perm.status !== "granted") { Alert.alert("Zugriff nötig", "Bitte Foto-Zugriff in den Einstellungen erlauben."); return; }
+    if (perm.status !== "granted") { localizedAlert("Zugriff nötig", "Bitte Foto-Zugriff in den Einstellungen erlauben."); return; }
     const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], quality: 0.7, allowsEditing: true, aspect: [4, 3] });
     if (res.canceled || !res.assets?.length) return;
     const asset = res.assets[0];
@@ -54,7 +62,7 @@ export default function MaschinenAdmin() {
       const up = await apiUpload(asset.uri, name, asset.mimeType || "image/jpeg");
       setForm((f: any) => ({ ...f, imageUrl: up.url }));
     } catch (e: any) {
-      Alert.alert("Upload fehlgeschlagen", e.message || "");
+      localizedAlert("Upload fehlgeschlagen", e.message || "");
     } finally {
       setUploading(false);
     }
@@ -66,7 +74,7 @@ export default function MaschinenAdmin() {
       return editing === "new" ? apiPost("/machines", body) : apiPut(`/machines/${editing}`, body);
     },
     onSuccess: () => { setEditing(null); qc.invalidateQueries({ queryKey: ["machines"] }); },
-    onError: (e: any) => Alert.alert("Fehler", e.message || "Speichern fehlgeschlagen"),
+    onError: (e: any) => localizedAlert("Fehler", e.message || "Speichern fehlgeschlagen"),
   });
 
   const del = useMutation({
@@ -157,7 +165,7 @@ export default function MaschinenAdmin() {
                   <PencilSimple size={18} color={colors.brandPrimary} />
                   <Text style={styles.iconTxt}>Bearbeiten</Text>
                 </Pressable>
-                <Pressable style={styles.iconBtn} onPress={() => Alert.alert("Löschen?", `${m.name} deaktivieren?`, [{ text: "Abbrechen" }, { text: "Löschen", style: "destructive", onPress: () => del.mutate(m.id) }])} testID={`del-${m.id}`}>
+                <Pressable style={styles.iconBtn} onPress={() => localizedAlert("Löschen?", `${m.name} deaktivieren?`, [{ text: "Abbrechen" }, { text: "Löschen", style: "destructive", onPress: () => del.mutate(m.id) }])} testID={`del-${m.id}`}>
                   <Trash size={18} color={colors.error} />
                   <Text style={[styles.iconTxt, { color: colors.error }]}>Deaktivieren</Text>
                 </Pressable>
@@ -235,18 +243,18 @@ function RequestCard({ r, products, onDone }: { r: any; products: any[]; onDone:
       coffeePricePerKg: isLease ? num(t.coffeePricePerKg) : null,
       note: t.note,
     }),
-    onSuccess: () => { onDone(); Alert.alert("Angebot gesendet", "Der Kunde wurde per E-Mail informiert."); },
-    onError: (e: any) => Alert.alert("Fehler", e.message || "Konnte nicht gesendet werden"),
+    onSuccess: () => { onDone(); localizedAlert("Angebot gesendet", "Der Kunde wurde per E-Mail informiert."); },
+    onError: (e: any) => localizedAlert("Fehler", e.message || "Konnte nicht gesendet werden"),
   });
 
   const submit = () => {
     if (isLease) {
       if (!num(t.minCoffeeKgMonth) || Number(num(t.minCoffeeKgMonth)) <= 0) {
-        Alert.alert("Kaffeebindung nötig", "Bitte eine Kaffee-Mindestabnahme größer 0 angeben."); return;
+        localizedAlert("Kaffeebindung nötig", "Bitte eine Kaffee-Mindestabnahme größer 0 angeben."); return;
       }
-      if (!t.productId) { Alert.alert("Kaffeesorte wählen", "Bitte eine Kaffeesorte für die Bindung wählen."); return; }
+      if (!t.productId) { localizedAlert("Kaffeesorte wählen", "Bitte eine Kaffeesorte für die Bindung wählen."); return; }
       if (!num(t.coffeePricePerKg) || Number(num(t.coffeePricePerKg)) <= 0) {
-        Alert.alert("Kaffeepreis nötig", "Bitte einen Kaffeepreis pro kg angeben."); return;
+        localizedAlert("Kaffeepreis nötig", "Bitte einen Kaffeepreis pro kg angeben."); return;
       }
     }
     send.mutate();

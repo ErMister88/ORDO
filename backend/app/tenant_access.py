@@ -28,6 +28,7 @@ TENANT_SCOPED_BUSINESS_COLLECTIONS = frozenset({
     "newsletter",
     "offers",
     "orders",
+    "payment_provider_events",
     "price_history",
     "price_approvals",
     "pricing_promotions",
@@ -177,6 +178,7 @@ class TenantBusinessAccess:
         self.newsletter = TenantScopedCollection(database, "newsletter", context)
         self.offers = TenantScopedCollection(database, "offers", context)
         self.orders = TenantScopedCollection(database, "orders", context)
+        self.payment_provider_events = TenantScopedCollection(database, "payment_provider_events", context)
         self.price_history = TenantScopedCollection(database, "price_history", context)
         self.price_approvals = TenantScopedCollection(database, "price_approvals", context)
         self.pricing_promotions = TenantScopedCollection(database, "pricing_promotions", context)

@@ -11,9 +11,11 @@ import {
 
 import { tokens, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
+import { useI18n } from "@/src/i18n";
 
 export default function TabsLayout() {
   const { colors } = useTheme();
+  const { t } = useI18n();
   const { user } = useAuth();
   const role = user?.role ?? "customer";
   const isStaff = role === "admin" || role === "sales";
@@ -38,14 +40,14 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: "Übersicht",
+          title: t("Übersicht"),
           tabBarIcon: ({ color, size }) => <House size={size} color={String(color)} weight="fill" />,
         }}
       />
       <Tabs.Screen
         name="kunden"
         options={{
-          title: "Kunden",
+          title: t("Kunden"),
           href: isStaff ? "/(tabs)/kunden" : null,
           tabBarIcon: ({ color, size }) => <Users size={size} color={String(color)} weight="fill" />,
         }}
@@ -53,14 +55,14 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="angebote"
         options={{
-          title: "Angebote",
+          title: t("Angebote"),
           tabBarIcon: ({ color, size }) => <Tag size={size} color={String(color)} weight="fill" />,
         }}
       />
       <Tabs.Screen
         name="auswertungen"
         options={{
-          title: "Auswertungen",
+          title: t("Auswertungen"),
           href: isStaff ? "/(tabs)/auswertungen" : null,
           tabBarIcon: ({ color, size }) => <ChartBar size={size} color={String(color)} weight="fill" />,
         }}
@@ -68,7 +70,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="bestellungen"
         options={{
-          title: "Bestellungen",
+          title: t("Bestellungen"),
           href: !isStaff ? "/(tabs)/bestellungen" : null,
           tabBarIcon: ({ color, size }) => <ShoppingCart size={size} color={String(color)} weight="fill" />,
         }}
@@ -76,7 +78,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="mehr"
         options={{
-          title: "Mehr",
+          title: t("Mehr"),
           href: "/(tabs)/mehr",
           tabBarIcon: ({ color, size }) => <DotsThreeCircle size={size} color={String(color)} weight="fill" />,
         }}

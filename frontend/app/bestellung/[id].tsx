@@ -1,5 +1,9 @@
 import { useState } from "react";
-import { View, Text, ScrollView, Pressable, Alert } from "react-native";
+import {
+  View,
+  ScrollView,
+  Pressable,
+} from "react-native";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -12,10 +16,12 @@ import { apiGet, apiPut, apiPostIdempotent, fileUrl } from "@/src/api/client";
 import { euro, num, dateDE } from "@/src/lib/format";
 import { shareInvoicePdf, shareDeliveryNotePdf } from "@/src/lib/pdf";
 import { Card, InfoRow, Button, StatusBadge, Muted } from "@/src/components/ui";
+import { LocalizedText as Text, localizedAlert, useI18n } from "@/src/i18n";
 
 const FLOW = ["Neu", "Bestätigt", "Kommissioniert", "Versendet", "Abgeschlossen"];
 
 export default function BestellungDetail() {
+  useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
@@ -58,9 +64,9 @@ export default function BestellungDetail() {
     onSuccess: (inv: any) => {
       qc.invalidateQueries({ queryKey: ["order", id] });
       qc.invalidateQueries({ queryKey: ["invoices"] });
-      Alert.alert("Rechnung erstellt", `Rechnung ${inv.id} wurde erstellt (brutto ${inv.amount.toFixed(2)} €).`);
+      localizedAlert("Rechnung erstellt", `Rechnung ${inv.id} wurde erstellt (brutto ${inv.amount.toFixed(2)} €).`);
     },
-    onError: (e: any) => Alert.alert("Rechnung", e.message || "Fehler"),
+    onError: (e: any) => localizedAlert("Rechnung", e.message || "Fehler"),
   });
 
   const cancel = useMutation({

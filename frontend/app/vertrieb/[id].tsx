@@ -1,4 +1,8 @@
-import { Pressable, ScrollView, Text, View } from "react-native";
+import {
+  Pressable,
+  ScrollView,
+  View,
+} from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { ArrowLeft, ArrowRight } from "phosphor-react-native";
@@ -7,8 +11,10 @@ import { apiGet } from "@/src/api/client";
 import { Card, ErrorState, InfoRow, KPICard, LoadingState, Muted, PageContainer, SectionTitle } from "@/src/components/ui";
 import { dateDE, euro, num } from "@/src/lib/format";
 import { makeStyles, tokens, useTheme } from "@/src/theme";
+import { LocalizedText as Text, useI18n } from "@/src/i18n";
 
 export default function SalesRepDetail() {
+  useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const router = useRouter();

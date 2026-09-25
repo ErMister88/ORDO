@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react";
-import { View, Text, ScrollView, Pressable, KeyboardAvoidingView, Platform, Alert, Linking } from "react-native";
+import {
+  View,
+  ScrollView,
+  Pressable,
+  KeyboardAvoidingView,
+  Platform,
+  Linking,
+} from "react-native";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as WebBrowser from "expo-web-browser";
@@ -11,10 +18,12 @@ import { euro, dateDE } from "@/src/lib/format";
 import { shopApi, shopSetToken, shopLogout, shopToken } from "@/src/shop/auth";
 import { shareShopInvoicePdf, glsTrackUrl } from "@/src/lib/pdf";
 import { Card, Input, Button, SectionTitle, Muted, EmptyState, InfoRow, StatusBadge } from "@/src/components/ui";
+import { LocalizedText as Text, localizedAlert, useI18n } from "@/src/i18n";
 
 const EMPTY_ADDR = { name: "", phone: "", street: "", zip: "", city: "" };
 
 export default function ShopKonto() {
+  useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const router = useRouter();
@@ -53,9 +62,9 @@ export default function ShopKonto() {
     setAddrSaving(true);
     try {
       await shopApi.saveAddress(addr);
-      Alert.alert("Gespeichert", "Deine Lieferadresse wurde gespeichert und wird beim nächsten Kauf vorausgefüllt.");
+      localizedAlert("Gespeichert", "Deine Lieferadresse wurde gespeichert und wird beim nächsten Kauf vorausgefüllt.");
     } catch (e: any) {
-      Alert.alert("Fehler", e.message || "Adresse konnte nicht gespeichert werden");
+      localizedAlert("Fehler", e.message || "Adresse konnte nicht gespeichert werden");
     } finally {
       setAddrSaving(false);
     }
@@ -95,15 +104,22 @@ export default function ShopKonto() {
       );
       if (res?.url) {
         await WebBrowser.openBrowserAsync(res.url);
+        let confirmed = false;
         for (let i = 0; i < 8; i++) {
           await new Promise((r) => setTimeout(r, 1500));
-          const st = await apiGet(`/shop/orders/${orderId}/payment-status`);
-          if (st.status === "Bezahlt") break;
+          const st = await apiGet(
+            `/shop/orders/${orderId}/payment-status`,
+            token ? { Authorization: `Bearer ${token}` } : {},
+          );
+          if (st.status === "Bezahlt") { confirmed = true; break; }
         }
         setOrders(await shopApi.myOrders());
+        if (!confirmed) {
+          localizedAlert("Zahlung wird bestätigt", "ORDO wartet noch auf die sichere Bestätigung des Zahlungsdienstes.");
+        }
       }
     } catch (e: any) {
-      Alert.alert(
+      localizedAlert(
         "Zahlung nicht möglich",
         e.message || "Die Kartenzahlung ist erst nach Veröffentlichung der App aktiv.",
       );

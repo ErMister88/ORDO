@@ -1,4 +1,8 @@
-import { View, Text, ScrollView, Pressable } from "react-native";
+import {
+  View,
+  ScrollView,
+  Pressable,
+} from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -8,6 +12,7 @@ import { makeStyles, useTheme } from "@/src/theme";
 import { apiGet } from "@/src/api/client";
 import { useAuth } from "@/src/auth/auth";
 import { Card, EmptyState, Muted } from "@/src/components/ui";
+import { getCurrentLocale, LocalizedText as Text, useI18n } from "@/src/i18n";
 
 const LABELS: Record<string, string> = {
   login: "Anmeldung",
@@ -24,13 +29,14 @@ const LABELS: Record<string, string> = {
 function fmt(at: string) {
   try {
     const d = new Date(at);
-    return d.toLocaleString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+    return d.toLocaleString(getCurrentLocale(), { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
   } catch {
     return at;
   }
 }
 
 export default function Audit() {
+  useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const router = useRouter();

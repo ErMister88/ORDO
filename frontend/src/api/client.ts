@@ -65,6 +65,51 @@ export async function apiPost<T = any>(path: string, body?: any, extraHeaders: R
 }
 
 const pendingIdempotencyKeys = new Map<string, string>();
+const PENDING_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
+
+function stableLocalHash(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+type StoredIdempotencyIntent = { key: string; createdAt: number };
+
+function canonicalRequestValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalRequestValue);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, nested]) => nested !== undefined)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, nested]) => [key, canonicalRequestValue(nested)]),
+    );
+  }
+  return value;
+}
+
+async function readPersistedIdempotencyKey(storageKey: string): Promise<string | null> {
+  const raw = await storage.getItem<string>(storageKey, "");
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as StoredIdempotencyIntent;
+    if (
+      typeof value.key === "string"
+      && typeof value.createdAt === "number"
+      && value.createdAt <= Date.now()
+      && Date.now() - value.createdAt <= PENDING_IDEMPOTENCY_TTL_MS
+    ) {
+      return value.key;
+    }
+  } catch {
+    // Invalid local state is discarded and can never influence the server hash.
+  }
+  await storage.removeItem(storageKey);
+  return null;
+}
 
 function newIdempotencyKey(): string {
   const randomUUID = globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
@@ -79,11 +124,21 @@ async function apiIdempotent<T>(
   body?: any,
   extraHeaders: Record<string, string> = {},
 ): Promise<T> {
-  const serialized = JSON.stringify(body ?? {});
+  const serialized = JSON.stringify(canonicalRequestValue(body ?? {}));
   const intent = `${method}:${path}:${serialized}`;
-  const key = pendingIdempotencyKeys.get(intent) ?? newIdempotencyKey();
-  pendingIdempotencyKeys.set(intent, key);
   const { headers, token } = await authContext();
+  const authorizationScope = extraHeaders.Authorization ?? headers.Authorization ?? "guest";
+  const scopedIntent = `${stableLocalHash(authorizationScope)}:${intent}`;
+  const storageKey = `ordo_pending_idempotency_${stableLocalHash(scopedIntent)}`;
+  const key = pendingIdempotencyKeys.get(scopedIntent)
+    ?? await readPersistedIdempotencyKey(storageKey)
+    ?? newIdempotencyKey();
+  pendingIdempotencyKeys.set(scopedIntent, key);
+  const persisted = await storage.setItem(storageKey, JSON.stringify({ key, createdAt: Date.now() }));
+  if (!persisted) {
+    pendingIdempotencyKeys.delete(scopedIntent);
+    throw new Error("Der Vorgang konnte nicht sicher vorbereitet werden. Bitte lokalen Speicher freigeben und erneut versuchen.");
+  }
   try {
     const res = await fetch(`${API}/api${path}`, {
       method,
@@ -99,10 +154,14 @@ async function apiIdempotent<T>(
     const payload = await res.json().catch(() => ({}));
     if (!res.ok) {
       const retryable = res.status >= 500 || (res.status === 409 && res.headers.has("Retry-After"));
-      if (!retryable) pendingIdempotencyKeys.delete(intent);
+      if (!retryable) {
+        pendingIdempotencyKeys.delete(scopedIntent);
+        await storage.removeItem(storageKey);
+      }
       throw new Error(payload.detail || `Fehler ${res.status}`);
     }
-    pendingIdempotencyKeys.delete(intent);
+    pendingIdempotencyKeys.delete(scopedIntent);
+    await storage.removeItem(storageKey);
     return payload as T;
   } catch (error) {
     // Keep the key on transport failure so a user retry recovers the same server operation.

@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { ActivityIndicator, Pressable, ScrollView, Text, View, useWindowDimensions } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, View, useWindowDimensions } from "react-native";
 import { usePathname, useRouter } from "expo-router";
 import {
   ChartBar, Coffee, FileText, Gauge, Package, Receipt, ShoppingBag,
@@ -9,6 +9,7 @@ import {
 import { useAuth } from "@/src/auth/auth";
 import { canAccessRoute, deniedRouteTarget, isPublicRoute } from "@/src/auth/route-access";
 import { makeStyles, tokens, useTheme } from "@/src/theme";
+import { languageLabels, LocalizedText as Text, useI18n, type SupportedLanguage } from "@/src/i18n";
 
 type NavItem = { label: string; path: string; icon: typeof Gauge; match?: string[] };
 type NavGroup = { label: string; items: NavItem[] };
@@ -81,8 +82,30 @@ export function AppShell({ children }: { children: ReactNode }) {
       </View>
     );
   }
-  if (!desktop || !user || publicRoute) return <>{children}</>;
-  return <View style={{ flex: 1, flexDirection: "row" }}><DesktopSidebar />{children}</View>;
+  if (!desktop || !user || publicRoute) {
+    return <View style={{ flex: 1 }}><View style={{ flex: 1 }}>{children}</View><LanguageSwitcher /></View>;
+  }
+  return <View style={{ flex: 1, flexDirection: "row" }}><DesktopSidebar /><View style={{ flex: 1 }}>{children}</View><LanguageSwitcher /></View>;
+}
+
+function LanguageSwitcher() {
+  const styles = useStyles();
+  const { language, setLanguage, t } = useI18n();
+  return (
+    <View style={styles.languageSwitcher} testID="language-switcher" accessibilityLabel={t("Sprache")}>
+      {(Object.keys(languageLabels) as SupportedLanguage[]).map((value) => (
+        <Pressable
+          key={value}
+          accessibilityRole="button"
+          accessibilityState={{ selected: language === value }}
+          onPress={() => { void setLanguage(value); }}
+          style={[styles.languageButton, language === value && styles.languageButtonActive]}
+        >
+          <Text style={[styles.languageText, language === value && styles.languageTextActive]}>{languageLabels[value]}</Text>
+        </Pressable>
+      ))}
+    </View>
+  );
 }
 
 function DesktopSidebar() {
@@ -163,4 +186,14 @@ const useStyles = makeStyles((c) => ({
   quickItemText: { color: c.onSurfaceInverse, fontWeight: "700", fontSize: 12.5 },
   profileName: { color: c.onSurfaceInverse, fontSize: 12.5, fontWeight: "700" },
   profileRole: { color: c.inverseSubtle, fontSize: 11, marginTop: 1 },
+  languageSwitcher: {
+    position: "absolute", top: 10, right: 12, zIndex: 100,
+    flexDirection: "row", gap: 2, padding: 3, borderRadius: 10,
+    backgroundColor: c.surface, borderWidth: 1, borderColor: c.border,
+    ...tokens.shadow,
+  },
+  languageButton: { minWidth: 30, height: 28, borderRadius: 7, alignItems: "center", justifyContent: "center" },
+  languageButtonActive: { backgroundColor: c.brandPrimary },
+  languageText: { fontSize: 11, fontWeight: "800", color: c.muted },
+  languageTextActive: { color: c.onBrandPrimary },
 }));

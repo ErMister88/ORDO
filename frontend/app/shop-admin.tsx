@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react";
-import { View, Text, ScrollView, Pressable, KeyboardAvoidingView, Platform, Switch, Alert } from "react-native";
+import {
+  View,
+  ScrollView,
+  Pressable,
+  KeyboardAvoidingView,
+  Platform,
+  Switch,
+} from "react-native";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -9,8 +16,10 @@ import { makeStyles, useTheme } from "@/src/theme";
 import { apiDelete, apiGet, apiPut, apiPost } from "@/src/api/client";
 import { euro, dateDE } from "@/src/lib/format";
 import { Card, Input, Button, SectionTitle, StatusBadge, EmptyState, Muted, InfoRow } from "@/src/components/ui";
+import { LocalizedText as Text, localizedAlert, useI18n } from "@/src/i18n";
 
 export default function ShopAdmin() {
+  useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const router = useRouter();
@@ -59,9 +68,9 @@ export default function ShopAdmin() {
     onSuccess: (res: any) => {
       setPushTitle("");
       setPushMsg("");
-      Alert.alert("Push gesendet", `An ${res.recipients} Gerät(e) gesendet.`);
+      localizedAlert("Push gesendet", `An ${res.recipients} Gerät(e) gesendet.`);
     },
-    onError: (e: any) => Alert.alert("Hinweis", e.message || "Push konnte nicht gesendet werden."),
+    onError: (e: any) => localizedAlert("Hinweis", e.message || "Push konnte nicht gesendet werden."),
   });
 
   const SHOP_STATUSES = ["Neu", "Bestätigt", "In Bearbeitung", "Versendet", "Abgeschlossen"];
@@ -71,9 +80,9 @@ export default function ShopAdmin() {
       apiPut(`/shop/orders/${id}/status`, { status, trackingNumber }),
     onSuccess: (_res, vars) => {
       qc.invalidateQueries({ queryKey: ["shop-orders"] });
-      Alert.alert("Status aktualisiert", `Bestellung auf „${vars.status}" gesetzt. Der Kunde wurde per E-Mail informiert.`);
+      localizedAlert("Status aktualisiert", `Bestellung auf „${vars.status}" gesetzt. Der Kunde wurde per E-Mail informiert.`);
     },
-    onError: (e: any) => Alert.alert("Fehler", e.message || "Status konnte nicht geändert werden."),
+    onError: (e: any) => localizedAlert("Fehler", e.message || "Status konnte nicht geändert werden."),
   });
 
   return (
@@ -150,7 +159,7 @@ export default function ShopAdmin() {
               loading={broadcast.isPending}
               onPress={() => {
                 if (!pushTitle.trim() || !pushMsg.trim()) {
-                  Alert.alert("Angaben fehlen", "Bitte Titel und Nachricht ausfüllen.");
+                  localizedAlert("Angaben fehlen", "Bitte Titel und Nachricht ausfüllen.");
                   return;
                 }
                 broadcast.mutate();

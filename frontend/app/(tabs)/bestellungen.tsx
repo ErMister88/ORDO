@@ -1,5 +1,11 @@
 import { useState } from "react";
-import { View, Text, ScrollView, KeyboardAvoidingView, Platform, Pressable } from "react-native";
+import {
+  View,
+  ScrollView,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+} from "react-native";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Image } from "expo-image";
@@ -11,8 +17,10 @@ import { apiGet, apiPost, apiPostIdempotent, fileUrl } from "@/src/api/client";
 import { euro, num, dateDE } from "@/src/lib/format";
 import { ScreenHeader } from "@/src/components/screen-header";
 import { Card, Button, Input, StatusBadge, SectionTitle, EmptyState, Muted } from "@/src/components/ui";
+import { LocalizedText as Text, useI18n } from "@/src/i18n";
 
 export default function Bestellungen() {
+  useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const { user } = useAuth();

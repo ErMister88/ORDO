@@ -1,5 +1,10 @@
 import { useMemo, useState } from "react";
-import { Pressable, ScrollView, Text, View, useWindowDimensions } from "react-native";
+import {
+  Pressable,
+  ScrollView,
+  View,
+  useWindowDimensions,
+} from "react-native";
 import { Image } from "expo-image";
 import { useQuery } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -9,8 +14,10 @@ import { apiGet, apiPost, fileUrl } from "@/src/api/client";
 import { Button, Card, Input, LoadingState, Muted, SectionTitle } from "@/src/components/ui";
 import { euro } from "@/src/lib/format";
 import { makeStyles, tokens, useTheme } from "@/src/theme";
+import { LocalizedText as Text, useI18n } from "@/src/i18n";
 
 export default function SalesCatalog() {
+  useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const router = useRouter();

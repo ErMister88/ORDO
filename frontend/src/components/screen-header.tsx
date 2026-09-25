@@ -1,7 +1,11 @@
 import React from "react";
-import { View, Text, Pressable } from "react-native";
+import {
+  View,
+  Pressable,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { makeStyles, tokens, useTheme } from "@/src/theme";
+import { LocalizedText as Text } from "@/src/i18n";
 
 export function ScreenHeader({
   title,

@@ -14,6 +14,7 @@ from .versions.v0006_legacy_tenant_bridge import MIGRATION as V0006_LEGACY_TENAN
 from .versions.v0007_customer_commerce_foundation import MIGRATION as V0007_CUSTOMER_COMMERCE_FOUNDATION
 from .versions.v0008_product_review_round2 import MIGRATION as V0008_PRODUCT_REVIEW_ROUND2
 from .versions.v0009_transaction_safety_config import MIGRATION as V0009_TRANSACTION_SAFETY_CONFIG
+from .versions.v0010_payment_integrity import MIGRATION as V0010_PAYMENT_INTEGRITY
 
 
 _MIGRATIONS: tuple[Migration, ...] = (
@@ -26,6 +27,7 @@ _MIGRATIONS: tuple[Migration, ...] = (
     replace(V0007_CUSTOMER_COMMERCE_FOUNDATION, depends_on=(5,)),
     replace(V0008_PRODUCT_REVIEW_ROUND2, depends_on=(7,)),
     replace(V0009_TRANSACTION_SAFETY_CONFIG, depends_on=(8,)),
+    replace(V0010_PAYMENT_INTEGRITY, depends_on=(9,)),
 )
 
 

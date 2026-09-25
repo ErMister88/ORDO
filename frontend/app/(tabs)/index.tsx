@@ -1,5 +1,11 @@
 import { useCallback, useState } from "react";
-import { View, Text, ScrollView, RefreshControl, Pressable, useWindowDimensions } from "react-native";
+import {
+  View,
+  ScrollView,
+  RefreshControl,
+  Pressable,
+  useWindowDimensions,
+} from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { SignOut, Warning, ArrowRight, Coffee, Package, UsersThree, FileText, Receipt, Storefront, Plus } from "phosphor-react-native";
@@ -10,8 +16,10 @@ import { apiGet } from "@/src/api/client";
 import { euro, num } from "@/src/lib/format";
 import { ScreenHeader, HeaderButton } from "@/src/components/screen-header";
 import { Card, KPICard, SectionTitle, InfoRow, Muted, PageContainer, LoadingState, ErrorState, StatusBadge } from "@/src/components/ui";
+import { LocalizedText as Text, useI18n } from "@/src/i18n";
 
 export default function Dashboard() {
+  useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const { user, signOut } = useAuth();

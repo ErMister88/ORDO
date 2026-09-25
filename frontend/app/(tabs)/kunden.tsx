@@ -1,5 +1,9 @@
 import { useMemo, useState } from "react";
-import { View, Text, FlatList, Pressable } from "react-native";
+import {
+  View,
+  FlatList,
+  Pressable,
+} from "react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { MagnifyingGlass, ArrowRight, MapPin, Plus, X } from "phosphor-react-native";
@@ -11,6 +15,7 @@ import { useAuth } from "@/src/auth/auth";
 import { num } from "@/src/lib/format";
 import { ScreenHeader } from "@/src/components/screen-header";
 import { Button, Card, Input, EmptyState } from "@/src/components/ui";
+import { LocalizedText as Text, useI18n } from "@/src/i18n";
 
 const FILTERS = [
   { key: "alle", label: "Alle" },
@@ -19,6 +24,7 @@ const FILTERS = [
 ];
 
 export default function Kunden() {
+  useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const router = useRouter();

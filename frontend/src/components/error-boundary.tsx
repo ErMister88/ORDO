@@ -4,9 +4,15 @@
 
 import { reloadAppAsync } from "expo";
 import { Component, type ErrorInfo, type PropsWithChildren, useState } from "react";
-import { Platform, Pressable, ScrollView, Text, View } from "react-native";
+import {
+  Platform,
+  Pressable,
+  ScrollView,
+  View,
+} from "react-native";
 
 import { makeStyles } from "@/src/theme";
+import { LocalizedText as Text } from "@/src/i18n";
 
 type ErrorBoundaryState = { error: Error | null };
 
@@ -49,8 +55,8 @@ function ErrorFallback({ error, resetError }: { error: Error; resetError: () => 
   return (
     <View style={styles.container} testID="error-fallback">
       <View style={styles.content}>
-        <Text style={styles.title}>Something went wrong</Text>
-        <Text style={styles.message}>Please reload the app to continue.</Text>
+        <Text style={styles.title}>Etwas ist schiefgelaufen</Text>
+        <Text style={styles.message}>Bitte laden Sie die Anwendung neu.</Text>
         {__DEV__ ? <Text style={styles.devMessage}>{error.message}</Text> : null}
         <Pressable
           onPress={handleReload}
@@ -58,11 +64,11 @@ function ErrorFallback({ error, resetError }: { error: Error; resetError: () => 
           accessibilityRole="button"
           style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}
         >
-          <Text style={styles.buttonText}>Reload app</Text>
+          <Text style={styles.buttonText}>Anwendung neu laden</Text>
         </Pressable>
         {__DEV__ ? (
           <Pressable onPress={() => setShowDetails((v) => !v)} accessibilityRole="button" hitSlop={8}>
-            <Text style={styles.detailsToggle}>{showDetails ? "Hide details" : "Show details"}</Text>
+            <Text style={styles.detailsToggle}>{showDetails ? "Details ausblenden" : "Details anzeigen"}</Text>
           </Pressable>
         ) : null}
       </View>

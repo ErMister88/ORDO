@@ -1,4 +1,8 @@
-import { View, Text, ScrollView, Pressable } from "react-native";
+import {
+  View,
+  ScrollView,
+  Pressable,
+} from "react-native";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArrowLeft } from "phosphor-react-native";
@@ -6,6 +10,7 @@ import { ArrowLeft } from "phosphor-react-native";
 import { makeStyles, useTheme } from "@/src/theme";
 import { Card } from "@/src/components/ui";
 import type { LegalSection } from "@/src/legal";
+import { LocalizedText as Text } from "@/src/i18n";
 
 export function LegalScreen({ title, sections }: { title: string; sections: LegalSection[] }) {
   const styles = useStyles();

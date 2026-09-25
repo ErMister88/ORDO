@@ -1,5 +1,9 @@
 import { useState } from "react";
-import { View, Text, ScrollView, Pressable, Alert } from "react-native";
+import {
+  View,
+  ScrollView,
+  Pressable,
+} from "react-native";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -12,6 +16,7 @@ import { apiGet, apiPost, apiPostIdempotent, fileUrl } from "@/src/api/client";
 import { euro } from "@/src/lib/format";
 import { shareMachineContractPdf, shareMachineInvoicePdf } from "@/src/lib/pdf";
 import { Card, Button, Input, SectionTitle, Muted, EmptyState, InfoRow, StatusBadge, PageContainer, LoadingState, ErrorState } from "@/src/components/ui";
+import { LocalizedText as Text, localizedAlert, useI18n } from "@/src/i18n";
 
 const TERMS = [24, 36, 48];
 
@@ -34,6 +39,7 @@ const requestPanel = (id: string, type: RequestPanel["type"]): RequestPanel => (
 });
 
 export default function Maschinen() {
+  useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const router = useRouter();
@@ -56,24 +62,33 @@ export default function Maschinen() {
     onSuccess: () => {
       setPanel(null);
       refresh();
-      Alert.alert("Anfrage gesendet", "Wir erstellen Ihr persönliches Angebot und melden uns in Kürze.");
+      localizedAlert("Anfrage gesendet", "Wir erstellen Ihr persönliches Angebot und melden uns in Kürze.");
     },
-    onError: (e: any) => Alert.alert("Fehler", e.message || "Anfrage fehlgeschlagen"),
+    onError: (e: any) => localizedAlert("Fehler", e.message || "Anfrage fehlgeschlagen"),
   });
 
   const accept = useMutation({
     mutationFn: (id: string) => apiPostIdempotent(`/machine-requests/${id}/accept`, {}),
-    onSuccess: () => { refresh(); Alert.alert("Angebot angenommen", "Vielen Dank! Wir setzen uns mit Ihnen in Verbindung."); },
-    onError: (e: any) => Alert.alert("Fehler", e.message || "Konnte nicht angenommen werden"),
+    onSuccess: () => { refresh(); localizedAlert("Angebot angenommen", "Vielen Dank! Wir setzen uns mit Ihnen in Verbindung."); },
+    onError: (e: any) => localizedAlert("Fehler", e.message || "Konnte nicht angenommen werden"),
   });
 
   const respond = useMutation({
     mutationFn: (b: { id: string; action: string; message?: string }) =>
       apiPost(`/machine-requests/${b.id}/respond`, { action: b.action, message: b.message ?? "" }),
     onSuccess: () => { setQ(null); refresh(); },
-    onError: (e: any) => Alert.alert("Fehler", e.message || "Aktion fehlgeschlagen"),
+    onError: (e: any) => localizedAlert("Fehler", e.message || "Aktion fehlgeschlagen"),
   });
   const [q, setQ] = useState<{ id: string; text: string } | null>(null);
+
+  const waitForPaymentConfirmation = async (requestId: string) => {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const status = await apiGet(`/machine-requests/${requestId}/payment-status`);
+      if (status.status === "Bezahlt") return true;
+    }
+    return false;
+  };
 
   const buy = async (machineId: string) => {
     setPayingId(machineId);
@@ -82,15 +97,13 @@ export default function Maschinen() {
       const res = await apiPostIdempotent(`/machine-requests/${req.id}/checkout`, {});
       if (res?.url) {
         await WebBrowser.openBrowserAsync(res.url);
-        for (let i = 0; i < 8; i++) {
-          await new Promise((r) => setTimeout(r, 1500));
-          const st = await apiGet(`/machine-requests/${req.id}/payment-status`);
-          if (st.status === "Bezahlt") break;
+        if (!await waitForPaymentConfirmation(req.id)) {
+          localizedAlert("Zahlung wird bestätigt", "ORDO wartet noch auf die sichere Bestätigung des Zahlungsdienstes.");
         }
       }
       refresh();
     } catch (e: any) {
-      Alert.alert("Zahlung nicht möglich", e.message || "Die Kartenzahlung ist erst nach Veröffentlichung der App aktiv.");
+      localizedAlert("Zahlung nicht möglich", e.message || "Die Kartenzahlung ist erst nach Veröffentlichung der App aktiv.");
       refresh();
     } finally {
       setPayingId(null);
@@ -103,15 +116,13 @@ export default function Maschinen() {
       const res = await apiPostIdempotent(`/machine-requests/${reqId}/checkout`, {});
       if (res?.url) {
         await WebBrowser.openBrowserAsync(res.url);
-        for (let i = 0; i < 8; i++) {
-          await new Promise((r) => setTimeout(r, 1500));
-          const st = await apiGet(`/machine-requests/${reqId}/payment-status`);
-          if (st.status === "Bezahlt") break;
+        if (!await waitForPaymentConfirmation(reqId)) {
+          localizedAlert("Zahlung wird bestätigt", "ORDO wartet noch auf die sichere Bestätigung des Zahlungsdienstes.");
         }
       }
       refresh();
     } catch (e: any) {
-      Alert.alert("Zahlung nicht möglich", e.message || "Die Kartenzahlung ist erst nach Veröffentlichung aktiv.");
+      localizedAlert("Zahlung nicht möglich", e.message || "Die Kartenzahlung ist erst nach Veröffentlichung aktiv.");
     } finally {
       setPayingId(null);
     }
@@ -302,7 +313,7 @@ export default function Maschinen() {
                       testID={`decline-${r.id}`}
                       title="Ablehnen"
                       kind="secondary"
-                      onPress={() => Alert.alert("Angebot ablehnen?", "Möchten Sie dieses Angebot wirklich ablehnen?", [
+                      onPress={() => localizedAlert("Angebot ablehnen?", "Möchten Sie dieses Angebot wirklich ablehnen?", [
                         { text: "Abbrechen" },
                         { text: "Ablehnen", style: "destructive", onPress: () => respond.mutate({ id: r.id, action: "decline" }) },
                       ])}
@@ -331,7 +342,7 @@ export default function Maschinen() {
                         title="Frage senden"
                         loading={respond.isPending}
                         onPress={() => {
-                          if (!q.text.trim()) { Alert.alert("Frage fehlt", "Bitte eine Frage eingeben."); return; }
+                          if (!q.text.trim()) { localizedAlert("Frage fehlt", "Bitte eine Frage eingeben."); return; }
                           respond.mutate({ id: r.id, action: "question", message: q.text.trim() });
                         }}
                         style={{ marginTop: 8 }}

@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { View, Text, ScrollView, Pressable, KeyboardAvoidingView, Platform, Alert } from "react-native";
+import {
+  View,
+  ScrollView,
+  Pressable,
+  KeyboardAvoidingView,
+  Platform,
+} from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -11,9 +17,17 @@ import { apiGet, apiPost, apiPostIdempotent } from "@/src/api/client";
 import { euro } from "@/src/lib/format";
 import { useCart } from "@/src/shop/cart";
 import { shopApi } from "@/src/shop/auth";
+import {
+  clearPendingShopPayment,
+  loadPendingShopPayment,
+  PendingShopPayment,
+  savePendingShopPayment,
+} from "@/src/shop/pending-payment";
 import { Card, Input, Button, SectionTitle, Muted } from "@/src/components/ui";
+import { LocalizedText as Text, localizedAlert, useI18n } from "@/src/i18n";
 
 export default function Warenkorb() {
+  useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const router = useRouter();
@@ -26,6 +40,7 @@ export default function Warenkorb() {
   const set = (k: string) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<null | { id: string; total: number; paid: boolean }>(null);
+  const [pendingPayment, setPendingPayment] = useState<PendingShopPayment | null>(null);
   const [promoInput, setPromoInput] = useState("");
   const [promo, setPromo] = useState<null | { code: string; percent: number }>(null);
   const [promoMsg, setPromoMsg] = useState("");
@@ -54,6 +69,15 @@ export default function Warenkorb() {
         /* guest checkout – no prefill */
       }
     })();
+  }, []);
+
+  useEffect(() => {
+    loadPendingShopPayment().then((pending) => {
+      if (pending) {
+        setPendingPayment(pending);
+        setDone({ id: pending.orderId, total: pending.total, paid: false });
+      }
+    });
   }, []);
 
   const applyPromo = async () => {
@@ -104,13 +128,51 @@ export default function Warenkorb() {
   const quoteLines: Record<string, any> = {};
   (quote.data?.lines ?? []).forEach((line: any) => { quoteLines[line.productId] = line; });
 
+  const continuePayment = async (pending: PendingShopPayment) => {
+    const orderHeaders = { "X-Order-Token": pending.orderToken };
+    const res = await apiPostIdempotent(`/shop/orders/${pending.orderId}/checkout`, {}, orderHeaders);
+    let paid = false;
+    if (res?.url) {
+      await WebBrowser.openBrowserAsync(res.url);
+      for (let i = 0; i < 8; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        const status = await apiGet(`/shop/orders/${pending.orderId}/payment-status`, orderHeaders);
+        if (status.status === "Bezahlt") {
+          paid = true;
+          break;
+        }
+      }
+    }
+    if (paid) {
+      await clearPendingShopPayment();
+      setPendingPayment(null);
+    }
+    setDone({ id: pending.orderId, total: pending.total, paid });
+    return paid;
+  };
+
+  const retryPendingPayment = async () => {
+    if (!pendingPayment) return;
+    setBusy(true);
+    try {
+      const paid = await continuePayment(pendingPayment);
+      if (!paid) {
+        localizedAlert("Zahlung wird bestätigt", "ORDO wartet noch auf die sichere Bestätigung des Zahlungsdienstes.");
+      }
+    } catch (error) {
+      localizedAlert("Zahlung nicht möglich", error instanceof Error ? error.message : "Bitte versuche es erneut.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const checkout = async () => {
     if (!form.name.trim() || !form.email.includes("@")) {
-      Alert.alert("Angaben fehlen", "Bitte Name und gültige E-Mail angeben.");
+      localizedAlert("Angaben fehlen", "Bitte Name und gültige E-Mail angeben.");
       return;
     }
     if (!accepted) {
-      Alert.alert("Bestätigung nötig", "Bitte akzeptiere AGB und Widerrufsbelehrung.");
+      localizedAlert("Bestätigung nötig", "Bitte akzeptiere AGB und Widerrufsbelehrung.");
       return;
     }
     setBusy(true);
@@ -121,31 +183,37 @@ export default function Warenkorb() {
         promoCode: promo?.code,
         subscription,
       });
-      let paid = false;
-      try {
-        const orderHeaders = { "X-Order-Token": order.token };
-        const res = await apiPostIdempotent(`/shop/orders/${order.id}/checkout`, {}, orderHeaders);
-        if (res?.url) {
-          await WebBrowser.openBrowserAsync(res.url);
-          for (let i = 0; i < 8; i++) {
-            await new Promise((r) => setTimeout(r, 1500));
-            const st = await apiGet(`/shop/orders/${order.id}/payment-status`, orderHeaders);
-            if (st.status === "Bezahlt") {
-              paid = true;
-              break;
-            }
-          }
-        }
-      } catch {
-        Alert.alert(
-          "Bestellung erfasst",
-          "Deine Bestellung wurde angelegt. Die Kartenzahlung ist erst nach Veröffentlichung der App aktiv.",
+      const pending = {
+        orderId: order.id,
+        orderToken: order.token,
+        total: order.total,
+        createdAt: Date.now(),
+      } satisfies PendingShopPayment;
+      const recoverySaved = await savePendingShopPayment(pending);
+      setPendingPayment(pending);
+      cart.clear();
+      if (!recoverySaved) {
+        localizedAlert(
+          "Zahlung nur in dieser Sitzung fortsetzbar",
+          "Der lokale Speicher ist nicht verfügbar. Bitte diese Seite bis zum Abschluss der Zahlung geöffnet lassen.",
         );
       }
-      cart.clear();
-      setDone({ id: order.id, total: order.total, paid });
+      try {
+        const paid = await continuePayment(pending);
+        if (!paid) {
+          localizedAlert("Zahlung wird bestätigt", "ORDO wartet noch auf die sichere Bestätigung des Zahlungsdienstes.");
+        }
+      } catch (error) {
+        localizedAlert(
+          "Bestellung erfasst",
+          error instanceof Error
+            ? `Deine Bestellung wurde angelegt. Die Zahlung kann sicher fortgesetzt werden: ${error.message}`
+            : "Deine Bestellung wurde angelegt. Die Zahlung kann sicher fortgesetzt werden.",
+        );
+        setDone({ id: pending.orderId, total: pending.total, paid: false });
+      }
     } catch (e: any) {
-      Alert.alert("Fehler", e.message || "Bestellung fehlgeschlagen");
+      localizedAlert("Fehler", e.message || "Bestellung fehlgeschlagen");
     } finally {
       setBusy(false);
     }
@@ -168,8 +236,11 @@ export default function Warenkorb() {
               <Text style={styles.doneTitle}>Danke für deine Bestellung!</Text>
               <Muted>
                 Bestellnummer {done.id} · Summe {euro(done.total)} ·{" "}
-                {done.paid ? "bezahlt" : "Zahlung ausstehend"}
+                {done.paid ? "bezahlt" : "Zahlung wird sicher bestätigt"}
               </Muted>
+              {!done.paid && pendingPayment ? (
+                <Button title="Zahlung fortsetzen" loading={busy} onPress={retryPendingPayment} style={{ marginTop: 12 }} />
+              ) : null}
               <Button title="Zurück zum Shop" onPress={() => router.replace("/shop")} style={{ marginTop: 12 }} />
             </Card>
           ) : lines.length === 0 ? (

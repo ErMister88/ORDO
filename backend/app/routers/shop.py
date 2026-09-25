@@ -1,5 +1,4 @@
 """B2C shop: public catalog, settings, guest orders, Stripe checkout."""
-import os
 import secrets
 import hashlib
 import base64
@@ -9,7 +8,6 @@ from fastapi import Depends, Header, HTTPException, Request
 from pymongo.errors import DuplicateKeyError
 from typing import Annotated, Optional
 from datetime import datetime, timedelta, timezone
-from starlette.concurrency import run_in_threadpool
 
 from ..core import (api_router, db, strip_id, next_seq, logger, JWT_SECRET,
                     DUMMY_HASH, hash_pw, verify_pw)
@@ -38,6 +36,7 @@ from ..money import MoneyError, amount_minor, currency_code, from_minor, include
 from ..pricing_engine import BasketQuote, PricingEngine, PricingError
 from ..snapshots import redact_internal_snapshot_fields
 from ..idempotency import IdempotencyService
+from ..payment_integrity import checkout_return_urls, create_stripe_checkout, PaymentIntegrityError
 from html import escape
 
 
@@ -54,10 +53,6 @@ def _rate_limit_error(exc: AuthRateLimitExceeded) -> HTTPException:
         ),
         headers={"Retry-After": str(exc.retry_after_seconds)},
     )
-
-stripe.api_key = os.environ.get("STRIPE_API_KEY", "")
-APP_URL = os.environ.get("APP_URL", "https://ordo-connect.app")
-
 
 SHOP_SETTINGS_KEY = "shop"
 SHOP_REGISTER_WINDOW_SECONDS = 60 * 60
@@ -355,7 +350,7 @@ async def shop_checkout(
     token: Annotated[Optional[str], Header(alias="X-Order-Token")] = None,
     uid: Annotated[Optional[str], Depends(optional_shop_actor_id)] = None,
     *,
-    stripe_idempotency_key: str | None = None,
+    operation_id: str | None = None,
 ):
     o = await access.shop_orders.find_one({"id": order_id})
     if not o:
@@ -363,42 +358,27 @@ async def shop_checkout(
     _authorize_shop_order(o, token, uid)
     if o["paymentStatus"] == "Bezahlt":
         raise HTTPException(status_code=409, detail="Bereits bezahlt")
-    if o.get("stripeSessionId") and o.get("stripeCheckoutUrl"):
-        return {"url": o["stripeCheckoutUrl"], "sessionId": o["stripeSessionId"]}
     try:
         currency = currency_code(o.get("currency", "EUR"))
         checkout_total_minor = amount_minor(o, "total", expected_currency=currency)
     except MoneyError as exc:
         raise HTTPException(status_code=409, detail="Bestellung besitzt keinen gültigen Zahlungsbetrag") from exc
     try:
-        session = await run_in_threadpool(
-            lambda: stripe.checkout.Session.create(
-                mode="payment",
-                currency=currency.lower(),
-                locale="de",
-                customer_email=(o.get("customer") or {}).get("email") or None,
-                line_items=[{
-                    "price_data": {
-                        "currency": currency.lower(),
-                        "unit_amount": checkout_total_minor,
-                        "product_data": {"name": f"Bestellung {order_id}"},
-                    },
-                    "quantity": 1,
-                }],
-                success_url=f"{APP_URL}/?shop_paid={order_id}",
-                cancel_url=f"{APP_URL}/?shop_cancel={order_id}",
-                metadata={"shopOrderId": order_id},
-                idempotency_key=stripe_idempotency_key,
-            )
-        )
-        await access.shop_orders.update_one(
-            {"id": order_id},
-            {"$set": {"stripeSessionId": session.id, "stripeCheckoutUrl": session.url}},
-        )
-        return {"url": session.url, "sessionId": session.id}
-    except Exception as e:
-        logger.warning(f"Shop-Checkout fehlgeschlagen: {e}")
-        raise HTTPException(status_code=502, detail="Zahlung konnte nicht gestartet werden (Stripe-Testschlüssel erst nach Deploy aktiv).")
+        success_url, cancel_url = checkout_return_urls("shop_order", order_id)
+    except PaymentIntegrityError as exc:
+        raise HTTPException(status_code=503, detail="Zahlungsdienst ist nicht vollständig konfiguriert") from exc
+    return await create_stripe_checkout(
+        access,
+        resource_type="shop_order",
+        resource_id=order_id,
+        operation_id=operation_id or f"direct-shop-checkout:{order_id}",
+        expected_amount_minor=checkout_total_minor,
+        currency=currency,
+        product_name=f"Bestellung {order_id}",
+        success_url=success_url,
+        cancel_url=cancel_url,
+        customer_email=(o.get("customer") or {}).get("email") or None,
+    )
 
 
 @api_router.post("/shop/orders/{order_id}/checkout")
@@ -424,7 +404,7 @@ async def shop_checkout_endpoint(
     try:
         response = await shop_checkout(
             order_id, access, token, uid,
-            stripe_idempotency_key=f"{access.context.tenant_id}:{claim.record_id}",
+            operation_id=claim.record_id,
         )
         await service.complete(
             claim, response,
@@ -449,28 +429,12 @@ async def shop_payment_status(
     _authorize_shop_order(o, token, uid)
     if o["paymentStatus"] == "Bezahlt":
         return {"status": "Bezahlt"}
-    sid = o.get("stripeSessionId")
-    if sid:
-        try:
-            sess = await run_in_threadpool(lambda: stripe.checkout.Session.retrieve(sid))
-            if sess.get("payment_status") == "paid":
-                await access.shop_orders.update_one({"id": order_id}, {"$set": {"paymentStatus": "Bezahlt", "status": "Bezahlt"}})
-                try:
-                    email = (o.get("customer") or {}).get("email")
-                    if email:
-                        inner = (
-                            f"<p style='margin:0 0 12px;color:#3A4256;font-size:15px'>Vielen Dank! Wir haben Ihre Zahlung "
-                            f"f&uuml;r die Bestellung <strong>{order_id}</strong> &uuml;ber {o['total']:.2f} &euro; erhalten. "
-                            "Ihre Bestellung wird jetzt bearbeitet.</p>"
-                        )
-                        await send_email(to=email, subject=f"Zahlung erhalten – {order_id}",
-                                         html=email_shell("Zahlung erhalten", "Ihre Zahlung war erfolgreich.", inner))
-                except Exception as e:
-                    logger.warning(f"E-Mail (Zahlung erhalten) fehlgeschlagen: {e}")
-                return {"status": "Bezahlt"}
-        except Exception as e:
-            logger.warning(f"Shop payment-status: {e}")
-    return {"status": o.get("paymentStatus", "Offen")}
+    response = {"status": o.get("paymentStatus", "Offen")}
+    if o.get("stripeCheckoutState") is not None:
+        response["checkoutState"] = o["stripeCheckoutState"]
+    if o.get("stripePaymentStatus") is not None:
+        response["providerStatus"] = o["stripePaymentStatus"]
+    return response
 
 
 @api_router.get("/shop/orders")

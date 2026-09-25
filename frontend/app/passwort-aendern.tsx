@@ -1,5 +1,11 @@
 import { useState } from "react";
-import { View, Text, ScrollView, Pressable, KeyboardAvoidingView, Platform } from "react-native";
+import {
+  View,
+  ScrollView,
+  Pressable,
+  KeyboardAvoidingView,
+  Platform,
+} from "react-native";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArrowLeft } from "phosphor-react-native";
@@ -8,6 +14,7 @@ import { makeStyles, useTheme } from "@/src/theme";
 import { apiPost } from "@/src/api/client";
 import { useAuth } from "@/src/auth/auth";
 import { Card, Input, Button, SectionTitle } from "@/src/components/ui";
+import { LocalizedText as Text } from "@/src/i18n";
 
 export default function PasswortAendern() {
   const styles = useStyles();

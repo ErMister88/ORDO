@@ -1,5 +1,9 @@
 import { useState } from "react";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import {
+  Pressable,
+  ScrollView,
+  View,
+} from "react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { ArrowLeft, PencilSimple } from "phosphor-react-native";
@@ -7,6 +11,7 @@ import { ArrowLeft, PencilSimple } from "phosphor-react-native";
 import { apiDelete, apiGet, apiPost, apiPut } from "@/src/api/client";
 import { makeStyles, tokens, useTheme } from "@/src/theme";
 import { Button, Card, Input, Muted, SectionTitle } from "@/src/components/ui";
+import { LocalizedText as Text, localizedAlert } from "@/src/i18n";
 
 type Entry = { id: string; name: string; description?: string; imageUrl?: string; sortOrder?: number; active?: boolean };
 type SectionSpec = { title: string; help: string; path: string; queryKey: string };
@@ -72,6 +77,17 @@ export default function Einstellungen() {
   const { colors } = useTheme();
   const router = useRouter();
   const operations = useQuery<any[]>({ queryKey: ["commercial-operations"], queryFn: () => apiGet("/operations") });
+  const paymentEvents = useQuery<any[]>({ queryKey: ["payment-events"], queryFn: () => apiGet("/payment-events") });
+  const qc = useQueryClient();
+  const retryPayment = useMutation({
+    mutationFn: (id: string) => apiPost(`/payment-events/${id}/retry`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["payment-events"] });
+      qc.invalidateQueries({ queryKey: ["commercial-operations"] });
+      localizedAlert("Erneut verarbeitet", "Der Zahlungsstatus wurde sicher erneut geprüft.");
+    },
+    onError: (error: Error) => localizedAlert("Wiederholung nicht möglich", error.message),
+  });
   const operationLabel = (value: string) => ({
     "order.create": "Bestellung und Rechnung", "offer.create": "Angebot erstellen",
     "offer.accept": "Angebot annehmen", "invoice.create_for_order": "Rechnung erstellen",
@@ -91,6 +107,17 @@ export default function Einstellungen() {
         <SectionTitle>Offene Verarbeitungsvorgänge</SectionTitle>
         <Muted>Fehlgeschlagene oder noch laufende Bestell-, Rechnungs- und Zahlungsvorgänge.</Muted>
         {(operations.data ?? []).length === 0 ? <Muted>Keine offenen Vorgänge.</Muted> : (operations.data ?? []).map((entry) => <View key={entry.id} style={styles.operationRow}><View style={{ flex: 1 }}><Text style={styles.entryName}>{operationLabel(entry.operation)}</Text><Muted>{stateLabel(entry.status)} · Versuch {entry.attempts}</Muted></View><Text style={styles.operationCode}>{entry.status === "processing" ? "läuft" : "prüfen"}</Text></View>)}
+      </Card>
+      <Card testID="payment-events">
+        <SectionTitle>Zahlungsverarbeitung</SectionTitle>
+        <Muted>Fehlgeschlagene oder laufende Bestätigungen des Zahlungsdienstes.</Muted>
+        {(paymentEvents.data ?? []).length === 0 ? <Muted>Keine offenen Zahlungsereignisse.</Muted> : (paymentEvents.data ?? []).map((entry) => <View key={entry.id} style={styles.operationRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.entryName}>{entry.resourceType === "invoice" ? "Rechnungszahlung" : entry.resourceType === "shop_order" ? "Shop-Zahlung" : entry.resourceType === "machine_request" ? "Maschinenzahlung" : "Zahlungsereignis"}</Text>
+            <Muted>{stateLabel(entry.status)}{entry.resourceId ? ` · ${entry.resourceId}` : ""}{entry.lastErrorCode ? ` · ${entry.lastErrorCode}` : ""}</Muted>
+          </View>
+          {entry.status === "failed_retryable" ? <Button title="Erneut prüfen" kind="secondary" loading={retryPayment.isPending} onPress={() => localizedAlert("Zahlung erneut prüfen?", "ORDO verarbeitet ausschließlich das bereits verifizierte Ereignis erneut.", [{ text: "Abbrechen", style: "cancel" }, { text: "Erneut prüfen", onPress: () => retryPayment.mutate(entry.id) }])} /> : <Text style={styles.operationCode}>{entry.status === "processing" ? "läuft" : "prüfen"}</Text>}
+        </View>)}
       </Card>
     </ScrollView>
   </View>;

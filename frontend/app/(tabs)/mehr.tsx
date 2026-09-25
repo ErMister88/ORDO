@@ -1,4 +1,8 @@
-import { View, Text, ScrollView, Pressable } from "react-native";
+import {
+  View,
+  ScrollView,
+  Pressable,
+} from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { SignOut, FileText, Receipt, Export, Package, UsersThree, Lock, CaretRight, ArrowsClockwise, ClockCounterClockwise, Storefront, Scales, ShieldCheck, Coffee } from "phosphor-react-native";
@@ -10,8 +14,10 @@ import { euro, num, dateDE } from "@/src/lib/format";
 import { shareInvoicePdf } from "@/src/lib/pdf";
 import { ScreenHeader } from "@/src/components/screen-header";
 import { Card, InfoRow, StatusBadge, SectionTitle, EmptyState, Muted } from "@/src/components/ui";
+import { LocalizedText as Text, useI18n } from "@/src/i18n";
 
 export default function Mehr() {
+  useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const { user, signOut } = useAuth();
