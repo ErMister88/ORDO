@@ -24,6 +24,19 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 
+EXPECTED_MIGRATION_SETTINGS = {
+    "tenantId": "tnt_ss_0001",
+    "key": "shop",
+    "currency": "EUR",
+    "freeShippingThreshold": 59.0,
+    "freeShippingThresholdMinor": 5900,
+    "shippingFee": 0.0,
+    "shippingFeeMinor": 0,
+    "newsletterDiscountPercent": 10,
+    "newsletterDiscountEnabled": True,
+}
+
+
 @dataclass(frozen=True)
 class ValidationTarget:
     database_name: str
@@ -83,13 +96,20 @@ async def ensure_no_business_documents(database) -> None:
     from app.tenant_access import TENANT_SCOPED_BUSINESS_COLLECTIONS
 
     collection_names = set(await database.list_collection_names())
+    business_collections = TENANT_SCOPED_BUSINESS_COLLECTIONS - {"settings"}
     populated = {
         name: await database[name].count_documents({})
-        for name in TENANT_SCOPED_BUSINESS_COLLECTIONS
+        for name in business_collections
         if name in collection_names
     }
     if any(populated.values()):
         raise RuntimeError("Disposable validation database already contains business documents")
+
+    if "settings" not in collection_names:
+        return
+    settings = await database["settings"].find({}, {"_id": 0}).to_list(length=2)
+    if settings and settings != [EXPECTED_MIGRATION_SETTINGS]:
+        raise RuntimeError("Disposable validation database contains unexpected settings")
 
 
 async def validate(database) -> dict[str, Any]:
