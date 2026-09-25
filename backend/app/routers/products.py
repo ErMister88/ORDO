@@ -57,6 +57,12 @@ def _product_response(product: dict, role: str) -> dict:
     if role != "admin":
         for field in INTERNAL_PRODUCT_FIELDS:
             payload.pop(field, None)
+    if role == "customer":
+        # B2B customers receive the wholesale catalog only. Their payable
+        # price comes from the authoritative B2B quote endpoint, so exposing
+        # shop prices here would create a second, misleading price context.
+        for field in ("b2cPrice", "b2cPriceMinor", "b2cTiers"):
+            payload.pop(field, None)
     return payload
 
 

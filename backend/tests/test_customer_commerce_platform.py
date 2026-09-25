@@ -173,6 +173,23 @@ def test_product_payload_hides_all_internal_commercial_fields_from_sales():
     assert rows[0]["standardPriceMinor"] == 1000
 
 
+def test_b2b_customer_catalog_does_not_expose_shop_prices():
+    database = AsyncDatabase("product_b2b_price_context")
+    admin = scoped(database)
+    seed_product(admin)
+    customer = TenantBusinessAccess(database, TenantContext(
+        tenant_id="tenant-a", actor_user_id="customer", membership_id="mbr-customer",
+        role="customer", company_id="c1", resolution_source=TenantResolutionSource.MEMBERSHIP,
+        default_currency="EUR",
+    ))
+
+    rows = run(products.get_products(principal(customer, company_id="c1"), customer))
+
+    assert rows[0]["standardPriceMinor"] == 1000
+    for field in ("b2cPrice", "b2cPriceMinor", "b2cTiers"):
+        assert field not in rows[0]
+
+
 def test_b2b_catalog_hides_inactive_and_b2c_only_products():
     database = AsyncDatabase("product_b2b_visibility")
     admin = scoped(database)
