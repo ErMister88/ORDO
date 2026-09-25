@@ -253,6 +253,13 @@ def _margin(order: dict) -> tuple[float | None, bool]:
     return value, True
 
 
+def _attributed_sales_rep_id(order: dict) -> str | None:
+    attribution = order.get("salesAttribution") or {}
+    return attribution.get("salesRepId") or (
+        attribution.get("actorUserId") if attribution.get("actorRole") == "sales" else None
+    )
+
+
 @api_router.get("/dashboard/sales/{sales_rep_id}")
 async def sales_rep_detail(
     sales_rep_id: str,
@@ -269,7 +276,11 @@ async def sales_rep_detail(
     end_at = datetime.fromisoformat(summary["period"]["end"])
     company_ids = [company["id"] for company in assigned]
     orders = await access.orders.find({"companyId": {"$in": company_ids}}).to_list(5000)
-    period_orders = [order for order in orders if _within_period(order, start_at, end_at)]
+    period_orders = [
+        order for order in orders
+        if _within_period(order, start_at, end_at)
+        and _attributed_sales_rep_id(order) == sales_rep_id
+    ]
     customers = []
     for company in assigned:
         rows = [order for order in period_orders if order.get("companyId") == company["id"]]

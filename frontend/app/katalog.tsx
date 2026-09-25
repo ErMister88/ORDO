@@ -67,7 +67,7 @@ export default function SalesCatalog() {
             <Text style={styles.pickerText}>{selectedCompany?.name ?? "Kunde für individuelle Preise wählen"}</Text><CaretDown size={18} color={colors.muted} />
           </Pressable>
           {companyOpen ? (companies.data ?? []).map((company: any) => <Pressable key={company.id} style={styles.option} onPress={() => { setCompanyId(company.id); setCompanyOpen(false); }}><Text style={styles.optionText}>{company.name}</Text></Pressable>) : null}
-          <Muted>Ohne Kundenauswahl werden keine Preise angezeigt. Interne Kosten und Freigabegrenzen werden nicht geladen.</Muted>
+          <Muted>Ohne Kundenauswahl werden keine Preise angezeigt. Interne Kalkulationsdaten werden nicht geladen.</Muted>
         </Card>
         <View style={styles.search}><MagnifyingGlass size={18} color={colors.muted} /><Input value={search} onChangeText={setSearch} placeholder="Produkt, Marke oder Beschreibung suchen" style={{ flex: 1, borderWidth: 0, backgroundColor: "transparent" }} /></View>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>

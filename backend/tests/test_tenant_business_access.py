@@ -1952,12 +1952,18 @@ def test_admin_dashboard_drilldowns_use_same_period_and_never_invent_margin():
         "items": [{"productId": "p2", "productName": "Ohne historische Kosten", "qty": 1, "lineTotalMinor": 1000}],
         "salesAttribution": {"salesRepId": "sales-1", "salesRepName": "Sally Sales", "actorUserId": "admin-1", "actorName": "Admin", "actorRole": "admin"},
     }))
+    run(scoped.orders.insert_one({
+        "id": "o-other", "companyId": "c2", "createdAt": now, "netTotalMinor": 500,
+        "items": [{"productId": "p1", "productName": "Fremdverkauf", "qty": 5, "lineTotalMinor": 500, "costMinor": 50}],
+        "salesAttribution": {"salesRepId": "sales-2", "salesRepName": "Other Sales", "actorUserId": "sales-2", "actorName": "Other Sales", "actorRole": "sales"},
+    }))
     summary = run(dashboard_router.dashboard(admin, scoped, period="month"))
     assert summary["topSalesReps"][0]["name"] == "Sally Sales"
     assert summary["topSalesReps"][0]["revenue"] == 30
     assert summary["topSalesReps"][0]["margin"] is None
     detail = run(dashboard_router.sales_rep_detail("sales-1", admin, scoped, period="month"))
     assert [row["companyId"] for row in detail["customers"]] == ["c1", "c2"]
+    assert sum(row["revenue"] for row in detail["customers"]) == detail["salesRep"]["revenue"] == 30
     customer = run(dashboard_router.customer_dashboard_detail("c1", admin, scoped, period="month"))
     assert (customer["revenue"], customer["orders"], customer["quantity"], customer["margin"]) == (20, 1, 2, 10)
 
