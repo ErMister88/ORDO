@@ -587,6 +587,7 @@ const useStyles = makeStyles((c) => ({
   divider: { height: 1, backgroundColor: c.divider, marginVertical: 6 },
   segment: {
     flexDirection: "row",
+    flexWrap: "wrap",
     backgroundColor: c.surfaceTertiary,
     borderRadius: 12,
     padding: 4,
@@ -595,7 +596,7 @@ const useStyles = makeStyles((c) => ({
   kpiGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   activityCard: { flexDirection: "row", alignItems: "center" },
   activityKind: { width: 34, height: 34, borderRadius: 9, alignItems: "center", justifyContent: "center", backgroundColor: c.brandTertiary },
-  segItem: { flex: 1, paddingVertical: 10, borderRadius: 9, alignItems: "center" },
+  segItem: { flexGrow: 1, flexBasis: 96, paddingVertical: 10, paddingHorizontal: 8, borderRadius: 9, alignItems: "center" },
   segItemActive: { backgroundColor: c.surface, shadowColor: c.onSurface, shadowOpacity: 0.06, shadowRadius: 4, elevation: 1 },
   segText: { fontSize: 14, fontWeight: "700", color: c.muted },
   segTextActive: { color: c.onSurface },
