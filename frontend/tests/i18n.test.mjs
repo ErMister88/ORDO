@@ -51,6 +51,7 @@ test("language switching is persistent and outside session/cart providers", asyn
   assert.match(i18n, /ordo_ui_language/);
   assert.match(i18n, /storage\.getItem/);
   assert.match(i18n, /storage\.setItem/);
+  assert.match(i18n, /languageSelected\.current/);
   assert.ok(layout.indexOf("<I18nProvider>") < layout.indexOf("<AuthProvider>"));
   assert.ok(layout.indexOf("<I18nProvider>") < layout.indexOf("<CartProvider>"));
 });

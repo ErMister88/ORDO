@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Text as NativeText,
@@ -79,11 +79,12 @@ const I18nContext = createContext<I18nContextValue>({
 
 export function I18nProvider({ children }: { children: React.ReactNode }) {
   const [language, setLanguageState] = useState<SupportedLanguage>("de");
+  const languageSelected = useRef(false);
 
   useEffect(() => {
     let active = true;
     storage.getItem<string>(LANGUAGE_STORAGE_KEY, "de").then((stored) => {
-      if (!active || !isLanguage(stored)) return;
+      if (!active || languageSelected.current || !isLanguage(stored)) return;
       currentLanguage = stored;
       setLanguageState(stored);
     });
@@ -92,6 +93,7 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
 
   const setLanguage = useCallback(async (next: SupportedLanguage) => {
     if (!isLanguage(next)) return;
+    languageSelected.current = true;
     currentLanguage = next;
     setLanguageState(next);
     await storage.setItem(LANGUAGE_STORAGE_KEY, next);
