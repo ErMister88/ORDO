@@ -364,8 +364,8 @@ export default function Warenkorb() {
                   Ich akzeptiere die{" "}
                   <Text style={styles.termsLink} onPress={() => router.push("/legal/agb")}>AGB</Text>
                   {" "}und habe die{" "}
-                  <Text style={styles.termsLink} onPress={() => router.push("/legal/widerruf")}>Widerrufsbelehrung</Text>
-                  {language === "de" ? " zur Kenntnis genommen." : "."}
+                  <Text style={styles.termsLink} onPress={() => router.push("/legal/widerruf")}>Widerrufsbelehrung{language === "de" ? "" : "."}</Text>
+                  {language === "de" ? " zur Kenntnis genommen." : null}
                 </Text>
               </Pressable>
 
