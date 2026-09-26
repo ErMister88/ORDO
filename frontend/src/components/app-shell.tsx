@@ -1,11 +1,13 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { ActivityIndicator, Pressable, ScrollView, View, useWindowDimensions } from "react-native";
 import { usePathname, useRouter } from "expo-router";
+import { useQuery } from "@tanstack/react-query";
 import {
   ChartBar, Coffee, FileText, Gauge, Package, Receipt, ShoppingBag,
-  Storefront, Tag, Users, UsersThree, ClockCounterClockwise, SignOut, Plus, Calculator, CheckSquare,
+  Storefront, Tag, Users, UsersThree, ClockCounterClockwise, SignOut, Plus, Calculator, CheckSquare, Bell,
 } from "phosphor-react-native";
 
+import { apiGet } from "@/src/api/client";
 import { useAuth } from "@/src/auth/auth";
 import { canAccessRoute, deniedRouteTarget, isPublicRoute } from "@/src/auth/route-access";
 import { makeStyles, tokens, useTheme } from "@/src/theme";
@@ -83,9 +85,23 @@ export function AppShell({ children }: { children: ReactNode }) {
     );
   }
   if (!desktop || !user || publicRoute) {
-    return <View style={{ flex: 1 }}><View style={{ flex: 1 }}>{children}</View><LanguageSwitcher /></View>;
+    return <View style={{ flex: 1 }}><View style={{ flex: 1 }}>{children}</View>{user && !publicRoute ? <NotificationBell /> : null}<LanguageSwitcher /></View>;
   }
-  return <View style={{ flex: 1, flexDirection: "row" }}><DesktopSidebar /><View style={{ flex: 1 }}>{children}</View><LanguageSwitcher /></View>;
+  return <View style={{ flex: 1, flexDirection: "row" }}><DesktopSidebar /><View style={{ flex: 1 }}>{children}</View><NotificationBell /><LanguageSwitcher /></View>;
+}
+
+function NotificationBell() {
+  const styles = useStyles();
+  const { colors } = useTheme();
+  const router = useRouter();
+  const notifications = useQuery<Array<{ id: string; readAt?: string | null }>>({
+    queryKey: ["notifications"], queryFn: () => apiGet("/notifications"), refetchInterval: 60000,
+  });
+  const unread = (notifications.data ?? []).filter((row) => !row.readAt).length;
+  return <Pressable accessibilityLabel="Benachrichtigungen" testID="notification-bell" onPress={() => router.push("/benachrichtigungen")} style={styles.notificationBell}>
+    <Bell size={19} color={colors.onSurface} weight={unread ? "fill" : "regular"} />
+    {unread ? <View style={styles.notificationBadge}><Text style={styles.notificationBadgeText}>{Math.min(unread, 99)}</Text></View> : null}
+  </Pressable>;
 }
 
 function LanguageSwitcher() {
@@ -192,6 +208,14 @@ const useStyles = makeStyles((c) => ({
     backgroundColor: c.surface, borderWidth: 1, borderColor: c.border,
     ...tokens.shadow,
   },
+  notificationBell: {
+    position: "absolute", top: 10, right: 126, zIndex: 100,
+    width: 36, height: 36, borderRadius: 10, backgroundColor: c.surface,
+    borderWidth: 1, borderColor: c.border, alignItems: "center", justifyContent: "center",
+    ...tokens.shadow,
+  },
+  notificationBadge: { position: "absolute", top: -5, right: -5, minWidth: 18, height: 18, borderRadius: 9, paddingHorizontal: 4, backgroundColor: c.error, alignItems: "center", justifyContent: "center" },
+  notificationBadgeText: { color: c.onError, fontSize: 10, fontWeight: "900" },
   languageButton: { minWidth: 30, height: 28, borderRadius: 7, alignItems: "center", justifyContent: "center" },
   languageButtonActive: { backgroundColor: c.brandPrimary },
   languageText: { fontSize: 11, fontWeight: "800", color: c.muted },

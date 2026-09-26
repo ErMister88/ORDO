@@ -1,11 +1,9 @@
 """App assembly: mount routers, CORS, startup/shutdown."""
 from starlette.middleware.cors import CORSMiddleware
-from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
 
 from .core import app, api_router, db, client, logger
 from .database_setup import ensure_required_indexes
-from .storage import init_storage
 from .capabilities import capability_snapshot
 from .observability import OperationalContextMiddleware, configure_structured_logging
 
@@ -13,7 +11,7 @@ from .observability import OperationalContextMiddleware, configure_structured_lo
 from .routers import (  # noqa: F401,E402
     auth, users, products, pricing, companies, offers, orders, invoices, dashboard, analytics,
     subscriptions, billing, payments, audit, shop, newsletter, push, machines, crm,
-    business_config, operations, stripe_webhooks,
+    business_config, operations, stripe_webhooks, files, notifications,
 )
 
 import os
@@ -73,11 +71,6 @@ async def health():
 async def on_startup():
     await db.command("ping")
     await ensure_required_indexes(db)
-    try:
-        await run_in_threadpool(init_storage)
-        logger.info("Object storage initialised")
-    except Exception:
-        logger.warning("Object storage init failed; uploads may be unavailable")
 
 
 @app.on_event("shutdown")

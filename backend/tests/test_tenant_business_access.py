@@ -1542,20 +1542,23 @@ def test_push_registration_and_broadcast_use_tenant_namespaced_targets(monkeypat
     database = AsyncDatabase("tenant_edge_push")
     tenant_a = access(database, TENANT_A)
     tenant_b = access(database, TENANT_B)
-    client = _PushClient()
-    monkeypatch.setattr(push, "_client", client)
-    body = push.RegisterPushBody(user_id="device", platform="ios", device_token="token")
+    messages = []
+    class Provider:
+        async def send(self, message):
+            messages.append(message)
+            return len(message.device_tokens)
+    monkeypatch.setattr(push, "get_push_provider", lambda: Provider())
+    body = push.RegisterPushBody(user_id="device", platform="ios", device_token="ExponentPushToken[token]")
 
     run(push.register_push(body, tenant_a))
     run(push.register_push(body, tenant_b))
     a_doc = database.raw.push_registrations.find_one({"tenantId": TENANT_A})
     b_doc = database.raw.push_registrations.find_one({"tenantId": TENANT_B})
-    assert a_doc["providerUserId"] == f"{TENANT_A}:anon:device"
-    assert b_doc["providerUserId"] == f"{TENANT_B}:anon:device"
+    assert a_doc["deviceToken"] == "ExponentPushToken[token]"
+    assert b_doc["deviceToken"] == "ExponentPushToken[token]"
 
     run(push.push_broadcast(PushBroadcastIn(title="A", message="Only A"), {"role": "admin"}, tenant_a))
-    broadcast = client.payloads[-1][1]
-    assert broadcast["recipients"] == [f"{TENANT_A}:anon:device"]
+    assert messages[-1].device_tokens == ("ExponentPushToken[token]",)
     assert run(push.push_stats({"role": "admin"}, tenant_a)) == {"registered": 1}
 
 

@@ -19,13 +19,19 @@ Tenant-bound technical failures are stored as redacted `technical_errors` record
 
 The `background_jobs` collection implements tenant scope, intent idempotency, a lease token, bounded exponential backoff, crash recovery after lease expiry and a terminal `dead` state. Package 11 enables only `reconcile.tenant`, a read-only commercial consistency check. It cannot create or alter an economic record.
 
-Run one worker pass with:
+Run one diagnostic worker pass with:
 
 ```bash
 BACKGROUND_JOBS_ENABLED=1 python -m scripts.run_jobs
 ```
 
-The worker must run with the same validated application configuration as the API. Deploying a recurring worker is an environment operation and is not performed automatically by the application.
+For normal operation, deploy the persistent worker separately:
+
+```bash
+BACKGROUND_JOBS_ENABLED=1 python -m scripts.run_worker
+```
+
+The worker must run with the same validated application configuration as the API. Its heartbeat determines whether the Background-Jobs capability is actually available.
 
 ## Reconciliation
 

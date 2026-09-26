@@ -286,7 +286,11 @@ async def create_shop_order(
                 "Sobald sie best&auml;tigt ist, wird Ihre Bestellung bearbeitet.</p>"
             )
             html = email_shell("Bestellbest&auml;tigung", "Ihre Bestellung ist bei uns eingegangen.", inner)
-            await send_email(to=email, subject=f"Bestellbestätigung {oid}", html=html)
+            await send_email(
+                access=access, to=email, subject=f"Bestellbestätigung {oid}", html=html,
+                idempotency_key=f"shop-order:{oid}:created", template_key="shop.order.created",
+                resource_type="order", resource_id=oid,
+            )
     except Exception:
         await report_operational_failure(
             access, logger, operation="shop.order_confirmation_email", category="email_delivery",
@@ -529,8 +533,12 @@ async def update_shop_order_status(
             f"{track_html}"
         )
         try:
-            await send_email(to=email, subject=f"{subject} – {order_id}",
-                             html=email_shell(subject, "Statusaktualisierung Ihrer Bestellung", inner))
+            await send_email(
+                access=access, to=email, subject=f"{subject} – {order_id}",
+                html=email_shell(subject, "Statusaktualisierung Ihrer Bestellung", inner),
+                idempotency_key=f"shop-order:{order_id}:status:{body.status}",
+                template_key="shop.order.status", resource_type="order", resource_id=order_id,
+            )
         except Exception:
             await report_operational_failure(
                 access, logger, operation="shop.order_status_email", category="email_delivery",

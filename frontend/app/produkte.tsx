@@ -17,11 +17,11 @@ import * as ImagePicker from "expo-image-picker";
 import { ArrowLeft, Plus, Minus, PencilSimple, Camera, ImageSquare, X } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
-import { apiGet, apiPost, apiPut, apiUpload, fileUrl } from "@/src/api/client";
+import { apiDelete, apiGet, apiPost, apiPut, apiUpload, fileUrl } from "@/src/api/client";
 import { euro } from "@/src/lib/format";
 import { Card, Input, Button, SectionTitle, Muted } from "@/src/components/ui";
 import { uploadsEnabled } from "@/src/config/features";
-import { LocalizedText as Text, useI18n } from "@/src/i18n";
+import { LocalizedText as Text, localizedAlert, useI18n } from "@/src/i18n";
 
 type Tier = { minQty: string; price: string };
 
@@ -87,6 +87,11 @@ const EMPTY: Form = {
   b2cPrice: "",
 };
 
+function managedFileId(value: string): string | null {
+  const match = value.match(/(?:^|\/api\/files\/)(file_[0-9a-f]{24})(?:$|[?#])/);
+  return match?.[1] ?? null;
+}
+
 export default function Produkte() {
   useI18n();
   const styles = useStyles();
@@ -105,6 +110,8 @@ export default function Produkte() {
   const [msg, setMsg] = useState("");
   const [ok, setOk] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [originalImageUrl, setOriginalImageUrl] = useState("");
+  const [imagePreviewUrl, setImagePreviewUrl] = useState("");
   const [permBlocked, setPermBlocked] = useState(false);
   const [search, setSearch] = useState("");
   const [showCategories, setShowCategories] = useState(false);
@@ -126,6 +133,8 @@ export default function Produkte() {
   const openNew = () => {
     setEditingId(null);
     setForm(EMPTY);
+    setOriginalImageUrl("");
+    setImagePreviewUrl("");
     setMsg("");
     setOk("");
     setPermBlocked(false);
@@ -134,6 +143,8 @@ export default function Produkte() {
 
   const openEdit = (p: any) => {
     setEditingId(p.id);
+    setOriginalImageUrl(p.imageUrl ?? "");
+    setImagePreviewUrl("");
     setForm({
       sku: p.sku ?? "",
       ean: p.ean ?? "",
@@ -196,8 +207,11 @@ export default function Produkte() {
     try {
       const name = asset.fileName || `produkt.${(asset.uri.split(".").pop() || "jpg").split("?")[0]}`;
       const type = asset.mimeType || "image/jpeg";
-      const up = await apiUpload(asset.uri, name, type);
+      const up = await apiUpload(asset.uri, name, type, {
+        resourceType: "product", resourceId: editingId || "unassigned", visibility: "public",
+      });
       setForm((f) => ({ ...f, imageUrl: up.url }));
+      setImagePreviewUrl(asset.uri);
       if (ok) setOk("");
     } catch (e: any) {
       setMsg(e.message || "Upload fehlgeschlagen");
@@ -221,7 +235,7 @@ export default function Produkte() {
     setForm((f) => ({ ...f, b2cTiers: f.b2cTiers.filter((_, i) => i !== idx) }));
 
   const save = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       const body = {
         sku: form.sku,
         ean: form.ean,
@@ -259,10 +273,28 @@ export default function Produkte() {
         b2cPrice: form.b2cPrice.trim() === "" ? null : num(form.b2cPrice),
         active: true,
       };
-      return editingId ? apiPut(`/products/${editingId}`, body) : apiPost("/products", body);
+      const product: any = editingId
+        ? await apiPut(`/products/${editingId}`, body)
+        : await apiPost("/products", body);
+      const productId = product.id ?? editingId;
+      const nextFileId = managedFileId(form.imageUrl);
+      try {
+        if (productId && nextFileId) {
+          await apiPut(`/products/${productId}/images/${nextFileId}`, { sortOrder: 0, isPrimary: true });
+        }
+        const previousFileId = managedFileId(originalImageUrl);
+        if (previousFileId && previousFileId !== nextFileId) {
+          await apiDelete(`/files/${previousFileId}`);
+        }
+      } catch {
+        product._mediaWarning = "Das Produkt wurde gespeichert, aber die Bildzuordnung konnte nicht vollständig abgeschlossen werden.";
+      }
+      return product;
     },
-    onSuccess: () => {
+    onSuccess: (product: any) => {
       qc.invalidateQueries({ queryKey: ["products"] });
+      if (product?.id) qc.invalidateQueries({ queryKey: ["product-images", product.id] });
+      if (product?._mediaWarning) localizedAlert("Bildzuordnung prüfen", product._mediaWarning);
       setMsg("");
       if (editingId) {
         setShowForm(false);
@@ -301,12 +333,12 @@ export default function Produkte() {
               {uploadsEnabled || form.imageUrl ? <Text style={styles.label}>Produktbild</Text> : null}
               {form.imageUrl ? (
                 <View style={styles.imgWrap}>
-                  <Image source={{ uri: fileUrl(form.imageUrl) }} style={styles.img} contentFit="cover" transition={200} />
+                  <Image source={{ uri: imagePreviewUrl || fileUrl(form.imageUrl) }} style={styles.img} contentFit="cover" transition={200} />
                   {uploadsEnabled ? (
                     <Pressable
                       testID="remove-image"
                       style={styles.imgRemove}
-                      onPress={() => setForm((f) => ({ ...f, imageUrl: "" }))}
+                      onPress={() => { setForm((f) => ({ ...f, imageUrl: "" })); setImagePreviewUrl(""); }}
                       hitSlop={8}
                     >
                       <X size={16} color={colors.onError} weight="bold" />

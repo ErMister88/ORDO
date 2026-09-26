@@ -223,6 +223,7 @@ export async function apiUpload(
   uri: string,
   name: string,
   type: string,
+  options: { resourceType?: string; resourceId?: string; visibility?: "public" | "private" } = {},
 ): Promise<{ url: string; path: string }> {
   const { Platform } = require("react-native");
   const { headers, token } = await authContext();
@@ -233,6 +234,9 @@ export async function apiUpload(
   } else {
     form.append("file", { uri, name, type } as any);
   }
+  form.append("resource_type", options.resourceType ?? "product");
+  form.append("resource_id", options.resourceId ?? "unassigned");
+  form.append("visibility", options.visibility ?? "public");
   const res = await fetch(`${API}/api/upload`, { method: "POST", headers, body: form });
   await handleAuthFailure(res, token);
   if (!res.ok) throw await responseError(res, `Upload fehlgeschlagen (${res.status})`);

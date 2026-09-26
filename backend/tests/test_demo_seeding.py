@@ -209,12 +209,7 @@ def test_normal_application_startup_creates_no_demo_or_business_documents(
 ):
     database = AsyncDatabase("ordo_test_startup")
 
-    async def immediate(function, *args, **kwargs):
-        return function(*args, **kwargs)
-
     monkeypatch.setattr(app_main, "db", database)
-    monkeypatch.setattr(app_main, "init_storage", lambda: None)
-    monkeypatch.setattr(app_main, "run_in_threadpool", immediate)
     for variable in (
         "SEED_ADMIN_PASSWORD",
         "SEED_SALES_PASSWORD",

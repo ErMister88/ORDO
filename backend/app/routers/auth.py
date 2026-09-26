@@ -29,6 +29,7 @@ from ..models import Token, PublicUser, ForgotPwIn, ResetPwIn, ChangePwIn
 from ..observability import report_operational_failure
 from ..emailer import send_email, email_shell
 from ..tenancy import TenantResolutionError
+from ..tenant_access import TenantBusinessAccess
 
 
 RECOVERY_WINDOW_SECONDS = 60 * 60
@@ -135,7 +136,10 @@ async def forgot_password(body: ForgotPwIn, request: Request = None):
         expires = datetime.now(timezone.utc) + timedelta(minutes=30)
         await db.password_resets.delete_many({"userId": u["id"]})
         await db.password_resets.insert_one({"userId": u["id"], "codeHash": digest, "expiresAt": expires, "used": False})
+        email_access = None
         try:
+            context = await resolve_membership_context(u["id"])
+            email_access = TenantBusinessAccess(db, context)
             inner = (
                 f"<p style='margin:0 0 12px;color:#3A4256;font-size:15px'>Hallo {escape(u.get('name', ''))},<br>"
                 "Ihr Sicherheitscode zum Zur&uuml;cksetzen des Passworts lautet:</p>"
@@ -144,10 +148,14 @@ async def forgot_password(body: ForgotPwIn, request: Request = None):
                 "Falls Sie das nicht angefordert haben, ignorieren Sie diese E-Mail.</p>"
             )
             html = email_shell("Passwort zur&uuml;cksetzen", "Sie haben einen Sicherheitscode angefordert.", inner)
-            await send_email(to=email, subject="Ihr Code zum Zurücksetzen des Passworts", html=html)
+            await send_email(
+                access=email_access, to=email, subject="Ihr Code zum Zurücksetzen des Passworts", html=html,
+                idempotency_key=f"identity:{u['id']}:password-reset:{digest[:20]}",
+                template_key="auth.password_reset", resource_type="identity", resource_id=u["id"],
+            )
         except Exception:
             await report_operational_failure(
-                None, logger, operation="auth.password_reset_email", category="email_delivery",
+                email_access, logger, operation="auth.password_reset_email", category="email_delivery",
             )
     return {"ok": True, "message": "Falls die E-Mail existiert, wurde ein Code gesendet."}
 

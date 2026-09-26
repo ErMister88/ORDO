@@ -193,7 +193,7 @@ def test_duplicate_payment_event_sends_shop_confirmation_at_most_once(monkeypatc
 
     resource = run(collection.find_one({"id": "resource-1"}))
     assert len(messages) == 1
-    assert resource["paymentConfirmationEmailState"] == "sent"
+    assert resource["paymentConfirmationEmailState"] == "queued"
     assert len(resource["paymentRecords"]) == 1
 
 

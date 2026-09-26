@@ -714,9 +714,14 @@ async def _send_shop_payment_confirmation_once(
     )
     try:
         await send_email(
+            access=access,
             to=email.strip(),
             subject=f"Zahlung erhalten – {order_id}",
             html=email_shell("Zahlung erhalten", "Ihre Zahlung war erfolgreich.", inner),
+            idempotency_key=f"shop-order:{order_id}:payment-confirmed",
+            template_key="shop.order.payment_confirmed",
+            resource_type="order",
+            resource_id=order_id,
         )
         await access.shop_orders.update_one(
             {
@@ -725,8 +730,8 @@ async def _send_shop_payment_confirmation_once(
                 "paymentConfirmationEmailEventId": event_id,
             },
             {"$set": {
-                "paymentConfirmationEmailState": "sent",
-                "paymentConfirmationEmailSentAt": datetime.now(timezone.utc).isoformat(),
+                "paymentConfirmationEmailState": "queued",
+                "paymentConfirmationEmailQueuedAt": datetime.now(timezone.utc).isoformat(),
             }},
         )
     except Exception:

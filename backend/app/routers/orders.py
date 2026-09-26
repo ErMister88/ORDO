@@ -263,7 +263,11 @@ async def set_order_status(
                     "</table>"
                 )
                 html = email_shell("Bestellung versendet", "Ihre Lieferung ist auf dem Weg.", inner)
-                await send_email(to=email, subject=f"Bestellung {o['id']} ist unterwegs", html=html)
+                await send_email(
+                    access=access, to=email, subject=f"Bestellung {o['id']} ist unterwegs", html=html,
+                    idempotency_key=f"order:{o['id']}:shipped",
+                    template_key="order.shipped", resource_type="order", resource_id=o["id"],
+                )
         except Exception:
             await report_operational_failure(
                 access, logger, operation="order.shipment_email", category="email_delivery",

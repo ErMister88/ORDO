@@ -4,19 +4,19 @@ from __future__ import annotations
 
 import os
 import shutil
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .migrations.registry import get_migrations
-from .tenancy import TenancyConfigurationError, TenancySettings
+from .tenancy import MongoTenantDirectory, SingleTenantResolver, TenancyConfigurationError, TenancySettings
+from .tenant_access import TenantBusinessAccess
+from .email_provider import email_configuration_status
+from .storage import storage_configuration_status
 
 
 KNOWN_ENVIRONMENTS = {
     "dev", "development", "test", "testing", "stage", "staging", "prod", "production", "live",
 }
-
-
-def _configured(*names: str) -> bool:
-    return all(bool((os.getenv(name) or "").strip()) for name in names)
 
 
 def _status(status: str, message: str) -> dict[str, str]:
@@ -70,23 +70,31 @@ async def capability_snapshot(database) -> dict[str, Any]:
     else:
         capabilities["payments"] = _status("degraded", "Zahlungskonfiguration unvollständig")
 
-    if _configured("SMTP_HOST", "SMTP_FROM_EMAIL") or _configured("EMERGENT_EMAIL_KEY"):
-        capabilities["email"] = _status("available", "E-Mail-Versand konfiguriert")
-    else:
-        capabilities["email"] = _status("not_configured", "E-Mail-Versand nicht konfiguriert")
-
-    storage_backend = (os.getenv("STORAGE_BACKEND") or "").strip().lower()
-    if storage_backend in {"s3", "local"} or _configured("EMERGENT_LLM_KEY"):
-        capabilities["storage"] = _status("available", "Dateispeicher konfiguriert")
-    else:
-        capabilities["storage"] = _status("not_configured", "Dateispeicher nicht konfiguriert")
+    email_status, email_message = email_configuration_status()
+    capabilities["email"] = _status(email_status, email_message)
+    storage_status, storage_message = storage_configuration_status()
+    capabilities["storage"] = _status(storage_status, storage_message)
 
     jobs_enabled = (os.getenv("BACKGROUND_JOBS_ENABLED") or "").strip().lower() in {"1", "true", "yes"}
+    worker_active = False
+    if jobs_enabled and database_available:
+        threshold = datetime.now(timezone.utc) - timedelta(seconds=90)
+        try:
+            context = await SingleTenantResolver(
+                TenancySettings.from_environment(), MongoTenantDirectory(database),
+            ).resolve()
+            access = TenantBusinessAccess(database, context)
+            worker_active = bool(await access.worker_heartbeats.find_one({
+                "status": "active", "lastSeenAt": {"$gte": threshold},
+            }))
+        except Exception:
+            worker_active = False
     capabilities["background_jobs"] = _status(
-        "available" if jobs_enabled and database_available and schema_ready else
+        "available" if jobs_enabled and database_available and schema_ready and worker_active else
         "not_configured" if not jobs_enabled else "degraded",
-        "Background-Jobs aktiv" if jobs_enabled and database_available and schema_ready else
-        "Background-Worker nicht aktiviert" if not jobs_enabled else "Background-Jobs nicht einsatzbereit",
+        "Background-Worker aktiv" if worker_active and schema_ready else
+        "Background-Worker nicht aktiviert" if not jobs_enabled else
+        "Kein aktueller Worker-Heartbeat",
     )
     backup_tools = bool(shutil.which("mongodump") and shutil.which("mongorestore"))
     backup_destination = bool((os.getenv("BACKUP_DIRECTORY") or "").strip())

@@ -1,37 +1,27 @@
-"""Emergent managed push notifications (SuprSend relay)."""
-import os
+"""Tenant-scoped device registration and provider-neutral push delivery."""
+
 from datetime import datetime, timezone
 from typing import Annotated, Optional
 
-import httpx
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel
 
 from ..core import api_router, logger
-from ..deps import (
-    optional_shop_actor_id,
-    public_tenant_business_access,
-    require_roles,
-    tenant_business_access,
-)
+from ..deps import optional_shop_actor_id, public_tenant_business_access, require_roles, tenant_business_access
 from ..models import PushBroadcastIn
 from ..observability import report_operational_failure
+from ..push_provider import PushMessage, PushProviderError, get_push_provider
 from ..tenant_access import TenantBusinessAccess
-
-PUSH_BASE_URL = "https://integrations.emergentagent.com"
-PUSH_KEY = os.environ.get("EMERGENT_PUSH_KEY", "placeholder")
-
-_client = httpx.AsyncClient(
-    base_url=PUSH_BASE_URL,
-    headers={"X-Push-Key": PUSH_KEY},
-    timeout=10.0,
-)
 
 
 class RegisterPushBody(BaseModel):
     user_id: str
-    platform: str  # "android" | "ios"
+    platform: str
     device_token: str
+
+
+def _valid_device_token(value: str) -> bool:
+    return value.startswith("ExponentPushToken[") or value.startswith("ExpoPushToken[")
 
 
 @api_router.post("/register-push", status_code=201)
@@ -40,44 +30,35 @@ async def register_push(
     access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
     caller_id: Annotated[Optional[str], Depends(optional_shop_actor_id)] = None,
 ):
-    # Authenticated callers are bound to their own account id (cannot spoof
-    # another user's id); anonymous device ids are namespaced so they can never
-    # collide with or impersonate a real user account.
+    if body.platform not in {"android", "ios"} or not _valid_device_token(body.device_token.strip()):
+        raise HTTPException(status_code=400, detail="Ungültige Push-Registrierung")
     reg_id = caller_id if caller_id else f"anon:{body.user_id}"
-    provider_user_id = f"{access.context.tenant_id}:{reg_id}"
     await access.push_registrations.update_one(
         {"userId": reg_id},
-        {"$set": {"userId": reg_id, "platform": body.platform,
-                  "providerUserId": provider_user_id,
-                  "updatedAt": datetime.now(timezone.utc).isoformat()}},
+        {"$set": {
+            "userId": reg_id, "platform": body.platform,
+            "deviceToken": body.device_token.strip(),
+            "updatedAt": datetime.now(timezone.utc),
+        }},
         upsert=True,
     )
-    resp = await _client.post("/api/v1/push/users/register",
-                              json={"user_id": provider_user_id, "platform": body.platform, "device_token": body.device_token})
-    if resp.status_code == 401:
-        raise HTTPException(500, "EMERGENT_PUSH_KEY missing or invalid")
-    if resp.status_code >= 500:
-        raise HTTPException(502, "Push provider unavailable")
-    resp.raise_for_status()
     return {"status": "registered"}
 
 
-async def send_push(recipients: list[str], data: dict, idempotency_key: Optional[str] = None) -> None:
-    if not recipients:
-        return
-    if "title" not in data or "message" not in data:
-        raise ValueError("data must include title and message")
-    for i in range(0, len(recipients), 100):
-        chunk = recipients[i:i + 100]
-        payload: dict = {"recipients": chunk, "data": data}
-        if idempotency_key:
-            payload["$idempotency_key"] = f"{idempotency_key}-{i}"
-        resp = await _client.post("/api/v1/push/trigger", json=payload)
-        if resp.status_code == 401:
-            raise HTTPException(500, "EMERGENT_PUSH_KEY missing or invalid")
-        if resp.status_code >= 500:
-            raise HTTPException(502, "Push provider unavailable")
-        resp.raise_for_status()
+async def send_push(device_tokens: list[str], data: dict) -> int:
+    if not device_tokens:
+        return 0
+    if not isinstance(data.get("title"), str) or not isinstance(data.get("message"), str):
+        raise ValueError("Push title and message are required")
+    provider = get_push_provider()
+    sent = 0
+    for index in range(0, len(device_tokens), 100):
+        sent += await provider.send(PushMessage(
+            device_tokens=tuple(device_tokens[index:index + 100]),
+            title=data["title"], body=data["message"],
+            data={key: value for key, value in data.items() if key not in {"title", "message"}},
+        ))
+    return sent
 
 
 @api_router.post("/push/broadcast")
@@ -88,20 +69,18 @@ async def push_broadcast(
 ):
     if not body.title.strip() or not body.message.strip():
         raise HTTPException(status_code=400, detail="Titel und Nachricht sind erforderlich")
-    regs = await access.push_registrations.find({}).to_list(10000)
-    recipients = [r["providerUserId"] for r in regs if r.get("providerUserId")]
+    registrations = await access.push_registrations.find({}).to_list(10000)
+    tokens = [row["deviceToken"] for row in registrations if _valid_device_token(row.get("deviceToken", ""))]
     data: dict = {"title": body.title.strip(), "message": body.message.strip()}
     if body.actionUrl:
         data["action_url"] = body.actionUrl.strip()
-    sent = 0
     try:
-        await send_push(recipients, data, idempotency_key=f"bc-{datetime.now(timezone.utc).timestamp()}")
-        sent = len(recipients)
-    except Exception:
+        sent = await send_push(tokens, data)
+    except PushProviderError as exc:
         await report_operational_failure(
             access, logger, operation="push.broadcast", category="push_delivery",
         )
-        raise HTTPException(status_code=502, detail="Push konnte nicht gesendet werden (erst nach Deploy/Build aktiv).")
+        raise HTTPException(status_code=503, detail="Push-Anbieter ist nicht verfügbar") from exc
     return {"ok": True, "recipients": sent}
 
 
@@ -110,5 +89,4 @@ async def push_stats(
     user: Annotated[dict, Depends(require_roles("admin"))],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
 ):
-    count = await access.push_registrations.count_documents({})
-    return {"registered": count}
+    return {"registered": await access.push_registrations.count_documents({})}

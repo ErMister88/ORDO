@@ -1,19 +1,21 @@
-"""Emergent Managed Email (Resend) — transactional notifications with a safety gate."""
+"""Safe templates plus a tenant-scoped transactional email outbox."""
 import os
 import re
 import ipaddress
-import httpx
+import secrets
+from datetime import datetime, timedelta, timezone
 from html import escape
 from html.parser import HTMLParser
 from urllib.parse import urlparse
-from typing import Optional
+from pymongo import ReturnDocument
+from pymongo.errors import DuplicateKeyError
+from starlette.concurrency import run_in_threadpool
 
+from .email_provider import EmailAttachment, TransactionalEmail, get_email_provider
+from .storage import get_storage_provider
 from .tenant_access import TenantBusinessAccess
 
-EMAIL_BASE_URL = "https://integrations.emergentagent.com"
-EMAIL_KEY = os.environ.get("EMERGENT_EMAIL_KEY", "")
 EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "ORDO Connect by S&S")
-EMAIL_REPLY_TO = os.environ.get("EMAIL_REPLY_TO")
 
 _SHORTENERS = ("bit.ly", "tinyurl.com", "t.co", "is.gd", "cutt.ly", "goo.gl", "rebrand.ly")
 _CRED_ASK = ("reply with your password", "reply with the code", "send your password", "cvv",
@@ -88,19 +90,150 @@ def _assert_safe_email(subject: str, html: str) -> None:
                 raise ValueError(f"Anchor text {m.group(1)!r} != real link host {real!r} (G3)")
 
 
-async def send_email(*, to: str, subject: str, html: str) -> Optional[str]:
+async def send_email(
+    *,
+    access: TenantBusinessAccess,
+    to: str,
+    subject: str,
+    html: str,
+    idempotency_key: str,
+    template_key: str,
+    resource_type: str | None = None,
+    resource_id: str | None = None,
+    locale: str = "de",
+    attachment_file_ids: tuple[str, ...] = (),
+) -> dict:
+    """Persist an email intent and schedule delivery without blocking the request."""
     _assert_safe_email(subject, html)
-    payload = {"to": [to], "subject": subject, "html": html, "from_name": EMAIL_FROM_NAME}
-    if EMAIL_REPLY_TO:
-        payload["contact_email"] = EMAIL_REPLY_TO
-    async with httpx.AsyncClient(timeout=30) as http:
-        resp = await http.post(
-            f"{EMAIL_BASE_URL}/api/v1/email/send",
-            headers={"X-Email-Key": EMAIL_KEY},
-            json=payload,
+    recipient = to.strip().lower()
+    if "@" not in recipient or len(recipient) > 320:
+        raise ValueError("Invalid email recipient")
+    if not idempotency_key or len(idempotency_key) > 180:
+        raise ValueError("Invalid email idempotency key")
+    if locale not in {"de", "it", "en"}:
+        locale = "de"
+    for file_id in attachment_file_ids:
+        row = await access.uploads.find_one({"id": file_id, "status": "active"})
+        if not row or row.get("visibility") != "private":
+            raise ValueError("Email attachment is not an authorized private ORDO file")
+    now = datetime.now(timezone.utc)
+    document = {
+        "id": "mail_" + secrets.token_hex(12),
+        "deduplicationKey": idempotency_key,
+        "templateKey": template_key,
+        "locale": locale,
+        "recipient": recipient,
+        "subject": subject,
+        "html": html,
+        "resourceType": resource_type,
+        "resourceId": resource_id,
+        "attachmentFileIds": list(attachment_file_ids),
+        "status": "pending",
+        "attempts": 0,
+        "createdAt": now,
+        "updatedAt": now,
+        "nextAttemptAt": now,
+        "retentionClass": "email_delivery",
+    }
+    try:
+        await access.email_outbox.insert_one(document)
+        row = document
+    except DuplicateKeyError:
+        row = await access.email_outbox.find_one({"deduplicationKey": idempotency_key})
+        if not row:
+            raise
+    from .background_jobs import BackgroundJobQueue
+    try:
+        await BackgroundJobQueue(access).enqueue(
+            "email.deliver",
+            actor_id=access.context.actor_user_id or "system:email",
+            idempotency_key=f"email:{row['id']}",
+            payload={"outboxId": row["id"]},
         )
-    resp.raise_for_status()
-    return resp.json().get("id")
+    except Exception:
+        # The durable outbox row is authoritative. The persistent worker
+        # repairs this narrow enqueue gap before claiming its next job.
+        pass
+    return row
+
+
+async def deliver_outbox_email(
+    access: TenantBusinessAccess,
+    outbox_id: str,
+    *,
+    attempt: int,
+) -> dict:
+    """Deliver one outbox row. A sent row is an idempotent no-op."""
+    existing = await access.email_outbox.find_one({"id": outbox_id})
+    if not existing:
+        raise RuntimeError("Email outbox row does not exist")
+    if existing.get("status") == "sent":
+        return {"resourceType": "email_outbox", "resourceId": outbox_id, "status": "sent"}
+    now = datetime.now(timezone.utc)
+    delivery_lease = secrets.token_urlsafe(18)
+    row = await access.email_outbox.find_one_and_update(
+        {
+            "id": outbox_id,
+            "$or": [
+                {"status": {"$in": ["pending", "failed", "dead"]}},
+                {"status": "processing", "deliveryLeaseUntil": {"$lte": now}},
+            ],
+        },
+        {
+            "$set": {
+                "status": "processing", "deliveryLease": delivery_lease,
+                "deliveryLeaseUntil": now + timedelta(minutes=2), "updatedAt": now,
+            },
+            "$inc": {"attempts": 1},
+        },
+        return_document=ReturnDocument.AFTER,
+    )
+    if not row:
+        raise RuntimeError("Email outbox row cannot be claimed")
+    attachments: list[EmailAttachment] = []
+    try:
+        storage = get_storage_provider() if row.get("attachmentFileIds") else None
+        for file_id in row.get("attachmentFileIds") or []:
+            file_row = await access.uploads.find_one({"id": file_id, "status": "active", "visibility": "private"})
+            if not file_row or storage is None or storage.name != file_row.get("storageProvider"):
+                raise RuntimeError("Email attachment is unavailable")
+            content, content_type = await run_in_threadpool(storage.read, file_row["storageKey"])
+            attachments.append(EmailAttachment(
+                filename=file_row.get("originalFilename") or file_id,
+                content_type=content_type,
+                content=content,
+            ))
+        provider = get_email_provider()
+        domain = (os.getenv("EMAIL_MESSAGE_ID_DOMAIN") or "ordo.invalid").strip()
+        message_id = f"<{outbox_id}@{domain}>"
+        receipt = await run_in_threadpool(provider.send, TransactionalEmail(
+            recipient=row["recipient"], subject=row["subject"], html=row["html"],
+            message_id=message_id, attachments=tuple(attachments),
+        ))
+    except Exception:
+        status = "dead" if attempt >= 5 else "failed"
+        await access.email_outbox.update_one(
+            {"id": outbox_id, "status": "processing", "deliveryLease": delivery_lease},
+            {
+                "$set": {"status": status, "updatedAt": datetime.now(timezone.utc),
+                         "lastErrorReference": "mailerr_" + secrets.token_hex(10)},
+                "$unset": {"deliveryLease": "", "deliveryLeaseUntil": ""},
+            },
+        )
+        raise
+    update = await access.email_outbox.update_one(
+        {"id": outbox_id, "status": "processing", "deliveryLease": delivery_lease},
+        {"$set": {"status": "sent", "provider": provider.name,
+                  "providerMessageReference": receipt.message_reference,
+                  "sentAt": datetime.now(timezone.utc), "updatedAt": datetime.now(timezone.utc)},
+         "$unset": {
+             "lastErrorReference": "", "deliveryLease": "", "deliveryLeaseUntil": "",
+             "html": "", "attachmentFileIds": "",
+         }},
+    )
+    if update.matched_count != 1:
+        raise RuntimeError("Email delivery lease was lost before completion")
+    return {"resourceType": "email_outbox", "resourceId": outbox_id, "status": "sent"}
 
 
 async def company_recipient(access: TenantBusinessAccess, company_id: str):
@@ -130,7 +263,15 @@ async def items_html(access: TenantBusinessAccess, items: list) -> str:
     return rows
 
 
-def email_shell(heading: str, intro: str, body_inner: str) -> str:
+_EMAIL_FOOTERS = {
+    "de": ("Gesendet von", "Wir fragen Sie niemals per E-Mail nach Passwort oder Zahlungsdaten."),
+    "it": ("Inviato da", "Non chiediamo mai password o dati di pagamento via email."),
+    "en": ("Sent by", "We never ask for passwords or payment details by email."),
+}
+
+
+def email_shell(heading: str, intro: str, body_inner: str, *, locale: str = "de") -> str:
+    sent_by, footer = _EMAIL_FOOTERS.get(locale, _EMAIL_FOOTERS["de"])
     return (
         "<table role='presentation' width='100%' cellpadding='0' cellspacing='0' style='background:#F4F6FB'>"
         "<tr><td align='center' style='padding:24px'>"
@@ -143,7 +284,7 @@ def email_shell(heading: str, intro: str, body_inner: str) -> str:
         f"<p style='margin:0 0 16px;color:#3A4256;font-size:15px;line-height:1.5'>{intro}</p>"
         f"{body_inner}"
         "<p style='margin:20px 0 0;font-size:12px;color:#8A90A2;line-height:1.5'>"
-        f"Gesendet von {escape(EMAIL_FROM_NAME)}. Wir fragen Sie niemals per E-Mail nach Passwort oder Zahlungsdaten."
+        f"{escape(sent_by)} {escape(EMAIL_FROM_NAME)}. {escape(footer)}"
         "</p>"
         "</td></tr></table></td></tr></table>"
     )

@@ -1,5 +1,7 @@
 """B2B machines: admin catalog + acquisition (Kauf / Finanzierung / Leasing)."""
 import uuid
+import hashlib
+import json
 import stripe
 from datetime import datetime, timezone
 from html import escape
@@ -201,8 +203,12 @@ async def create_machine_request(
                 f"<p style='margin:0;color:#3A4256'>Typ: {TYPE_LABEL[body.type]}<br/>"
                 f"Maschine: {escape(m['name'])}<br/>Kunde: {escape(doc['customer'].get('companyName') or doc['customer']['userName'])}</p>"
             )
-            await send_email(to=doc["customer"]["email"], subject=f"Ihre Maschinen-Anfrage {rid}",
-                             html=email_shell("Anfrage eingegangen", "Wir melden uns mit einem Angebot.", inner))
+            await send_email(
+                access=access, to=doc["customer"]["email"], subject=f"Ihre Maschinen-Anfrage {rid}",
+                html=email_shell("Anfrage eingegangen", "Wir melden uns mit einem Angebot.", inner),
+                idempotency_key=f"machine-request:{rid}:created", template_key="machine.request.created",
+                resource_type="machine_request", resource_id=rid,
+            )
         except Exception:
             await report_operational_failure(
                 access, logger, operation="machine.request_email", category="email_delivery",
@@ -327,8 +333,15 @@ async def set_machine_terms(
             + (f"<p style='margin:0;color:#8A90A2;font-size:13px'>{escape(terms['note'])}</p>" if terms.get("note") else "")
         )
         try:
-            await send_email(to=email, subject=f"Ihr Angebot {req_id} – {r['machineName']}",
-                             html=email_shell("Ihr persönliches Angebot", "Jetzt in der App ansehen & annehmen.", inner))
+            await send_email(
+                access=access, to=email, subject=f"Ihr Angebot {req_id} – {r['machineName']}",
+                html=email_shell("Ihr persönliches Angebot", "Jetzt in der App ansehen & annehmen.", inner),
+                idempotency_key=(
+                    f"machine-request:{req_id}:offer:"
+                    + hashlib.sha256(json.dumps(terms, sort_keys=True, default=str).encode()).hexdigest()[:16]
+                ),
+                template_key="machine.offer", resource_type="machine_request", resource_id=req_id,
+            )
         except Exception:
             await report_operational_failure(
                 access, logger, operation="machine.offer_email", category="email_delivery",
@@ -500,8 +513,15 @@ async def respond_machine_offer(
         text = f"Rückfrage zu {escape(r['machineName'])}: {escape(body.message)}"
     try:
         inner = f"<p style='margin:0;color:#3A4256'>{text}</p>"
-        await send_email(to=r["customer"]["email"], subject=subject,
-                         html=email_shell(headline, "Maschinen-Anfrage", inner))
+        await send_email(
+            access=access, to=r["customer"]["email"], subject=subject,
+            html=email_shell(headline, "Maschinen-Anfrage", inner),
+            idempotency_key=(
+                f"machine-request:{req_id}:response:{body.action}:"
+                + hashlib.sha256((body.message or "").strip().encode()).hexdigest()[:16]
+            ),
+            template_key=f"machine.response.{body.action}", resource_type="machine_request", resource_id=req_id,
+        )
     except Exception:
         await report_operational_failure(
             access, logger, operation="machine.response_email", category="email_delivery",

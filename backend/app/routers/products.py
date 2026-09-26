@@ -1,12 +1,8 @@
 """Products + image upload/serving."""
 import hashlib
 import secrets
-import uuid
-import requests
 from pymongo.errors import DuplicateKeyError
-from fastapi import Depends, Header, HTTPException, UploadFile, File
-from fastapi.responses import Response
-from starlette.concurrency import run_in_threadpool
+from fastapi import Depends, Header, HTTPException
 from typing import Annotated, Optional
 from datetime import datetime, timezone
 
@@ -23,12 +19,8 @@ from ..models import (
     ActiveIn, StockIn,
 )
 from ..money import to_minor
-from ..storage import put_object, get_object, APP_NAME
 from ..tenant_access import TenantBusinessAccess
 from ..idempotency import IdempotencyService
-
-ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
-
 
 def _product_payload(body: ProductIn, currency: str) -> dict:
     payload = body.model_dump()
@@ -404,47 +396,7 @@ async def list_equipment_financing_requests(
     return [strip_id(row) for row in rows]
 
 
-@api_router.post("/upload")
-async def upload_image(
-    user: Annotated[dict, Depends(require_roles("admin"))],
-    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
-    file: UploadFile = File(...),
-):
-    content_type = file.content_type or "application/octet-stream"
-    if content_type not in ALLOWED_IMAGE_TYPES:
-        raise HTTPException(status_code=400, detail="Nur Bilddateien sind erlaubt")
-    data = await file.read()
-    if len(data) > 8 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="Bild ist zu groß (max. 8 MB)")
-    ext = (file.filename or "img.jpg").rsplit(".", 1)[-1].lower()
-    path = f"{APP_NAME}/uploads/{user['id']}/{uuid.uuid4().hex}.{ext}"
-    try:
-        result = await run_in_threadpool(put_object, path, data, content_type)
-    except requests.HTTPError as e:
-        code = e.response.status_code if e.response is not None else 500
-        if code == 402:
-            raise HTTPException(status_code=402, detail="Speicher-Kontingent aufgebraucht")
-        raise HTTPException(status_code=502, detail="Upload fehlgeschlagen")
-    stored = result["path"]
-    await access.uploads.insert_one({
-        "storagePath": stored,
-        "ownerId": user["id"],
-        "contentType": content_type,
-        "createdAt": datetime.now(timezone.utc).isoformat(),
-    })
-    return {"url": f"/api/files/{stored}", "path": stored}
-
-
-@api_router.get("/files/{path:path}")
-async def serve_file(
-    path: str,
-    access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
-):
-    doc = await access.uploads.find_one({"storagePath": path})
-    if not doc:
-        raise HTTPException(status_code=404, detail="Datei nicht gefunden")
-    try:
-        content, content_type = await run_in_threadpool(get_object, path)
-    except requests.HTTPError:
-        raise HTTPException(status_code=404, detail="Datei nicht gefunden")
-    return Response(content=content, media_type=content_type, headers={"Cache-Control": "public, max-age=86400"})
+async def serve_file(path: str, access: TenantBusinessAccess):
+    """Compatibility shim for internal callers; routing lives in files.py."""
+    from .files import serve_public_file
+    return await serve_public_file(path, access)

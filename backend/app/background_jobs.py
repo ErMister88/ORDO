@@ -17,7 +17,7 @@ from .tenant_access import TenantBusinessAccess
 
 LEASE_SECONDS = 120
 MAX_ATTEMPTS = 5
-SAFE_RETRY_JOB_TYPES = frozenset({"reconcile.tenant"})
+SAFE_RETRY_JOB_TYPES = frozenset({"reconcile.tenant", "email.deliver"})
 
 
 def _now() -> datetime:
@@ -195,9 +195,17 @@ async def process_one_job(access: TenantBusinessAccess, *, worker_id: str) -> di
                 run_id=f"rec_job_{claim.job_id}",
                 checkpoint=lambda: queue.heartbeat(claim),
             )
+            completion = {"resourceType": "reconciliation_run", "resourceId": result["id"]}
+        elif claim.job_type == "email.deliver":
+            from .emailer import deliver_outbox_email
+            outbox_id = claim.payload.get("outboxId")
+            if not isinstance(outbox_id, str) or not outbox_id:
+                raise RuntimeError("Email job has no valid outbox reference")
+            result = await deliver_outbox_email(access, outbox_id, attempt=claim.attempts)
+            completion = result
         else:
             raise RuntimeError("Unsupported background job type")
-        await queue.complete(claim, {"resourceType": "reconciliation_run", "resourceId": result["id"]})
+        await queue.complete(claim, completion)
         return result
     except Exception:
         error_reference = "joberr_" + secrets.token_hex(10)

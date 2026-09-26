@@ -22,6 +22,11 @@ import { LocalizedText as Text, localizedAlert, useI18n } from "@/src/i18n";
 
 const EMPTY = { productId: "", name: "", description: "", price: "", taxRate: "19", imageUrl: "", active: true };
 
+function managedFileId(value: string): string | null {
+  const match = value.match(/(?:^|\/api\/files\/)(file_[0-9a-f]{24})(?:$|[?#])/);
+  return match?.[1] ?? null;
+}
+
 export default function MaschinenAdmin() {
   useI18n();
   const styles = useStyles();
@@ -37,13 +42,17 @@ export default function MaschinenAdmin() {
 
   const [editing, setEditing] = useState<string | null>(null);
   const [form, setForm] = useState<any>({ ...EMPTY });
+  const [originalImageUrl, setOriginalImageUrl] = useState("");
+  const [imagePreviewUrl, setImagePreviewUrl] = useState("");
   const [uploading, setUploading] = useState(false);
   const set = (k: string) => (v: any) => setForm((f: any) => ({ ...f, [k]: v }));
   const num = (v: string) => Number((v || "").replace(",", "."));
 
-  const startNew = () => { setEditing("new"); setForm({ ...EMPTY }); };
+  const startNew = () => { setEditing("new"); setForm({ ...EMPTY }); setOriginalImageUrl(""); setImagePreviewUrl(""); };
   const startEdit = (m: any) => {
     setEditing(m.id);
+    setOriginalImageUrl(m.imageUrl ?? "");
+    setImagePreviewUrl("");
     setForm({ productId: m.productId ?? "", name: m.name, description: m.description ?? "", price: String(m.price), taxRate: String(m.taxRate ?? ""), imageUrl: m.imageUrl ?? "", active: m.active });
   };
 
@@ -59,8 +68,11 @@ export default function MaschinenAdmin() {
     setUploading(true);
     try {
       const name = asset.fileName || `maschine.${(asset.uri.split(".").pop() || "jpg").split("?")[0]}`;
-      const up = await apiUpload(asset.uri, name, asset.mimeType || "image/jpeg");
+      const up = await apiUpload(asset.uri, name, asset.mimeType || "image/jpeg", {
+        resourceType: "machine", resourceId: editing !== "new" && editing ? editing : "unassigned", visibility: "public",
+      });
       setForm((f: any) => ({ ...f, imageUrl: up.url }));
+      setImagePreviewUrl(asset.uri);
     } catch (e: any) {
       localizedAlert("Upload fehlgeschlagen", e.message || "");
     } finally {
@@ -69,11 +81,26 @@ export default function MaschinenAdmin() {
   };
 
   const save = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       const body = { productId: form.productId || null, name: form.name, description: form.description, imageUrl: form.imageUrl, price: num(form.price), taxRate: Math.round(num(form.taxRate)), active: form.active };
-      return editing === "new" ? apiPost("/machines", body) : apiPut(`/machines/${editing}`, body);
+      const machine: any = editing === "new" ? await apiPost("/machines", body) : await apiPut(`/machines/${editing}`, body);
+      const nextFileId = managedFileId(form.imageUrl);
+      try {
+        if (machine.id && nextFileId) {
+          await apiPut(`/files/${nextFileId}/association`, { resourceType: "machine", resourceId: machine.id });
+        }
+        const previousFileId = managedFileId(originalImageUrl);
+        if (previousFileId && previousFileId !== nextFileId) await apiDelete(`/files/${previousFileId}`);
+      } catch {
+        machine._mediaWarning = "Die Maschine wurde gespeichert, aber die Bildzuordnung konnte nicht vollständig abgeschlossen werden.";
+      }
+      return machine;
     },
-    onSuccess: () => { setEditing(null); qc.invalidateQueries({ queryKey: ["machines"] }); },
+    onSuccess: (machine: any) => {
+      setEditing(null);
+      qc.invalidateQueries({ queryKey: ["machines"] });
+      if (machine?._mediaWarning) localizedAlert("Bildzuordnung prüfen", machine._mediaWarning);
+    },
     onError: (e: any) => localizedAlert("Fehler", e.message || "Speichern fehlgeschlagen"),
   });
 
@@ -101,8 +128,8 @@ export default function MaschinenAdmin() {
               <SectionTitle>{editing === "new" ? "Neue Maschine" : "Maschine bearbeiten"}</SectionTitle>
               {uploadsEnabled ? (
                 <Pressable onPress={pickImage} style={styles.imgPick} testID="pick-image">
-                  {fileUrl(form.imageUrl) ? (
-                    <Image source={{ uri: fileUrl(form.imageUrl) }} style={styles.imgPickImg} contentFit="cover" />
+                  {imagePreviewUrl || fileUrl(form.imageUrl) ? (
+                    <Image source={{ uri: imagePreviewUrl || fileUrl(form.imageUrl) }} style={styles.imgPickImg} contentFit="cover" />
                   ) : (
                     <View style={styles.imgPickPh}>
                       <Camera size={26} color={colors.muted} />

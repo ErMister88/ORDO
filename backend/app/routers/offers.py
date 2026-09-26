@@ -232,7 +232,11 @@ async def approve_offer(
                 "</table>"
             )
             html = email_shell("Angebot freigegeben", "Gute Neuigkeiten!", inner)
-            await send_email(to=email, subject=f"Angebot {o['id']} freigegeben", html=html)
+            await send_email(
+                access=access, to=email, subject=f"Angebot {o['id']} freigegeben", html=html,
+                idempotency_key=f"offer:{o['id']}:approved",
+                template_key="offer.approved", resource_type="offer", resource_id=o["id"],
+            )
     except Exception:
         await report_operational_failure(
             access, logger, operation="offer.approval_email", category="email_delivery",

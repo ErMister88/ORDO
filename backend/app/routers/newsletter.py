@@ -1,6 +1,7 @@
 """Newsletter signup with Double-Opt-In + welcome discount code."""
 import os
 import secrets
+import hashlib
 from datetime import datetime, timezone
 from html import escape
 
@@ -41,7 +42,10 @@ def _new_code() -> str:
     return "SS-" + secrets.token_hex(3).upper()
 
 
-async def _send_welcome(email: str, code: str, percent: int, unsub_token: str = "", base: str = "") -> None:
+async def _send_welcome(
+    access: TenantBusinessAccess, email: str, code: str, percent: int,
+    unsub_token: str = "", base: str = "",
+) -> None:
     unsub = f"{_safe_base(base)}/api/newsletter/unsubscribe?token={unsub_token}" if unsub_token else ""
     unsub_html = (
         f"<p style='margin:16px 0 0;color:#8A90A2;font-size:12px'>Sie k&ouml;nnen sich jederzeit "
@@ -62,7 +66,12 @@ async def _send_welcome(email: str, code: str, percent: int, unsub_token: str = 
         f"{unsub_html}"
     )
     html = email_shell("Willkommen &amp; Ihr Rabattcode", "Ihre Anmeldung ist best&auml;tigt.", inner)
-    await send_email(to=email, subject=f"Willkommen – {percent}% Rabatt im S&S Kaffee-Shop", html=html)
+    recipient_key = hashlib.sha256(email.encode()).hexdigest()[:20]
+    await send_email(
+        access=access, to=email, subject=f"Willkommen – {percent}% Rabatt im S&S Kaffee-Shop", html=html,
+        idempotency_key=f"newsletter:{recipient_key}:welcome:{code}",
+        template_key="newsletter.welcome", resource_type="newsletter", resource_id=recipient_key,
+    )
 
 
 @api_router.post("/newsletter/subscribe")
@@ -85,7 +94,7 @@ async def newsletter_subscribe(
         code = existing["code"]
         if enabled:
             try:
-                await _send_welcome(email, code, percent, existing.get("unsubToken", ""), body.baseUrl)
+                await _send_welcome(access, email, code, percent, existing.get("unsubToken", ""), body.baseUrl)
             except Exception:
                 await report_operational_failure(
                     access, logger, operation="newsletter.welcome_email", category="email_delivery",
@@ -122,7 +131,11 @@ async def newsletter_subscribe(
             "k&ouml;nnen Sie diese E-Mail ignorieren.</p>"
         )
         html = email_shell("Bitte best&auml;tigen Sie Ihre Anmeldung", "Nur noch ein Klick.", inner)
-        await send_email(to=email, subject="Bitte bestätigen Sie Ihre Newsletter-Anmeldung", html=html)
+        await send_email(
+            access=access, to=email, subject="Bitte bestätigen Sie Ihre Newsletter-Anmeldung", html=html,
+            idempotency_key=f"newsletter:confirmation:{token}", template_key="newsletter.confirmation",
+            resource_type="newsletter", resource_id=hashlib.sha256(email.encode()).hexdigest()[:20],
+        )
     except Exception:
         await report_operational_failure(
             access, logger, operation="newsletter.confirmation_email", category="email_delivery",
@@ -166,7 +179,7 @@ async def newsletter_confirm(
                       "confirmedAt": datetime.now(timezone.utc).isoformat()}},
         )
         try:
-            await _send_welcome(sub["email"], code, percent, unsub_token)
+            await _send_welcome(access, sub["email"], code, percent, unsub_token)
         except Exception:
             await report_operational_failure(
                 access, logger, operation="newsletter.welcome_email", category="email_delivery",

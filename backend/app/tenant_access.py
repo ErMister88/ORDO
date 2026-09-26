@@ -22,11 +22,13 @@ TENANT_SCOPED_BUSINESS_COLLECTIONS = frozenset({
     "customer_tags",
     "business_brands",
     "equipment_requests",
+    "email_outbox",
     "invoices",
     "idempotency_records",
     "machine_requests",
     "machines",
     "newsletter",
+    "notifications",
     "offers",
     "orders",
     "payment_provider_events",
@@ -44,6 +46,7 @@ TENANT_SCOPED_BUSINESS_COLLECTIONS = frozenset({
     "technical_errors",
     "tenant_memberships",
     "uploads",
+    "worker_heartbeats",
 })
 
 
@@ -172,6 +175,7 @@ class TenantBusinessAccess:
         self.customer_tags = TenantScopedCollection(database, "customer_tags", context)
         self.business_brands = TenantScopedCollection(database, "business_brands", context)
         self.equipment_requests = TenantScopedCollection(database, "equipment_requests", context)
+        self.email_outbox = TenantScopedCollection(database, "email_outbox", context)
         self.products = TenantScopedCollection(database, "products", context)
         self.product_categories = TenantScopedCollection(database, "product_categories", context)
         self.customer_prices = TenantScopedCollection(database, "customer_prices", context)
@@ -180,6 +184,7 @@ class TenantBusinessAccess:
         self.machine_requests = TenantScopedCollection(database, "machine_requests", context)
         self.machines = TenantScopedCollection(database, "machines", context)
         self.newsletter = TenantScopedCollection(database, "newsletter", context)
+        self.notifications = TenantScopedCollection(database, "notifications", context)
         self.offers = TenantScopedCollection(database, "offers", context)
         self.orders = TenantScopedCollection(database, "orders", context)
         self.payment_provider_events = TenantScopedCollection(database, "payment_provider_events", context)
@@ -195,3 +200,4 @@ class TenantBusinessAccess:
         self.technical_errors = TenantScopedCollection(database, "technical_errors", context)
         self.tenant_memberships = TenantScopedCollection(database, "tenant_memberships", context)
         self.uploads = TenantScopedCollection(database, "uploads", context)
+        self.worker_heartbeats = TenantScopedCollection(database, "worker_heartbeats", context)

@@ -47,6 +47,29 @@ async def list_background_jobs(
     return [_public_row(row, allowed) for row in rows]
 
 
+@api_router.get("/operations/communications")
+async def communication_status(
+    user: Annotated[dict, Depends(require_roles("admin"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    pending_mail = await access.email_outbox.count_documents({"status": {"$in": ["pending", "processing"]}})
+    failed_mail = await access.email_outbox.count_documents({"status": "failed"})
+    dead_mail = await access.email_outbox.count_documents({"status": "dead"})
+    dead_jobs = await access.background_jobs.count_documents({"status": "dead"})
+    storage_errors = await access.technical_errors.count_documents({"category": "storage"})
+    workers = await access.worker_heartbeats.find({}).sort("lastSeenAt", -1).to_list(1)
+    worker = workers[0] if workers else None
+    return {
+        "mail": {"pending": pending_mail, "failed": failed_mail, "dead": dead_mail},
+        "jobs": {"dead": dead_jobs},
+        "storage": {"errors": storage_errors},
+        "worker": {
+            "status": worker.get("status") if worker else "unknown",
+            "lastSeenAt": worker.get("lastSeenAt") if worker else None,
+        },
+    }
+
+
 @api_router.post("/operations/jobs/{job_id}/retry")
 async def retry_background_job(
     job_id: str,
@@ -104,6 +127,14 @@ async def list_operational_problems(
 
     jobs = await access.background_jobs.find({"status": {"$in": ["failed", "dead"]}}).sort("updatedAt", -1).to_list(100)
     problems.extend({"type": "background_job", "id": row.get("id"), "status": row.get("status"), "occurredAt": row.get("updatedAt"), "errorReference": row.get("lastErrorReference"), "resource": {"type": row.get("jobType")}, "retryAllowed": bool(row.get("retryAllowed")), "reviewRequired": bool(row.get("reviewRequired"))} for row in jobs)
+
+    mail = await access.email_outbox.find({"status": {"$in": ["failed", "dead"]}}).sort("updatedAt", -1).to_list(100)
+    problems.extend({
+        "type": "email", "id": row.get("id"), "status": row.get("status"),
+        "occurredAt": row.get("updatedAt"), "errorReference": row.get("lastErrorReference"),
+        "resource": {"type": row.get("resourceType"), "id": row.get("resourceId")},
+        "retryAllowed": False, "reviewRequired": row.get("status") == "dead",
+    } for row in mail)
 
     errors = await access.technical_errors.find({}).sort("occurredAt", -1).to_list(100)
     problems.extend({"type": "technical_error", "id": row.get("id"), "status": "failed", "occurredAt": row.get("occurredAt"), "errorReference": row.get("id"), "resource": {"operation": row.get("operation")}, "retryAllowed": False, "reviewRequired": True} for row in errors)

@@ -20,6 +20,7 @@ const INTERNAL_ROUTES = [
   "/bestellung",
   "/mehr",
   "/maschinen",
+  "/benachrichtigungen",
   "/passwort-aendern",
 ] as const;
 

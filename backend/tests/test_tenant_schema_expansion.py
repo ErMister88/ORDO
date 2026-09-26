@@ -472,7 +472,7 @@ def test_registry_executes_baseline_tenant_expansion_and_membership_schema():
 
     report = runner(database, migrations=None).run().as_dict()
 
-    assert [item["version"] for item in report["executedMigrations"]] == [1, 2, 6, 3, 4, 5, 7, 8, 9, 10, 11]
+    assert [item["version"] for item in report["executedMigrations"]] == [1, 2, 6, 3, 4, 5, 7, 8, 9, 10, 11, 12]
     assert database.tenants.count_documents({"id": SS_TENANT_ID}) == 1
     documents = business_documents(database)
     settings = documents.pop("settings")

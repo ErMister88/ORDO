@@ -24,6 +24,12 @@ type Problem = {
 };
 type Job = { id: string; jobType: string; status: string; attempts: number; updatedAt?: string; lastErrorReference?: string; retryAllowed?: boolean };
 type Reconciliation = { id: string; status: string; finishedAt: string; issueCount: number; counts: Record<string, number> } | null;
+type CommunicationStatus = {
+  mail: { pending: number; failed: number; dead: number };
+  jobs: { dead: number };
+  storage: { errors: number };
+  worker: { status: string; lastSeenAt?: string | null };
+};
 
 const CAPABILITY_LABELS: Record<string, string> = {
   database: "Datenbank",
@@ -43,10 +49,12 @@ const PROBLEM_LABELS: Record<string, string> = {
   background_job: "Hintergrundaufgabe",
   technical_error: "Technischer Fehler",
   reconciliation: "Konsistenzhinweis",
+  email: "E-Mail-Zustellung",
 };
 
 const JOB_LABELS: Record<string, string> = {
   "reconcile.tenant": "Konsistenzprüfung",
+  "email.deliver": "E-Mail-Zustellung",
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -77,6 +85,7 @@ export default function Systembetrieb() {
   const problems = useQuery<Problem[]>({ queryKey: ["operations-problems"], queryFn: () => apiGet("/operations/problems"), refetchInterval: 30000 });
   const jobs = useQuery<Job[]>({ queryKey: ["operations-jobs"], queryFn: () => apiGet("/operations/jobs") });
   const reconciliation = useQuery<Reconciliation>({ queryKey: ["operations-reconciliation"], queryFn: () => apiGet("/operations/reconciliation/latest") });
+  const communication = useQuery<CommunicationStatus>({ queryKey: ["operations-communications"], queryFn: () => apiGet("/operations/communications"), refetchInterval: 30000 });
 
   const refresh = async () => {
     await Promise.all([
@@ -84,6 +93,7 @@ export default function Systembetrieb() {
       queryClient.invalidateQueries({ queryKey: ["operations-problems"] }),
       queryClient.invalidateQueries({ queryKey: ["operations-jobs"] }),
       queryClient.invalidateQueries({ queryKey: ["operations-reconciliation"] }),
+      queryClient.invalidateQueries({ queryKey: ["operations-communications"] }),
     ]);
   };
   const runCheck = useMutation({ mutationFn: () => apiPost("/operations/reconciliation/run"), onSuccess: refresh });
@@ -93,7 +103,7 @@ export default function Systembetrieb() {
   const date = (value?: string) => value ? formatter.format(new Date(value)) : "–";
   const openProblems = problems.data ?? [];
   const failedJobs = (jobs.data ?? []).filter((job) => job.status === "failed" || job.status === "dead");
-  const loadError = [status.error, problems.error, jobs.error, reconciliation.error].find(Boolean);
+  const loadError = [status.error, problems.error, jobs.error, reconciliation.error, communication.error].find(Boolean);
   const actionError = runCheck.error || retryJob.error || retryPayment.error;
 
   return <View style={styles.root}>
@@ -129,6 +139,14 @@ export default function Systembetrieb() {
           <Muted>{capability.message}</Muted>
           {capability.expectedVersion !== undefined ? <Muted>Schema {capability.appliedVersion ?? "–"} / {capability.expectedVersion}</Muted> : null}
         </Card>)}
+      </View>
+
+      <SectionTitle>Kommunikation & Worker</SectionTitle>
+      <View style={styles.grid}>
+        <Card style={styles.capability}><Text style={styles.capabilityTitle}>Ausstehende E-Mails</Text><Text style={styles.metric}>{communication.data?.mail.pending ?? "–"}</Text></Card>
+        <Card style={styles.capability}><Text style={styles.capabilityTitle}>Fehlgeschlagene E-Mails</Text><Text style={styles.metric}>{(communication.data?.mail.failed ?? 0) + (communication.data?.mail.dead ?? 0)}</Text></Card>
+        <Card style={styles.capability}><Text style={styles.capabilityTitle}>Tote Jobs</Text><Text style={styles.metric}>{communication.data?.jobs.dead ?? "–"}</Text></Card>
+        <Card style={styles.capability}><Text style={styles.capabilityTitle}>Speicherfehler</Text><Text style={styles.metric}>{communication.data?.storage.errors ?? "–"}</Text></Card>
       </View>
 
       <View style={styles.sectionRow}><SectionTitle>Konsistenzprüfung</SectionTitle><Button title="Jetzt prüfen" kind="secondary" loading={runCheck.isPending} onPress={() => runCheck.mutate()} /></View>
@@ -169,6 +187,7 @@ const useStyles = makeStyles((c) => ({
   capability: { flexGrow: 1, flexBasis: 220, gap: 7 },
   capabilityHead: { flexDirection: "row", alignItems: "center", gap: 9 },
   capabilityTitle: { fontSize: 15, fontWeight: "800", color: c.onSurface },
+  metric: { fontSize: 24, fontWeight: "900", color: c.brandPrimary },
   sectionRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" },
   problemHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
   problemTitle: { flex: 1, fontSize: 15, fontWeight: "800", color: c.onSurface },
