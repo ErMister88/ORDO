@@ -4,7 +4,7 @@ import hashlib
 import base64
 import hmac
 import stripe
-from fastapi import Depends, Header, HTTPException, Request
+from fastapi import Depends, Header, HTTPException, Query, Request
 from pymongo.errors import DuplicateKeyError
 from typing import Annotated, Optional
 from datetime import datetime, timedelta, timezone
@@ -38,6 +38,7 @@ from ..pricing_engine import BasketQuote, PricingEngine, PricingError
 from ..snapshots import redact_internal_snapshot_fields
 from ..idempotency import IdempotencyService
 from ..payment_integrity import checkout_return_urls, create_stripe_checkout, PaymentIntegrityError
+from ..pagination import bounded_list
 from html import escape
 
 
@@ -105,14 +106,17 @@ async def _quote(body: ShopQuoteIn | ShopOrderIn, access: TenantBusinessAccess) 
 @api_router.get("/shop/products")
 async def shop_products(
     access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
 ):
-    prods = await access.products.find(
+    prods = await bounded_list(access.products.find(
         {"active": True, "b2cAvailable": {"$ne": False}, "b2cPrice": {"$gt": 0}}
-    ).to_list(1000)
+    ).sort([("name", 1), ("id", 1)]), limit=limit, offset=offset, maximum=200)
     result = []
     for p in prods:
         try:
-            _product, quote = await PricingEngine(access).quote_b2c(p["id"], 1)
+            engine = PricingEngine(access)
+            quote = engine.quote_b2c_product(p, 1)
         except PricingError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         result.append({
@@ -131,7 +135,7 @@ async def shop_products(
             "taxRate": quote.tax_rate, "stock": p.get("stock"),
             "b2cTiers": [{"minQty": float(t["minQty"]), "price": from_minor(t["priceMinor"]),
                            "priceMinor": t["priceMinor"]}
-                          for t in PricingEngine(access)._validated_b2c_tiers(p)],
+                          for t in engine._validated_b2c_tiers(p)],
         })
     return result
 
@@ -448,8 +452,13 @@ async def shop_payment_status(
 async def list_shop_orders(
     user: Annotated[dict, Depends(require_roles("admin", "sales"))],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+    offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
 ):
-    rows = await access.shop_orders.find({}).sort("createdAt", -1).to_list(1000)
+    rows = await bounded_list(
+        access.shop_orders.find({}).sort([("createdAt", -1), ("id", -1)]),
+        limit=limit, offset=offset,
+    )
     return [_public_shop_order(r) for r in rows]
 
 
@@ -638,6 +647,11 @@ async def shop_save_address(
 async def shop_my_orders(
     user: Annotated[dict, Depends(shop_actor_identity)],
     access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
 ):
-    rows = await access.shop_orders.find({"userId": user["id"]}).sort("createdAt", -1).to_list(1000)
+    rows = await bounded_list(
+        access.shop_orders.find({"userId": user["id"]}).sort([("createdAt", -1), ("id", -1)]),
+        limit=limit, offset=offset, maximum=200,
+    )
     return [_public_shop_order(r) for r in rows]

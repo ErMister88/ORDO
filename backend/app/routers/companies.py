@@ -1,6 +1,6 @@
 """Companies / customers."""
 import secrets
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Query
 from typing import Annotated
 from datetime import datetime, timezone
 
@@ -19,6 +19,7 @@ from ..models import (
     CustomerAddressIn, CustomerContactIn,
 )
 from ..tenant_access import TenantBusinessAccess
+from ..pagination import bounded_list
 
 
 async def _validate_customer_classifications(
@@ -50,17 +51,31 @@ async def _validate_customer_classifications(
 async def get_companies(
     user: Annotated[dict, Depends(require_roles("admin", "sales"))],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+    offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
 ):
     ids = await visible_company_ids(user, access)
-    companies = await access.companies.find({"id": {"$in": ids}}).to_list(1000)
+    companies = await bounded_list(
+        access.companies.find({"id": {"$in": ids}}).sort([("name", 1), ("id", 1)]),
+        limit=limit, offset=offset,
+    )
     companies = [strip_id(c) for c in companies]
     now = datetime.now(timezone.utc)
+    company_ids = [company["id"] for company in companies]
+    last_orders = await access.orders.aggregate([
+        {"$match": {"companyId": {"$in": company_ids}}},
+        {"$sort": {"createdAt": -1, "id": -1}},
+        {"$group": {"_id": "$companyId", "createdAt": {"$first": "$createdAt"}}},
+        {"$limit": len(company_ids)},
+    ]).to_list(len(company_ids)) if company_ids else []
+    last_by_company = {row["_id"]: row.get("createdAt") for row in last_orders}
     for c in companies:
-        last = await access.orders.find({"companyId": c["id"]}).sort("createdAt", -1).to_list(1)
         overdue = False
         days_since = None
-        if last:
-            last_dt = datetime.fromisoformat(last[0]["createdAt"]).replace(tzinfo=timezone.utc)
+        if last_by_company.get(c["id"]):
+            last_dt = datetime.fromisoformat(last_by_company[c["id"]].replace("Z", "+00:00"))
+            if last_dt.tzinfo is None:
+                last_dt = last_dt.replace(tzinfo=timezone.utc)
             days_since = (now - last_dt).days
             overdue = days_since > c.get("orderCycleDays", 30)
         else:

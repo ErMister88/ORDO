@@ -2,7 +2,7 @@
 import hashlib
 import secrets
 from pymongo.errors import DuplicateKeyError
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Query
 from typing import Annotated, Optional
 from datetime import datetime, timezone
 
@@ -21,6 +21,7 @@ from ..models import (
 from ..money import to_minor
 from ..tenant_access import TenantBusinessAccess
 from ..idempotency import IdempotencyService
+from ..pagination import bounded_list
 
 def _product_payload(body: ProductIn, currency: str) -> dict:
     payload = body.model_dump()
@@ -95,6 +96,8 @@ async def _validate_product_references(access: TenantBusinessAccess, body: Produ
 async def get_products(
     user: Annotated[dict, Depends(current_user)],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+    offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
 ):
     # Wholesale catalog is B2B-only. Shop customers (shopusers) and any other
     # role must never receive cost/floor/standard pricing. They use /shop/products.
@@ -104,7 +107,10 @@ async def get_products(
         "active": {"$ne": False},
         "b2bAvailable": {"$ne": False},
     }
-    prods = await access.products.find(query).to_list(1000)
+    prods = await bounded_list(
+        access.products.find(query).sort([("name", 1), ("id", 1)]),
+        limit=limit, offset=offset,
+    )
     return [_product_response(product, user["role"]) for product in prods]
 
 
@@ -391,8 +397,13 @@ async def create_equipment_financing_request_endpoint(
 async def list_equipment_financing_requests(
     user: Annotated[dict, Depends(require_roles("admin"))],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+    offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
 ):
-    rows = await access.equipment_requests.find({}).sort("createdAt", -1).to_list(1000)
+    rows = await bounded_list(
+        access.equipment_requests.find({}).sort([("createdAt", -1), ("id", -1)]),
+        limit=limit, offset=offset,
+    )
     return [strip_id(row) for row in rows]
 
 

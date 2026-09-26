@@ -12,6 +12,7 @@ from .tenancy import MongoTenantDirectory, SingleTenantResolver, TenancyConfigur
 from .tenant_access import TenantBusinessAccess
 from .email_provider import email_configuration_status
 from .storage import storage_configuration_status
+from .production_config import validate_runtime_configuration
 
 
 KNOWN_ENVIRONMENTS = {
@@ -109,7 +110,8 @@ async def capability_snapshot(database) -> dict[str, Any]:
     )
 
     environment = (os.getenv("APP_ENV") or "").strip().lower()
-    config_ready = environment in KNOWN_ENVIRONMENTS
+    runtime_configuration = validate_runtime_configuration()
+    config_ready = environment in KNOWN_ENVIRONMENTS and bool(runtime_configuration["ready"])
     try:
         TenancySettings.from_environment()
     except TenancyConfigurationError:
@@ -118,6 +120,7 @@ async def capability_snapshot(database) -> dict[str, Any]:
         "available" if config_ready else "unavailable",
         "Kritische Konfiguration gültig" if config_ready else "Kritische Konfiguration ungültig",
     )
+    capabilities["configuration"]["checks"] = runtime_configuration["checks"]
 
     ready = database_available and schema_ready and config_ready
     return {

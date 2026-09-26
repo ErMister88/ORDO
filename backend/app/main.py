@@ -6,6 +6,8 @@ from .core import app, api_router, db, client, logger
 from .database_setup import ensure_required_indexes
 from .capabilities import capability_snapshot
 from .observability import OperationalContextMiddleware, configure_structured_logging
+from .production_config import assert_safe_startup_configuration
+from .runtime_security import RuntimeSecurityMiddleware
 
 # Import routers so their @api_router routes register before we include it.
 from .routers import (  # noqa: F401,E402
@@ -31,6 +33,7 @@ app.add_middleware(
     expose_headers=["X-Request-ID", "X-Error-ID"],
 )
 app.add_middleware(OperationalContextMiddleware, database=db)
+app.add_middleware(RuntimeSecurityMiddleware, database=db)
 
 
 def _runtime_payload():
@@ -69,6 +72,7 @@ async def health():
 
 @app.on_event("startup")
 async def on_startup():
+    assert_safe_startup_configuration()
     await db.command("ping")
     await ensure_required_indexes(db)
 

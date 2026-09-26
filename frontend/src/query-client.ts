@@ -4,4 +4,17 @@
 // handlers; inside components useQueryClient() returns this same instance.
 import { QueryClient } from "@tanstack/react-query";
 
-export const queryClient = new QueryClient();
+export const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 15_000,
+      retry: 2,
+      refetchOnWindowFocus: false,
+    },
+    mutations: {
+      // Commercial mutations use persisted idempotency keys and should only be
+      // retried by an explicit user action after an uncertain network result.
+      retry: false,
+    },
+  },
+});

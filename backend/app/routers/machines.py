@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from html import escape
 from typing import Annotated, Optional
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Query
 from pymongo.errors import DuplicateKeyError
 
 from ..core import api_router, db, strip_id, next_seq, logger
@@ -22,6 +22,7 @@ from ..observability import report_operational_failure
 from ..pricing_engine import PricingEngine, PricingError
 from ..idempotency import IdempotencyService
 from ..payment_integrity import checkout_return_urls, create_stripe_checkout, PaymentIntegrityError
+from ..pagination import bounded_list
 
 TYPE_LABEL = {"kauf": "Kauf", "finanzierung": "Finanzierung", "leasing": "Leasing (Kaffeebindung)",
               "bereitstellung": "Bereitstellung"}
@@ -31,9 +32,14 @@ TYPE_LABEL = {"kauf": "Kauf", "finanzierung": "Finanzierung", "leasing": "Leasin
 async def list_machines(
     user: Annotated[dict, Depends(current_user)],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+    offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
 ):
     q = {} if user["role"] in ("admin", "sales") else {"active": True}
-    rows = await access.machines.find(q).sort("price", 1).to_list(500)
+    rows = await bounded_list(
+        access.machines.find(q).sort([("price", 1), ("id", 1)]),
+        limit=limit, offset=offset,
+    )
     return [strip_id(r) for r in rows]
 
 
@@ -245,14 +251,22 @@ async def create_machine_request_endpoint(
 async def list_machine_requests(
     user: Annotated[dict, Depends(current_user)],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+    offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
 ):
     if user["role"] == "admin":
-        rows = await access.machine_requests.find({}).sort("createdAt", -1).to_list(1000)
+        rows = await bounded_list(
+            access.machine_requests.find({}).sort([("createdAt", -1), ("id", -1)]),
+            limit=limit, offset=offset,
+        )
     else:
         ids = await visible_company_ids(user, access)
-        rows = await access.machine_requests.find(
-            {"$or": [{"customer.companyId": {"$in": ids}}, {"customer.userId": user["id"]}]}
-        ).sort("createdAt", -1).to_list(1000)
+        rows = await bounded_list(
+            access.machine_requests.find(
+                {"$or": [{"customer.companyId": {"$in": ids}}, {"customer.userId": user["id"]}]}
+            ).sort([("createdAt", -1), ("id", -1)]),
+            limit=limit, offset=offset,
+        )
     visible = [r for r in rows if await _machine_request_references_visible(r, access)]
     return [strip_id(r) for r in visible]
 

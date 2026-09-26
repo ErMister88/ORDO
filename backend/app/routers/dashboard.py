@@ -1,4 +1,5 @@
 """Dashboard KPIs."""
+import asyncio
 from fastapi import Depends, HTTPException
 from typing import Annotated, Optional
 from datetime import datetime, timezone
@@ -18,15 +19,23 @@ async def dashboard(
     end: Optional[str] = None,
 ):
     ids = await visible_company_ids(user, access)
-    companies = await access.companies.find({"id": {"$in": ids}}).to_list(1000)
-    orders = await access.orders.find({"companyId": {"$in": ids}}).to_list(5000)
-    offers = await access.offers.find({"companyId": {"$in": ids}}).to_list(1000)
-    invoices = await access.invoices.find({"companyId": {"$in": ids}}).to_list(1000)
-    contracts = await access.contracts.find({"companyId": {"$in": ids}}).to_list(1000)
-    shop_orders = (
-        await access.shop_orders.find({}).sort("createdAt", -1).to_list(1000)
-        if user["role"] == "admin" else []
+    companies, orders, offers, invoices, contracts, shop_orders = await asyncio.gather(
+        access.companies.find({"id": {"$in": ids}}).to_list(1001),
+        access.orders.find({"companyId": {"$in": ids}}).to_list(5001),
+        access.offers.find({"companyId": {"$in": ids}}).to_list(1001),
+        access.invoices.find({"companyId": {"$in": ids}}).to_list(1001),
+        access.contracts.find({"companyId": {"$in": ids}}).to_list(1001),
+        access.shop_orders.find({}).sort("createdAt", -1).to_list(1001)
+        if user["role"] == "admin" else asyncio.sleep(0, result=[]),
     )
+    if (
+        len(companies) > 1000 or len(orders) > 5000 or len(offers) > 1000
+        or len(invoices) > 1000 or len(contracts) > 1000 or len(shop_orders) > 1000
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="Dashboard-Datenmenge ist zu groß. Bitte Zeitraum oder Kundenauswahl eingrenzen.",
+        )
 
     def parse_boundary(value: str, field: str) -> datetime:
         try:

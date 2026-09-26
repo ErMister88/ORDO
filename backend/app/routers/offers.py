@@ -1,6 +1,6 @@
 """Offers."""
 from html import escape
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Query
 from typing import Annotated, Optional
 from datetime import datetime, timezone
 from pymongo import ReturnDocument
@@ -18,6 +18,7 @@ from ..pricing_engine import PricingEngine, PricingError
 from ..snapshots import clone_snapshot_items, items_total_minor, product_item_snapshot, redact_internal_snapshot_fields
 from ..tenant_access import TenantBusinessAccess
 from ..idempotency import IdempotencyService
+from ..pagination import bounded_list
 
 
 def _offer_response(offer: dict, user: dict) -> dict:
@@ -42,9 +43,14 @@ async def offer_references_visible(access: TenantBusinessAccess, offer: dict) ->
 async def get_offers(
     user: Annotated[dict, Depends(current_user)],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+    offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
 ):
     ids = await visible_company_ids(user, access)
-    offers = await access.offers.find({"companyId": {"$in": ids}}).sort("createdAt", -1).to_list(1000)
+    offers = await bounded_list(
+        access.offers.find({"companyId": {"$in": ids}}).sort([("createdAt", -1), ("id", -1)]),
+        limit=limit, offset=offset,
+    )
     return [_offer_response(o, user) for o in offers]
 
 

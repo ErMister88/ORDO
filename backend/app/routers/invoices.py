@@ -1,6 +1,6 @@
 """Contracts, invoices and tenant-scoped payment records."""
 import secrets
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Query
 from typing import Annotated, Optional
 from datetime import datetime, timezone
 
@@ -13,6 +13,7 @@ from ..money import amount_minor, from_minor, to_minor
 from .orders import order_references_visible
 from ..snapshots import redact_internal_snapshot_fields
 from ..idempotency import IdempotencyService
+from ..pagination import bounded_list
 
 
 async def invoice_references_visible(access: TenantBusinessAccess, invoice: dict) -> bool:
@@ -32,28 +33,98 @@ async def invoice_references_visible(access: TenantBusinessAccess, invoice: dict
     )
 
 
+async def _visible_invoice_ids(access: TenantBusinessAccess, invoices: list[dict]) -> set[str]:
+    """Validate one invoice page with bounded bulk reads instead of per-row queries."""
+
+    company_ids = {row.get("companyId") for row in invoices if isinstance(row.get("companyId"), str)}
+    existing_companies = {
+        row["id"] for row in await access.companies.find({"id": {"$in": list(company_ids)}}).to_list(len(company_ids))
+    } if company_ids else set()
+    order_ids = {row.get("orderId") for row in invoices if isinstance(row.get("orderId"), str)}
+    order_rows = await access.orders.find({"id": {"$in": list(order_ids)}}).to_list(len(order_ids)) if order_ids else []
+    orders_by_id = {row["id"]: row for row in order_rows}
+    product_ids: set[str] = set()
+    offer_ids: set[str] = set()
+    subscription_ids: set[str] = set()
+    for order in order_rows:
+        for item in order.get("items", []):
+            if item.get("snapshotVersion") == 1 and item.get("currency") == order.get("currency"):
+                continue
+            if isinstance(item.get("productId"), str):
+                product_ids.add(item["productId"])
+        if isinstance(order.get("fromOffer"), str):
+            offer_ids.add(order["fromOffer"])
+        if isinstance(order.get("fromSubscription"), str):
+            subscription_ids.add(order["fromSubscription"])
+    products = {
+        row["id"] for row in await access.products.find({"id": {"$in": list(product_ids)}}).to_list(len(product_ids))
+    } if product_ids else set()
+    offers = {
+        row["id"]: row for row in await access.offers.find({"id": {"$in": list(offer_ids)}}).to_list(len(offer_ids))
+    } if offer_ids else {}
+    subscriptions = {
+        row["id"]: row for row in await access.subscriptions.find({"id": {"$in": list(subscription_ids)}}).to_list(len(subscription_ids))
+    } if subscription_ids else {}
+
+    visible: set[str] = set()
+    for invoice in invoices:
+        invoice_id = invoice.get("id")
+        company_id = invoice.get("companyId")
+        if not isinstance(invoice_id, str) or company_id not in existing_companies:
+            continue
+        order_id = invoice.get("orderId")
+        if order_id is None:
+            visible.add(invoice_id)
+            continue
+        order = orders_by_id.get(order_id) if isinstance(order_id, str) else None
+        if not order or order.get("companyId") != company_id:
+            continue
+        if any(
+            not isinstance(item.get("productId"), str) or item.get("productId") not in products
+            for item in order.get("items", [])
+            if not (item.get("snapshotVersion") == 1 and item.get("currency") == order.get("currency"))
+        ):
+            continue
+        offer_id = order.get("fromOffer")
+        if offer_id is not None and (
+            not isinstance(offer_id, str) or offers.get(offer_id, {}).get("companyId") != company_id
+        ):
+            continue
+        subscription_id = order.get("fromSubscription")
+        if subscription_id is not None and (
+            not isinstance(subscription_id, str)
+            or subscriptions.get(subscription_id, {}).get("companyId") != company_id
+        ):
+            continue
+        visible.add(invoice_id)
+    return visible
+
+
 @api_router.get("/contracts")
 async def get_contracts(
     user: Annotated[dict, Depends(current_user)],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+    offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
 ):
     ids = await visible_company_ids(user, access)
-    rows = await access.contracts.find({"companyId": {"$in": ids}}).to_list(1000)
+    rows = await bounded_list(
+        access.contracts.find({"companyId": {"$in": ids}}).sort([("start", -1), ("id", -1)]),
+        limit=limit, offset=offset,
+    )
+    company_ids = {row.get("companyId") for row in rows if isinstance(row.get("companyId"), str)}
+    product_ids = {row.get("productId") for row in rows if isinstance(row.get("productId"), str)}
+    visible_companies = {
+        row["id"] for row in await access.companies.find({"id": {"$in": list(company_ids)}}).to_list(len(company_ids))
+    } if company_ids else set()
+    visible_products = {
+        row["id"] for row in await access.products.find({"id": {"$in": list(product_ids)}}).to_list(len(product_ids))
+    } if product_ids else set()
     visible = []
     for contract in rows:
         company_id = contract.get("companyId")
         product_id = contract.get("productId")
-        company = (
-            await access.companies.find_one({"id": company_id})
-            if isinstance(company_id, str)
-            else None
-        )
-        product = (
-            await access.products.find_one({"id": product_id})
-            if isinstance(product_id, str)
-            else product_id is None
-        )
-        if company and product:
+        if company_id in visible_companies and (product_id is None or product_id in visible_products):
             visible.append(strip_id(contract))
     return visible
 
@@ -62,13 +133,19 @@ async def get_contracts(
 async def get_invoices(
     user: Annotated[dict, Depends(current_user)],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+    offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
 ):
     ids = await visible_company_ids(user, access)
-    rows = await access.invoices.find({"companyId": {"$in": ids}}).sort("date", -1).to_list(1000)
+    rows = await bounded_list(
+        access.invoices.find({"companyId": {"$in": ids}}).sort([("date", -1), ("id", -1)]),
+        limit=limit, offset=offset,
+    )
+    visible_invoice_ids = await _visible_invoice_ids(access, rows)
     today = datetime.now(timezone.utc).date().isoformat()
     result = []
     for row in rows:
-        if not await invoice_references_visible(access, row):
+        if row.get("id") not in visible_invoice_ids:
             continue
         public = strip_id(redact_internal_snapshot_fields(row))
         if public.get("status") == "Offen" and public.get("dueDate") and public["dueDate"] < today:

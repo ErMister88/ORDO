@@ -79,7 +79,7 @@ def test_readiness_fails_closed_for_outdated_schema(monkeypatch):
     result = run(capability_snapshot(database))
 
     assert result["ready"] is False
-    assert result["capabilities"]["schema"]["expectedVersion"] == 12
+    assert result["capabilities"]["schema"]["expectedVersion"] == 13
     assert result["capabilities"]["schema"]["appliedVersion"] == 10
 
 
@@ -349,7 +349,7 @@ def test_backup_manifest_is_written_only_after_nonempty_archive(monkeypatch, tmp
     )
     manifest = backup_restore.load_manifest(manifest_path)
     assert archive.is_file() and manifest["archiveSha256"] == backup_restore._sha256(archive)
-    assert manifest["schemaVersion"] == 12
+    assert manifest["schemaVersion"] == 13
     assert "mongodb://" not in manifest_path.read_text()
 
 

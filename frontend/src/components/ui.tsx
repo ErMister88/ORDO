@@ -136,6 +136,9 @@ export function Button({
       testID={testID}
       onPress={onPress}
       disabled={isDisabled}
+      accessibilityRole="button"
+      accessibilityLabel={title}
+      accessibilityState={{ disabled: isDisabled, busy: Boolean(loading) }}
       style={({ pressed }) => [
         styles.button,
         kind === "secondary" && styles.buttonSecondary,
@@ -166,6 +169,7 @@ export const Input = React.forwardRef<TextInput, TextInputProps>(function Input(
     <TextInput
       ref={ref}
       placeholderTextColor={colors.muted}
+      accessibilityLabel={props.accessibilityLabel ?? props.placeholder}
       style={[styles.input, style]}
       {...props}
       placeholder={props.placeholder ? t(props.placeholder) : undefined}
@@ -215,7 +219,7 @@ export function LoadingState({ label = "Daten werden geladen…" }: { label?: st
 export function ErrorState({ message = "Die Daten konnten nicht geladen werden.", onRetry }: { message?: string; onRetry?: () => void }) {
   const styles = useStyles();
   return (
-    <View style={styles.state}>
+    <View style={styles.state} accessibilityRole="alert" accessibilityLiveRegion="polite">
       <Text style={styles.errorTitle}>Etwas ist schiefgelaufen</Text>
       <Text style={styles.stateText}>{message}</Text>
       {onRetry ? <Button title="Erneut versuchen" kind="secondary" onPress={onRetry} style={styles.retry} /> : null}

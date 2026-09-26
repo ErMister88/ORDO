@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Stack, useRouter } from "expo-router";
-import { LogBox, Platform } from "react-native";
+import { Platform } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
@@ -16,8 +16,6 @@ import { AppShell } from "@/src/components/app-shell";
 import { useTheme } from "@/src/theme";
 import { registerForPush } from "@/src/push";
 import { I18nProvider } from "@/src/i18n";
-
-LogBox.ignoreAllLogs(true);
 
 // Foreground display behaviour — module scope, before any component
 if (Platform.OS !== "web") {

@@ -1,6 +1,6 @@
 """Subscriptions (recurring orders)."""
 import secrets
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Query
 from typing import Annotated, Optional
 from datetime import datetime, timedelta, timezone
 from pymongo import ReturnDocument
@@ -13,6 +13,7 @@ from ..tenant_access import TenantBusinessAccess
 from ..pricing_engine import PricingEngine, PricingError
 from ..snapshots import clone_snapshot_items, items_total_minor, redact_internal_snapshot_fields
 from ..idempotency import IdempotencyService
+from ..pagination import bounded_list
 
 
 async def _references_are_visible(access: TenantBusinessAccess, subscription: dict) -> bool:
@@ -30,9 +31,14 @@ async def _references_are_visible(access: TenantBusinessAccess, subscription: di
 async def list_subscriptions(
     user: Annotated[dict, Depends(require_roles("admin", "sales"))],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+    offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
 ):
     ids = await visible_company_ids(user, access)
-    subs = await access.subscriptions.find({"companyId": {"$in": ids}}).to_list(1000)
+    subs = await bounded_list(
+        access.subscriptions.find({"companyId": {"$in": ids}}).sort([("createdAt", -1), ("id", -1)]),
+        limit=limit, offset=offset,
+    )
     return [strip_id(redact_internal_snapshot_fields(s)) for s in subs]
 
 

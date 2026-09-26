@@ -7,7 +7,26 @@ if (!API) {
   );
 }
 export const TOKEN_KEY = "ss_auth_token";
+const REQUEST_TIMEOUT_MS = 30_000;
 let authFailureHandler: (() => void | Promise<void>) | null = null;
+
+async function requestFetch(
+  input: Parameters<typeof fetch>[0],
+  init?: Parameters<typeof fetch>[1],
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error("Die Anfrage hat zu lange gedauert. Bitte Verbindung prüfen und erneut versuchen.");
+    }
+    throw new Error("Der Server ist momentan nicht erreichbar. Ein erneuter Versuch verwendet denselben sicheren Vorgang.");
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export function setAuthFailureHandler(handler: (() => void | Promise<void>) | null) {
   authFailureHandler = handler;
@@ -54,7 +73,7 @@ async function authContext(): Promise<{
 
 export async function apiGet<T = any>(path: string, extraHeaders: Record<string, string> = {}): Promise<T> {
   const { headers, token } = await authContext();
-  const res = await fetch(`${API}/api${path}`, { headers: { ...headers, ...extraHeaders } });
+  const res = await requestFetch(`${API}/api${path}`, { headers: { ...headers, ...extraHeaders } });
   await handleAuthFailure(res, token);
   if (!res.ok) throw await responseError(res, `Fehler ${res.status}`);
   return res.json();
@@ -62,7 +81,7 @@ export async function apiGet<T = any>(path: string, extraHeaders: Record<string,
 
 export async function apiPost<T = any>(path: string, body?: any, extraHeaders: Record<string, string> = {}): Promise<T> {
   const { headers, token } = await authContext();
-  const res = await fetch(`${API}/api${path}`, {
+  const res = await requestFetch(`${API}/api${path}`, {
     method: "POST",
     headers: { ...headers, ...extraHeaders, "Content-Type": "application/json" },
     body: JSON.stringify(body ?? {}),
@@ -148,7 +167,7 @@ async function apiIdempotent<T>(
     throw new Error("Der Vorgang konnte nicht sicher vorbereitet werden. Bitte lokalen Speicher freigeben und erneut versuchen.");
   }
   try {
-    const res = await fetch(`${API}/api${path}`, {
+    const res = await requestFetch(`${API}/api${path}`, {
       method,
       headers: {
         ...headers,
@@ -193,7 +212,7 @@ export function apiPutIdempotent<T = any>(path: string, body?: any): Promise<T> 
 
 export async function apiPut<T = any>(path: string, body?: any): Promise<T> {
   const { headers, token } = await authContext();
-  const res = await fetch(`${API}/api${path}`, {
+  const res = await requestFetch(`${API}/api${path}`, {
     method: "PUT",
     headers: { ...headers, "Content-Type": "application/json" },
     body: JSON.stringify(body ?? {}),
@@ -207,7 +226,7 @@ export const API_BASE = API;
 
 export async function apiDelete<T = any>(path: string): Promise<T> {
   const { headers, token } = await authContext();
-  const res = await fetch(`${API}/api${path}`, { method: "DELETE", headers });
+  const res = await requestFetch(`${API}/api${path}`, { method: "DELETE", headers });
   await handleAuthFailure(res, token);
   if (!res.ok) throw await responseError(res, `Fehler ${res.status}`);
   return res.json();
@@ -237,7 +256,7 @@ export async function apiUpload(
   form.append("resource_type", options.resourceType ?? "product");
   form.append("resource_id", options.resourceId ?? "unassigned");
   form.append("visibility", options.visibility ?? "public");
-  const res = await fetch(`${API}/api/upload`, { method: "POST", headers, body: form });
+  const res = await requestFetch(`${API}/api/upload`, { method: "POST", headers, body: form });
   await handleAuthFailure(res, token);
   if (!res.ok) throw await responseError(res, `Upload fehlgeschlagen (${res.status})`);
   return res.json();
@@ -245,7 +264,7 @@ export async function apiUpload(
 
 export async function loginRequest(email: string, password: string): Promise<{ access_token: string; user: User }> {
   const body = new URLSearchParams({ username: email, password });
-  const res = await fetch(`${API}/api/auth/login`, {
+  const res = await requestFetch(`${API}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: body.toString(),

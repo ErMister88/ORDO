@@ -280,11 +280,14 @@ class PricingEngine:
         if base_minor <= 0:
             raise PricingError("Für dieses B2B-Produkt ist kein gültiger Preis hinterlegt")
 
+        instant_key = instant.isoformat()
         candidates = await self.access.pricing_promotions.find({
             "productId": product_id,
             "active": {"$ne": False},
             "$or": [{"companyId": company_id}, {"companyId": None}],
-        }).to_list(None)
+            "startsAt": {"$lte": instant_key},
+            "endsAt": {"$gt": instant_key},
+        }).sort("startsAt", -1).to_list(3)
         active_promotions = []
         for promotion in candidates:
             if promotion.get("currency") != self.currency:
@@ -366,8 +369,29 @@ class PricingEngine:
         *,
         subscription_discount_percent: int | None = None,
     ) -> tuple[dict[str, Any], PriceQuote]:
-        qty = _quantity(quantity)
         product = await self._b2c_product(product_id)
+        return product, self.quote_b2c_product(
+            product, quantity, subscription_discount_percent=subscription_discount_percent,
+        )
+
+    def quote_b2c_product(
+        self,
+        product: Mapping[str, Any],
+        quantity: Any,
+        *,
+        subscription_discount_percent: int | None = None,
+    ) -> PriceQuote:
+        """Quote an already tenant-scoped product without a duplicate DB lookup."""
+
+        if product.get("active") is False or product.get("b2cAvailable") is False:
+            raise PricingError("Produkt ist nicht verfügbar")
+        product_id = product.get("id")
+        if not isinstance(product_id, str) or not product_id:
+            raise PricingError("Produktreferenz ist ungültig")
+        stored_currency = product.get("currency")
+        if stored_currency is not None and currency_code(stored_currency) != self.currency:
+            raise PricingError("Produkt besitzt eine unpassende Währung")
+        qty = _quantity(quantity)
         try:
             base_minor = amount_minor(product, "b2cPrice", expected_currency=self.currency)
         except MoneyError as exc:
@@ -409,7 +433,7 @@ class PricingEngine:
             subscription_discount_percent=discount_percent,
             subscription_discount_minor=discount_minor,
         )
-        return product, quote
+        return quote
 
     async def quote_b2c_basket(
         self,
@@ -434,13 +458,22 @@ class PricingEngine:
             if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 100:
                 raise PricingError("Für das Monats-Abo ist kein gültiger Rabatt konfiguriert")
             subscription_percent = value
+        product_rows = await self.access.products.find({
+            "id": {"$in": list(quantities)},
+            "active": {"$ne": False},
+            "b2cAvailable": {"$ne": False},
+        }).to_list(len(quantities))
+        products = {row.get("id"): row for row in product_rows}
+        if set(products) != set(quantities):
+            raise PricingError("Produkt ist nicht verfügbar")
+
         lines = []
         merchandise_minor = 0
         tax_by_rate: dict[str, int] = {}
         for product_id, qty in quantities.items():
-            product, quote = await self.quote_b2c(
-                product_id,
-                qty,
+            product = products[product_id]
+            quote = self.quote_b2c_product(
+                product, qty,
                 subscription_discount_percent=subscription_percent,
             )
             lines.append((product, quote))

@@ -439,7 +439,8 @@ def test_migration_12_is_additive_and_registered_after_11():
     result = migration12.apply(database, type("Context", (), {"checkpoint": lambda self: None})())
     assert plan.expected_changes["documentsChanged"] == 0
     assert result == {"indexesEnsured": 8, "documentsChanged": 0}
-    assert get_migrations()[-1].version == 12 and get_migrations()[-1].depends_on == (11,)
+    migration = next(row for row in get_migrations() if row.version == 12)
+    assert migration.depends_on == (11,)
     assert all(database[name].count_documents({}) == 0 for name in database.list_collection_names())
 
 

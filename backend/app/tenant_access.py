@@ -105,6 +105,26 @@ class TenantScopedCollection:
     def find(self, query: Mapping[str, Any] | None = None, *args, **kwargs):
         return self._collection.find(self._filter(query), *args, **kwargs)
 
+    def aggregate(self, pipeline, *args, **kwargs):
+        """Run a read-only aggregation with an unremovable leading tenant match."""
+
+        if not isinstance(pipeline, (list, tuple)):
+            raise TenantScopeViolation("Aggregation pipeline must be a list")
+        allowed = {"$match", "$sort", "$group", "$project", "$limit", "$skip", "$count", "$unwind", "$set", "$addFields"}
+        safe_pipeline = []
+        for stage in deepcopy(list(pipeline)):
+            if not isinstance(stage, Mapping) or len(stage) != 1:
+                raise TenantScopeViolation("Invalid tenant-scoped aggregation stage")
+            operator = next(iter(stage))
+            if operator not in allowed:
+                raise TenantScopeViolation(f"Aggregation stage {operator} is not allowed")
+            if operator == "$match":
+                _validate_filter_tenant(stage[operator], self._tenant_id)
+            safe_pipeline.append(stage)
+        return self._collection.aggregate(
+            [{"$match": {"tenantId": self._tenant_id}}, *safe_pipeline], *args, **kwargs
+        )
+
     async def find_one(self, query: Mapping[str, Any], *args, **kwargs):
         return await self._collection.find_one(self._filter(query), *args, **kwargs)
 

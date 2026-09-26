@@ -1,5 +1,5 @@
 """Analytics (margin only for admins)."""
-from fastapi import Depends
+from fastapi import Depends, HTTPException, Query
 from typing import Annotated
 from datetime import datetime, timezone
 
@@ -13,10 +13,9 @@ from ..money import from_minor, line_total_minor, to_minor
 async def analytics(
     user: Annotated[dict, Depends(require_roles("admin", "sales"))],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
-    months: int = 6,
+    months: Annotated[int, Query(ge=1, le=24)] = 6,
 ):
     ids = await visible_company_ids(user, access)
-    orders = await access.orders.find({"companyId": {"$in": ids}}).to_list(10000)
     now = datetime.now(timezone.utc)
     buckets = {}
     labels = []
@@ -29,6 +28,17 @@ async def analytics(
         key = f"{y}-{m:02d}"
         buckets[key] = {"revenueMinor": 0, "kg": 0.0, "marginMinor": 0, "marginComplete": True}
         labels.append(key)
+
+    first_year, first_month = (int(value) for value in labels[0].split("-"))
+    period_start = datetime(first_year, first_month, 1, tzinfo=timezone.utc).isoformat()
+    orders = await access.orders.find({
+        "companyId": {"$in": ids}, "createdAt": {"$gte": period_start},
+    }).sort("createdAt", 1).to_list(10001)
+    if len(orders) > 10000:
+        raise HTTPException(
+            status_code=503,
+            detail="Auswertung ist für den gewählten Zeitraum zu groß. Bitte Zeitraum eingrenzen.",
+        )
 
     for o in orders:
         dt = datetime.fromisoformat(o["createdAt"])

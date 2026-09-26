@@ -1,6 +1,6 @@
 """Orders."""
 from html import escape
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Query
 from typing import Annotated, Optional
 from datetime import datetime, timedelta, timezone
 
@@ -17,6 +17,7 @@ from ..pricing_engine import PricingEngine, PricingError
 from ..snapshots import items_total_minor, redact_internal_snapshot_fields
 from ..tenant_access import TenantBusinessAccess
 from ..idempotency import IdempotencyClaim, IdempotencyService
+from ..pagination import bounded_list
 
 
 async def order_references_visible(access: TenantBusinessAccess, order: dict) -> bool:
@@ -48,9 +49,14 @@ async def order_references_visible(access: TenantBusinessAccess, order: dict) ->
 async def get_orders(
     user: Annotated[dict, Depends(current_user)],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+    offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
 ):
     ids = await visible_company_ids(user, access)
-    orders = await access.orders.find({"companyId": {"$in": ids}}).sort("createdAt", -1).to_list(2000)
+    orders = await bounded_list(
+        access.orders.find({"companyId": {"$in": ids}}).sort([("createdAt", -1), ("id", -1)]),
+        limit=limit, offset=offset,
+    )
     return [strip_id(redact_internal_snapshot_fields(o)) for o in orders]
 
 

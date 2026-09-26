@@ -37,7 +37,7 @@ class OfferItemIn(BaseModel):
 
 class OfferCreate(BaseModel):
     companyId: str
-    items: List[OfferItemIn]
+    items: List[OfferItemIn] = Field(max_length=200)
     termMonths: int = 48
     reason: Optional[str] = ""
     billingAddressId: Optional[str] = None
@@ -51,7 +51,7 @@ class OrderItemIn(BaseModel):
 
 class OrderCreate(BaseModel):
     companyId: str
-    items: List[OrderItemIn]
+    items: List[OrderItemIn] = Field(max_length=200)
     paymentMethod: Literal["bank_transfer", "cash", "card", "other"] = "bank_transfer"
     createInvoice: bool = False
     paymentTermDays: Optional[Annotated[int, Field(ge=0, le=3650)]] = None
@@ -69,15 +69,15 @@ class DiscountTier(BaseModel):
 
 
 class ProductIn(BaseModel):
-    sku: str = ""
-    ean: str = ""
-    brand: str = ""
+    sku: str = Field(default="", max_length=100)
+    ean: str = Field(default="", max_length=50)
+    brand: str = Field(default="", max_length=200)
     brandId: Optional[str] = None
-    name: str
+    name: str = Field(max_length=200)
     categoryId: Optional[str] = None
     collectionIds: List[str] = Field(default_factory=list)
     unit: str = "piece"
-    packagingUnit: str = ""
+    packagingUnit: str = Field(default="", max_length=100)
     packageQuantity: Optional[PositiveQuantity] = None
     contentAmount: Optional[PositiveQuantity] = None
     contentUnit: str = ""
@@ -91,10 +91,10 @@ class ProductIn(BaseModel):
     salesFloor: PositiveMoneyValue
     absoluteFloor: PositiveMoneyValue
     cost: MoneyValue
-    description: str = ""
-    imageUrl: str = ""
-    discountTiers: List[DiscountTier] = []
-    b2cTiers: List[DiscountTier] = []
+    description: str = Field(default="", max_length=10_000)
+    imageUrl: str = Field(default="", max_length=2_000)
+    discountTiers: List[DiscountTier] = Field(default_factory=list, max_length=100)
+    b2cTiers: List[DiscountTier] = Field(default_factory=list, max_length=100)
     taxRate: PercentValue
     stock: Optional[float] = None
     b2cPrice: Optional[PositiveMoneyValue] = None
@@ -116,7 +116,7 @@ class CustomerPriceIn(BaseModel):
 
 
 class B2BPromotionIn(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=200)
     productId: str
     companyId: Optional[str] = None
     price: PositiveMoneyValue
@@ -158,12 +158,12 @@ class ShopCollectionIn(BaseModel):
 
 
 class ShopCustomerIn(BaseModel):
-    name: str
-    email: str
-    phone: str = ""
-    street: str = ""
-    zip: str = ""
-    city: str = ""
+    name: str = Field(max_length=200)
+    email: str = Field(max_length=320)
+    phone: str = Field(default="", max_length=80)
+    street: str = Field(default="", max_length=300)
+    zip: str = Field(default="", max_length=30)
+    city: str = Field(default="", max_length=200)
 
 
 class ShopItemIn(BaseModel):
@@ -172,22 +172,22 @@ class ShopItemIn(BaseModel):
 
 
 class ShopQuoteIn(BaseModel):
-    items: List[ShopItemIn]
-    promoCode: Optional[str] = None
+    items: List[ShopItemIn] = Field(max_length=200)
+    promoCode: Optional[str] = Field(default=None, max_length=100)
     subscription: bool = False
 
 
 class ShopOrderIn(BaseModel):
-    items: List[ShopItemIn]
+    items: List[ShopItemIn] = Field(max_length=200)
     customer: ShopCustomerIn
     promoCode: Optional[str] = None
     subscription: bool = False
 
 
 class NewsletterIn(BaseModel):
-    email: str
-    name: Optional[str] = ""
-    baseUrl: Optional[str] = None
+    email: str = Field(max_length=320)
+    name: Optional[str] = Field(default="", max_length=200)
+    baseUrl: Optional[str] = Field(default=None, max_length=2_000)
 
 
 class ValidateCodeIn(BaseModel):
@@ -238,10 +238,10 @@ class MachineRequestIn(BaseModel):
 
 class EquipmentFinancingRequestIn(BaseModel):
     productId: str
-    name: str
-    email: str
-    phone: str = ""
-    message: str = ""
+    name: str = Field(max_length=200)
+    email: str = Field(max_length=320)
+    phone: str = Field(default="", max_length=80)
+    message: str = Field(default="", max_length=5_000)
 
 
 class MachineTermsIn(BaseModel):
