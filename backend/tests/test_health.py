@@ -66,3 +66,32 @@ def test_health_fails_closed_without_leaking_database_details(monkeypatch):
         "database": "unavailable",
     }
     assert "secret-host" not in response.body.decode()
+
+
+def test_liveness_does_not_depend_on_database(monkeypatch):
+    monkeypatch.setattr(app_main, "db", UnavailableDatabase())
+    monkeypatch.setenv("APP_ENV", "staging")
+
+    result = run(app_main.liveness())
+
+    assert result["status"] == "alive"
+    assert result["environment"] == "staging"
+
+
+def test_readiness_returns_503_for_failed_critical_capability(monkeypatch):
+    async def not_ready(_database):
+        return {
+            "status": "not_ready",
+            "ready": False,
+            "capabilities": {"database": {"status": "unavailable", "message": "Datenbank nicht erreichbar"}},
+        }
+
+    monkeypatch.setattr(app_main, "capability_snapshot", not_ready)
+    monkeypatch.setenv("APP_ENV", "staging")
+
+    response = run(app_main.readiness())
+    payload = json.loads(response.body)
+
+    assert response.status_code == 503
+    assert payload["ready"] is False
+    assert payload["capabilities"]["database"]["status"] == "unavailable"

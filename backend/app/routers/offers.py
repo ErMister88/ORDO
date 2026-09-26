@@ -13,6 +13,7 @@ from ..deps import current_user, require_roles, tenant_business_access, visible_
 from ..models import OfferCreate, DecisionIn, AcceptOfferIn
 from ..emailer import send_email, email_shell, company_recipient, items_html
 from ..money import amount_minor, from_minor, line_total_minor, to_minor
+from ..observability import report_operational_failure
 from ..pricing_engine import PricingEngine, PricingError
 from ..snapshots import clone_snapshot_items, items_total_minor, product_item_snapshot, redact_internal_snapshot_fields
 from ..tenant_access import TenantBusinessAccess
@@ -232,8 +233,10 @@ async def approve_offer(
             )
             html = email_shell("Angebot freigegeben", "Gute Neuigkeiten!", inner)
             await send_email(to=email, subject=f"Angebot {o['id']} freigegeben", html=html)
-    except Exception as e:
-        logger.warning(f"E-Mail (Angebot freigegeben) fehlgeschlagen: {e}")
+    except Exception:
+        await report_operational_failure(
+            access, logger, operation="offer.approval_email", category="email_delivery",
+        )
     await tenant_audit(access, user, "offer.approve", offer_id, {})
     return {"ok": True, "status": "Freigegeben"}
 

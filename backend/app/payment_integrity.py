@@ -25,6 +25,7 @@ from starlette.concurrency import run_in_threadpool
 from .audit_service import tenant_audit
 from .emailer import email_shell, send_email
 from .money import MoneyError, amount_minor, currency_code, from_minor
+from .observability import report_operational_failure
 from .tenant_access import TenantBusinessAccess, TenantScopedCollection
 
 
@@ -524,11 +525,10 @@ async def create_stripe_checkout(
             },
         )
     except Exception:
-        logger.exception(
-            "payment_checkout_audit_failed tenant=%s resource_type=%s resource_id=%s",
-            access.context.tenant_id,
-            resource_type,
-            resource_id,
+        await report_operational_failure(
+            access, logger,
+            operation="payment.checkout_audit",
+            category="audit_persistence",
         )
     return {"url": session_url, "sessionId": session_id, "status": "Offen"}
 
@@ -738,10 +738,10 @@ async def _send_shop_payment_confirmation_once(
             },
             {"$set": {"paymentConfirmationEmailState": "failed_terminal"}},
         )
-        logger.exception(
-            "shop_payment_confirmation_email_failed tenant=%s resource_id=%s",
-            access.context.tenant_id,
-            resource["id"],
+        await report_operational_failure(
+            access, logger,
+            operation="payment.shop_confirmation_email",
+            category="email_delivery",
         )
 
 
@@ -884,11 +884,10 @@ async def process_normalized_stripe_event(
                 {"provider": PROVIDER, "resourceType": resource_type, "providerEventId": event_id},
             )
         except Exception:
-            logger.exception(
-                "payment_confirmation_audit_failed tenant=%s resource_type=%s resource_id=%s",
-                access.context.tenant_id,
-                resource_type,
-                resource_id,
+            await report_operational_failure(
+                access, logger,
+                operation="payment.confirmation_audit",
+                category="audit_persistence",
             )
     return {"outcome": "paid", "resourceType": resource_type, "resourceId": resource_id, "changed": changed}
 
@@ -941,10 +940,10 @@ async def handle_stripe_event(access: TenantBusinessAccess, event: Mapping[str, 
                 },
             )
         except Exception:
-            logger.exception(
-                "payment_failure_audit_failed tenant=%s event_id=%s",
-                access.context.tenant_id,
-                claim.event_id,
+            await report_operational_failure(
+                access, logger,
+                operation="payment.failure_audit",
+                category="audit_persistence",
             )
         logger.warning(
             "stripe_event_failed tenant=%s event_id=%s event_type=%s code=%s retryable=%s",
@@ -960,7 +959,7 @@ async def handle_stripe_event(access: TenantBusinessAccess, event: Mapping[str, 
     except Exception as exc:
         error = PaymentIntegrityError("internal_payment_processing_error", retryable=True)
         await _persist_event_failure(ledger, claim, error)
-        logger.exception(
+        logger.error(
             "stripe_event_internal_error tenant=%s event_id=%s event_type=%s",
             access.context.tenant_id,
             claim.event_id,
@@ -979,10 +978,10 @@ async def retry_stripe_event(
     try:
         await tenant_audit(access, user, "payment.event_retry", claim.event_id, {"ledgerId": ledger_id})
     except Exception:
-        logger.exception(
-            "payment_retry_audit_failed tenant=%s event_id=%s",
-            access.context.tenant_id,
-            claim.event_id,
+        await report_operational_failure(
+            access, logger,
+            operation="payment.retry_audit",
+            category="audit_persistence",
         )
     try:
         result = await process_normalized_stripe_event(access, normalized)
@@ -996,7 +995,7 @@ async def retry_stripe_event(
     except Exception as exc:
         error = PaymentIntegrityError("internal_payment_retry_error", retryable=True)
         await _persist_event_failure(ledger, claim, error)
-        logger.exception(
+        logger.error(
             "payment_retry_internal_error tenant=%s event_id=%s",
             access.context.tenant_id,
             claim.event_id,

@@ -26,6 +26,7 @@ from ..deps import (
     resolve_membership_context,
 )
 from ..models import Token, PublicUser, ForgotPwIn, ResetPwIn, ChangePwIn
+from ..observability import report_operational_failure
 from ..emailer import send_email, email_shell
 from ..tenancy import TenantResolutionError
 
@@ -144,8 +145,10 @@ async def forgot_password(body: ForgotPwIn, request: Request = None):
             )
             html = email_shell("Passwort zur&uuml;cksetzen", "Sie haben einen Sicherheitscode angefordert.", inner)
             await send_email(to=email, subject="Ihr Code zum Zurücksetzen des Passworts", html=html)
-        except Exception as e:
-            logger.warning(f"E-Mail (Reset-Code) fehlgeschlagen: {e}")
+        except Exception:
+            await report_operational_failure(
+                None, logger, operation="auth.password_reset_email", category="email_delivery",
+            )
     return {"ok": True, "message": "Falls die E-Mail existiert, wurde ein Code gesendet."}
 
 

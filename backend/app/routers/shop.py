@@ -33,6 +33,7 @@ from ..models import (ShopSettingsIn, ShopOrderIn, ShopQuoteIn, ShopRegisterIn,
 from ..emailer import send_email, email_shell
 from ..tenant_access import TenantBusinessAccess
 from ..money import MoneyError, amount_minor, currency_code, from_minor, included_tax_minor, to_minor
+from ..observability import report_operational_failure
 from ..pricing_engine import BasketQuote, PricingEngine, PricingError
 from ..snapshots import redact_internal_snapshot_fields
 from ..idempotency import IdempotencyService
@@ -286,8 +287,10 @@ async def create_shop_order(
             )
             html = email_shell("Bestellbest&auml;tigung", "Ihre Bestellung ist bei uns eingegangen.", inner)
             await send_email(to=email, subject=f"Bestellbestätigung {oid}", html=html)
-    except Exception as e:
-        logger.warning(f"E-Mail (Bestellbestätigung Shop) fehlgeschlagen: {e}")
+    except Exception:
+        await report_operational_failure(
+            access, logger, operation="shop.order_confirmation_email", category="email_delivery",
+        )
     return {"id": oid, "token": order_token, "subtotal": subtotal, "shipping": shipping, "total": total,
             "subtotalMinor": subtotal_minor, "shippingMinor": shipping_minor, "totalMinor": total_minor,
             "currency": currency,
@@ -528,8 +531,10 @@ async def update_shop_order_status(
         try:
             await send_email(to=email, subject=f"{subject} – {order_id}",
                              html=email_shell(subject, "Statusaktualisierung Ihrer Bestellung", inner))
-        except Exception as e:
-            logger.warning(f"Status-E-Mail fehlgeschlagen: {e}")
+        except Exception:
+            await report_operational_failure(
+                access, logger, operation="shop.order_status_email", category="email_delivery",
+            )
 
     updated = await access.shop_orders.find_one({"id": order_id})
     return _public_shop_order(updated)

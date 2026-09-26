@@ -22,6 +22,14 @@ async function handleAuthFailure(res: Response, requestToken: string) {
   await authFailureHandler?.();
 }
 
+async function responseError(res: Response, fallback: string): Promise<Error> {
+  const payload = await res.json().catch(() => ({})) as { detail?: unknown; errorId?: unknown };
+  const detail = typeof payload.detail === "string" ? payload.detail : fallback;
+  const reference = res.headers.get("X-Error-ID")
+    || (typeof payload.errorId === "string" ? payload.errorId : null);
+  return new Error(reference ? `${detail} · Referenz ${reference}` : detail);
+}
+
 export type Role = "admin" | "sales" | "customer";
 export type User = {
   id: string;
@@ -48,7 +56,7 @@ export async function apiGet<T = any>(path: string, extraHeaders: Record<string,
   const { headers, token } = await authContext();
   const res = await fetch(`${API}/api${path}`, { headers: { ...headers, ...extraHeaders } });
   await handleAuthFailure(res, token);
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `Fehler ${res.status}`);
+  if (!res.ok) throw await responseError(res, `Fehler ${res.status}`);
   return res.json();
 }
 
@@ -60,7 +68,7 @@ export async function apiPost<T = any>(path: string, body?: any, extraHeaders: R
     body: JSON.stringify(body ?? {}),
   });
   await handleAuthFailure(res, token);
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `Fehler ${res.status}`);
+  if (!res.ok) throw await responseError(res, `Fehler ${res.status}`);
   return res.json();
 }
 
@@ -158,7 +166,9 @@ async function apiIdempotent<T>(
         pendingIdempotencyKeys.delete(scopedIntent);
         await storage.removeItem(storageKey);
       }
-      throw new Error(payload.detail || `Fehler ${res.status}`);
+      const reference = res.headers.get("X-Error-ID") || (typeof payload.errorId === "string" ? payload.errorId : null);
+      const detail = typeof payload.detail === "string" ? payload.detail : `Fehler ${res.status}`;
+      throw new Error(reference ? `${detail} · Referenz ${reference}` : detail);
     }
     pendingIdempotencyKeys.delete(scopedIntent);
     await storage.removeItem(storageKey);
@@ -189,7 +199,7 @@ export async function apiPut<T = any>(path: string, body?: any): Promise<T> {
     body: JSON.stringify(body ?? {}),
   });
   await handleAuthFailure(res, token);
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `Fehler ${res.status}`);
+  if (!res.ok) throw await responseError(res, `Fehler ${res.status}`);
   return res.json();
 }
 
@@ -199,7 +209,7 @@ export async function apiDelete<T = any>(path: string): Promise<T> {
   const { headers, token } = await authContext();
   const res = await fetch(`${API}/api${path}`, { method: "DELETE", headers });
   await handleAuthFailure(res, token);
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `Fehler ${res.status}`);
+  if (!res.ok) throw await responseError(res, `Fehler ${res.status}`);
   return res.json();
 }
 
@@ -225,7 +235,7 @@ export async function apiUpload(
   }
   const res = await fetch(`${API}/api/upload`, { method: "POST", headers, body: form });
   await handleAuthFailure(res, token);
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `Upload fehlgeschlagen (${res.status})`);
+  if (!res.ok) throw await responseError(res, `Upload fehlgeschlagen (${res.status})`);
   return res.json();
 }
 
@@ -236,7 +246,7 @@ export async function loginRequest(email: string, password: string): Promise<{ a
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: body.toString(),
   });
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "E-Mail oder Passwort falsch");
+  if (!res.ok) throw await responseError(res, "E-Mail oder Passwort falsch");
   return res.json();
 }
 

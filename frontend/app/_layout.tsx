@@ -103,6 +103,7 @@ export default function RootLayout() {
                   <Stack.Screen name="maschinen" options={{ presentation: "card" }} />
                   <Stack.Screen name="maschinen-admin" options={{ presentation: "card" }} />
                   <Stack.Screen name="einstellungen" options={{ presentation: "card" }} />
+                  <Stack.Screen name="systembetrieb" options={{ presentation: "card" }} />
                   <Stack.Screen name="zahlung" options={{ presentation: "card" }} />
                   </Stack></AppShell>
                 </CartProvider>

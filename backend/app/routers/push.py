@@ -15,6 +15,7 @@ from ..deps import (
     tenant_business_access,
 )
 from ..models import PushBroadcastIn
+from ..observability import report_operational_failure
 from ..tenant_access import TenantBusinessAccess
 
 PUSH_BASE_URL = "https://integrations.emergentagent.com"
@@ -96,8 +97,10 @@ async def push_broadcast(
     try:
         await send_push(recipients, data, idempotency_key=f"bc-{datetime.now(timezone.utc).timestamp()}")
         sent = len(recipients)
-    except Exception as e:
-        logger.warning(f"Push-Broadcast fehlgeschlagen: {e}")
+    except Exception:
+        await report_operational_failure(
+            access, logger, operation="push.broadcast", category="push_delivery",
+        )
         raise HTTPException(status_code=502, detail="Push konnte nicht gesendet werden (erst nach Deploy/Build aktiv).")
     return {"ok": True, "recipients": sent}
 

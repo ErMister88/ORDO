@@ -11,6 +11,7 @@ from typing import Annotated
 from ..core import api_router, logger
 from ..deps import public_tenant_business_access
 from ..models import NewsletterIn, ValidateCodeIn
+from ..observability import report_operational_failure
 from ..emailer import send_email, email_shell
 from ..tenant_access import TenantBusinessAccess
 
@@ -85,8 +86,10 @@ async def newsletter_subscribe(
         if enabled:
             try:
                 await _send_welcome(email, code, percent, existing.get("unsubToken", ""), body.baseUrl)
-            except Exception as e:
-                logger.warning(f"Newsletter-Willkommensmail fehlgeschlagen: {e}")
+            except Exception:
+                await report_operational_failure(
+                    access, logger, operation="newsletter.welcome_email", category="email_delivery",
+                )
         return {"ok": True, "confirmed": True, "code": code,
                 "percent": percent if enabled else 0, "enabled": enabled}
 
@@ -120,8 +123,10 @@ async def newsletter_subscribe(
         )
         html = email_shell("Bitte best&auml;tigen Sie Ihre Anmeldung", "Nur noch ein Klick.", inner)
         await send_email(to=email, subject="Bitte bestätigen Sie Ihre Newsletter-Anmeldung", html=html)
-    except Exception as e:
-        logger.warning(f"Newsletter-Bestätigungsmail fehlgeschlagen: {e}")
+    except Exception:
+        await report_operational_failure(
+            access, logger, operation="newsletter.confirmation_email", category="email_delivery",
+        )
 
     return {"ok": True, "pending": True}
 
@@ -162,8 +167,10 @@ async def newsletter_confirm(
         )
         try:
             await _send_welcome(sub["email"], code, percent, unsub_token)
-        except Exception as e:
-            logger.warning(f"Newsletter-Willkommensmail fehlgeschlagen: {e}")
+        except Exception:
+            await report_operational_failure(
+                access, logger, operation="newsletter.welcome_email", category="email_delivery",
+            )
     else:
         code = sub["code"]
     return _confirm_page(

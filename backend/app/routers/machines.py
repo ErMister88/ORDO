@@ -16,6 +16,7 @@ from ..models import MachineIn, MachineRequestIn, MachineTermsIn, MachineRespond
 from ..emailer import send_email, email_shell
 from ..tenant_access import TenantBusinessAccess
 from ..money import MoneyError, amount_minor, currency_code, from_minor, to_minor
+from ..observability import report_operational_failure
 from ..pricing_engine import PricingEngine, PricingError
 from ..idempotency import IdempotencyService
 from ..payment_integrity import checkout_return_urls, create_stripe_checkout, PaymentIntegrityError
@@ -202,8 +203,10 @@ async def create_machine_request(
             )
             await send_email(to=doc["customer"]["email"], subject=f"Ihre Maschinen-Anfrage {rid}",
                              html=email_shell("Anfrage eingegangen", "Wir melden uns mit einem Angebot.", inner))
-        except Exception as e:
-            logger.warning(f"Anfrage-Mail fehlgeschlagen: {e}")
+        except Exception:
+            await report_operational_failure(
+                access, logger, operation="machine.request_email", category="email_delivery",
+            )
     return strip_id(doc)
 
 
@@ -326,8 +329,10 @@ async def set_machine_terms(
         try:
             await send_email(to=email, subject=f"Ihr Angebot {req_id} – {r['machineName']}",
                              html=email_shell("Ihr persönliches Angebot", "Jetzt in der App ansehen & annehmen.", inner))
-        except Exception as e:
-            logger.warning(f"Angebots-Mail fehlgeschlagen: {e}")
+        except Exception:
+            await report_operational_failure(
+                access, logger, operation="machine.offer_email", category="email_delivery",
+            )
     return strip_id(await access.machine_requests.find_one({"id": req_id}))
 
 
@@ -497,8 +502,10 @@ async def respond_machine_offer(
         inner = f"<p style='margin:0;color:#3A4256'>{text}</p>"
         await send_email(to=r["customer"]["email"], subject=subject,
                          html=email_shell(headline, "Maschinen-Anfrage", inner))
-    except Exception as e:
-        logger.warning(f"Antwort-Mail fehlgeschlagen: {e}")
+    except Exception:
+        await report_operational_failure(
+            access, logger, operation="machine.response_email", category="email_delivery",
+        )
     return strip_id(await access.machine_requests.find_one({"id": req_id}))
 
 

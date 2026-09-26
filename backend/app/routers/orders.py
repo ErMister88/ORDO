@@ -12,6 +12,7 @@ from ..deps import current_user, require_roles, tenant_business_access, visible_
 from ..models import OrderCreate, OrderStatusIn, OrderItemIn  # noqa: F401
 from ..emailer import send_email, email_shell, company_recipient
 from ..money import from_minor
+from ..observability import report_operational_failure
 from ..pricing_engine import PricingEngine, PricingError
 from ..snapshots import items_total_minor, redact_internal_snapshot_fields
 from ..tenant_access import TenantBusinessAccess
@@ -263,8 +264,10 @@ async def set_order_status(
                 )
                 html = email_shell("Bestellung versendet", "Ihre Lieferung ist auf dem Weg.", inner)
                 await send_email(to=email, subject=f"Bestellung {o['id']} ist unterwegs", html=html)
-        except Exception as e:
-            logger.warning(f"E-Mail (Bestellung versendet) fehlgeschlagen: {e}")
+        except Exception:
+            await report_operational_failure(
+                access, logger, operation="order.shipment_email", category="email_delivery",
+            )
     return {"ok": True, "status": body.status}
 
 

@@ -15,6 +15,7 @@ from .auth_security import (
 )
 from .core import Role, db, oauth2_scheme
 from .tenant_access import TenantBusinessAccess
+from .observability import bind_tenant_context
 from .tenancy import (
     MembershipTenantResolver,
     MongoMembershipDirectory,
@@ -76,6 +77,7 @@ async def resolve_membership_context(
 
 
 def membership_principal(identity: dict, context: TenantContext) -> dict:
+    bind_tenant_context(context)
     principal = dict(identity)
     principal.pop("_token_payload", None)
     principal["role"] = context.role
@@ -207,7 +209,9 @@ async def _resolve_tenant_context(actor_user_id: str | None = None) -> TenantCon
 
 
 async def public_tenant_context() -> TenantContext:
-    return await _resolve_public_tenant_context()
+    context = await _resolve_public_tenant_context()
+    bind_tenant_context(context)
+    return context
 
 
 async def current_tenant_context(
@@ -219,6 +223,7 @@ async def current_tenant_context(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Keine aktive Tenant-Mitgliedschaft",
         )
+    bind_tenant_context(context)
     return context
 
 

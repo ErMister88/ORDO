@@ -10,6 +10,7 @@ from .tenancy import TenantContext
 
 TENANT_SCOPED_BUSINESS_COLLECTIONS = frozenset({
     "audit_log",
+    "background_jobs",
     "companies",
     "contracts",
     "customer_activities",
@@ -39,6 +40,8 @@ TENANT_SCOPED_BUSINESS_COLLECTIONS = frozenset({
     "shop_orders",
     "shop_collections",
     "subscriptions",
+    "reconciliation_runs",
+    "technical_errors",
     "tenant_memberships",
     "uploads",
 })
@@ -158,6 +161,7 @@ class TenantBusinessAccess:
     def __init__(self, database, context: TenantContext) -> None:
         self.context = context
         self.audit_log = TenantScopedCollection(database, "audit_log", context)
+        self.background_jobs = TenantScopedCollection(database, "background_jobs", context)
         self.companies = TenantScopedCollection(database, "companies", context)
         self.contracts = TenantScopedCollection(database, "contracts", context)
         self.customer_activities = TenantScopedCollection(database, "customer_activities", context)
@@ -187,5 +191,7 @@ class TenantBusinessAccess:
         self.shop_orders = TenantScopedCollection(database, "shop_orders", context)
         self.shop_collections = TenantScopedCollection(database, "shop_collections", context)
         self.subscriptions = TenantScopedCollection(database, "subscriptions", context)
+        self.reconciliation_runs = TenantScopedCollection(database, "reconciliation_runs", context)
+        self.technical_errors = TenantScopedCollection(database, "technical_errors", context)
         self.tenant_memberships = TenantScopedCollection(database, "tenant_memberships", context)
         self.uploads = TenantScopedCollection(database, "uploads", context)
