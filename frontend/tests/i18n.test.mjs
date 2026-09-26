@@ -36,6 +36,8 @@ test("critical B2C, B2B, admin and payment UI has translations", () => {
     "Kundenportal",
     "B2C-Shop",
     "Warenkorb",
+    "Einlösen",
+    "AGB",
     "Jetzt bezahlen",
     "Zahlung wird bestätigt",
     "Zahlung bestätigt",

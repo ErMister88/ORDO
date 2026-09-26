@@ -27,7 +27,7 @@ import { Card, Input, Button, SectionTitle, Muted } from "@/src/components/ui";
 import { LocalizedText as Text, localizedAlert, useI18n } from "@/src/i18n";
 
 export default function Warenkorb() {
-  const { tf } = useI18n();
+  const { tf, language } = useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const router = useRouter();
@@ -365,7 +365,7 @@ export default function Warenkorb() {
                   <Text style={styles.termsLink} onPress={() => router.push("/legal/agb")}>AGB</Text>
                   {" "}und habe die{" "}
                   <Text style={styles.termsLink} onPress={() => router.push("/legal/widerruf")}>Widerrufsbelehrung</Text>
-                  {" "}zur Kenntnis genommen.
+                  {language === "de" ? " zur Kenntnis genommen." : "."}
                 </Text>
               </Pressable>
 
