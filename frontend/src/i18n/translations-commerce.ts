@@ -19,6 +19,8 @@ export const commerceTranslations: Record<string, Translation> = {
   "Kategorie": { it: "Categoria", en: "Category" },
   "Produkt": { it: "Prodotto", en: "Product" },
   "Grundpreis {price} / {unit}": { it: "Prezzo unitario {price} / {unit}", en: "Unit price {price} / {unit}" },
+  "Stück": { it: "pezzo", en: "piece" },
+  "Postleitzahl": { it: "Codice postale", en: "Postcode" },
   "Derzeit nicht verfügbar": { it: "Attualmente non disponibile", en: "Currently unavailable" },
   "In den Warenkorb": { it: "Aggiungi al carrello", en: "Add to basket" },
   "Details ansehen": { it: "Vedi dettagli", en: "View details" },

@@ -158,7 +158,7 @@ export default function ShopKonto() {
                 <Input testID="addr-street" value={addr.street} onChangeText={setA("street")} placeholder="Straße & Nr." style={{ marginTop: 8 }} />
                 <View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
                   <View style={{ flex: 1 }}>
-                    <Input testID="addr-zip" value={addr.zip} onChangeText={setA("zip")} placeholder="PLZ" keyboardType="numeric" />
+                    <Input testID="addr-zip" value={addr.zip} onChangeText={setA("zip")} placeholder={tf("Postleitzahl", {})} keyboardType="numeric" />
                   </View>
                   <View style={{ flex: 2 }}>
                     <Input testID="addr-city" value={addr.city} onChangeText={setA("city")} placeholder="Ort" />

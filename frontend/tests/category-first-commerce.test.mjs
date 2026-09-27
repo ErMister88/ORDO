@@ -73,7 +73,7 @@ test("new commerce copy has DE IT EN catalogue coverage", () => {
   const index = read("src/i18n/index.tsx");
   const translations = read("src/i18n/translations-commerce.ts");
   assert.match(index, /commerceTranslations/);
-  for (const key of ["Gute Produkte. Klar sortiert.", "In den Warenkorb", "Kostenloser Versand erreicht.", "Commerce-Verwaltung", "Variante wählen"]) {
+  for (const key of ["Gute Produkte. Klar sortiert.", "In den Warenkorb", "Kostenloser Versand erreicht.", "Commerce-Verwaltung", "Variante wählen", "Stück", "Postleitzahl"]) {
     const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     assert.match(translations, new RegExp(escaped));
   }

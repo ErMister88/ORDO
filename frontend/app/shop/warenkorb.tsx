@@ -265,7 +265,10 @@ export default function Warenkorb() {
                         {l.p.brand} {l.p.name}
                       </Text>
                       {l.variantName ? <Muted>{l.variantName}</Muted> : null}
-                      <Muted>{tf("{price} /{unit} inkl. MwSt.", { price: euro(quoteLines[l.productId]?.finalUnitPrice ?? l.p.b2cPrice), unit: l.p.unit })}</Muted>
+                      <Muted>{tf("{price} /{unit} inkl. MwSt.", {
+                        price: euro(quoteLines[l.productId]?.finalUnitPrice ?? l.p.b2cPrice),
+                        unit: l.p.unit === "piece" ? tf("Stück", {}) : l.p.unit,
+                      })}</Muted>
                     </View>
                     <Pressable testID={`cart-minus-${l.productId}`} style={styles.step} onPress={() => cart.setQty(l.productId, l.qty - 1)} hitSlop={6}>
                       <Minus size={14} color={colors.onSurface} weight="bold" />
@@ -351,7 +354,7 @@ export default function Warenkorb() {
                 <Input testID="cust-street" value={form.street} onChangeText={set("street")} placeholder="Straße & Nr." style={{ marginTop: 8 }} />
                 <View style={styles.rowGap}>
                   <View style={{ flex: 1 }}>
-                    <Input testID="cust-zip" value={form.zip} onChangeText={set("zip")} placeholder="PLZ" keyboardType="numeric" />
+                    <Input testID="cust-zip" value={form.zip} onChangeText={set("zip")} placeholder={tf("Postleitzahl", {})} keyboardType="numeric" />
                   </View>
                   <View style={{ flex: 2 }}>
                     <Input testID="cust-city" value={form.city} onChangeText={set("city")} placeholder="Ort" />
