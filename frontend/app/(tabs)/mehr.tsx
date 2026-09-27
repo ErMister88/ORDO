@@ -162,6 +162,15 @@ export default function Mehr() {
                 </View>
               </Card>
             </Pressable>
+            <Pressable testID="link-commerce-admin" onPress={() => router.push("/commerce-admin")}>
+              <Card>
+                <View style={styles.linkRow}>
+                  <Storefront size={20} color={colors.brandPrimary} weight="bold" />
+                  <Text style={styles.linkText}>Commerce-Katalog verwalten</Text>
+                  <CaretRight size={18} color={colors.muted} />
+                </View>
+              </Card>
+            </Pressable>
             <Pressable testID="link-business-settings" onPress={() => router.push("/einstellungen")}>
               <Card>
                 <View style={styles.linkRow}>

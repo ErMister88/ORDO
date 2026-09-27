@@ -211,8 +211,8 @@ def test_complete_validator_includes_database_and_exact_schema(monkeypatch):
         })
     report = run(build_report(database))
     assert report["status"] == "READY"
-    assert report["runtime"]["capabilities"]["schema"]["expectedVersion"] == 14
-    assert report["runtime"]["capabilities"]["schema"]["appliedVersion"] == 14
+    assert report["runtime"]["capabilities"]["schema"]["expectedVersion"] == 15
+    assert report["runtime"]["capabilities"]["schema"]["appliedVersion"] == 15
 
 
 def test_pagination_bounds_and_offset_are_enforced_without_unbounded_reads():

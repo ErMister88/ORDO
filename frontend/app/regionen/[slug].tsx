@@ -1,0 +1,8 @@
+import { useLocalSearchParams } from "expo-router";
+
+import { CatalogScreen } from "@/src/shop/catalog-screen";
+
+export default function RegionCatalog() {
+  const { slug } = useLocalSearchParams<{ slug: string }>();
+  return <CatalogScreen dimension="region" reference={slug} />;
+}

@@ -13,7 +13,7 @@ from .runtime_security import RuntimeSecurityMiddleware
 from .routers import (  # noqa: F401,E402
     auth, users, products, pricing, companies, offers, orders, invoices, dashboard, analytics,
     subscriptions, billing, payments, audit, shop, newsletter, push, machines, crm,
-    business_config, operations, stripe_webhooks, files, notifications,
+    business_config, commerce, operations, stripe_webhooks, files, notifications,
 )
 
 import os

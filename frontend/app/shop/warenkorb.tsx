@@ -10,10 +10,11 @@ import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as WebBrowser from "expo-web-browser";
+import { Image } from "expo-image";
 import { ArrowLeft, Minus, Plus, Trash, CheckCircle, CheckSquare, Square } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
-import { apiGet, apiPost, apiPostIdempotent } from "@/src/api/client";
+import { apiGet, apiPost, apiPostIdempotent, fileUrl } from "@/src/api/client";
 import { euro } from "@/src/lib/format";
 import { useCart } from "@/src/shop/cart";
 import { shopApi } from "@/src/shop/auth";
@@ -106,13 +107,15 @@ export default function Warenkorb() {
   (products.data ?? []).forEach((p: any) => (pMap[p.id] = p));
 
   const lines = useMemo(
-    () => cart.items.map((i) => ({ ...i, p: pMap[i.productId] })).filter((l) => l.p),
+    () => cart.items.map((i) => ({ ...i, p: pMap[i.productId] ?? i.product })).filter((l) => l.p),
     [cart.items, products.data],
   );
+  const subscriptionEligible = lines.length > 0 && lines.every((line) => line.p.subscriptionAllowed !== false);
+  useEffect(() => { if (!subscriptionEligible && subscription) setSubscription(false); }, [subscriptionEligible, subscription]);
   const quote = useQuery({
     queryKey: ["shop-quote", cart.items, promo?.code ?? "", subscription],
     queryFn: () => apiPost("/shop/quote", {
-      items: cart.items.map((i) => ({ productId: i.productId, qty: i.qty })),
+      items: cart.items.map((i) => ({ productId: i.productId, qty: i.qty, variantId: i.variantId })),
       promoCode: promo?.code, subscription,
     }),
     enabled: cart.items.length > 0,
@@ -178,7 +181,7 @@ export default function Warenkorb() {
     setBusy(true);
     try {
       const order = await shopApi.createOrder({
-        items: cart.items.map((i) => ({ productId: i.productId, qty: i.qty })),
+        items: cart.items.map((i) => ({ productId: i.productId, qty: i.qty, variantId: i.variantId })),
         customer: form,
         promoCode: promo?.code,
         subscription,
@@ -256,10 +259,12 @@ export default function Warenkorb() {
               <Card>
                 {lines.map((l) => (
                   <View key={l.productId} style={styles.line} testID={`cart-line-${l.productId}`}>
+                    {l.p.imageUrl ? <Image source={{ uri: fileUrl(l.p.imageUrl) }} style={styles.lineImage} contentFit="cover" /> : null}
                     <View style={{ flex: 1 }}>
                       <Text style={styles.lName} numberOfLines={1}>
                         {l.p.brand} {l.p.name}
                       </Text>
+                      {l.variantName ? <Muted>{l.variantName}</Muted> : null}
                       <Muted>{tf("{price} /{unit} inkl. MwSt.", { price: euro(quoteLines[l.productId]?.finalUnitPrice ?? l.p.b2cPrice), unit: l.p.unit })}</Muted>
                     </View>
                     <Pressable testID={`cart-minus-${l.productId}`} style={styles.step} onPress={() => cart.setQty(l.productId, l.qty - 1)} hitSlop={6}>
@@ -289,8 +294,8 @@ export default function Warenkorb() {
                   <Text style={styles.sumVal}>{shipping === 0 ? "Gratis" : euro(shipping)}</Text>
                 </View>
                 {shipping > 0 ? (
-                  <Muted>{tf("Noch {amount} bis zum Gratis-Versand", { amount: euro(threshold - discounted) })}</Muted>
-                ) : null}
+                  <><Muted>{tf("Noch {amount} bis zum Gratis-Versand", { amount: euro(Math.max(0, threshold - discounted)) })}</Muted><View style={styles.shippingTrack}><View style={[styles.shippingProgress, { width: `${Math.min(100, threshold > 0 ? discounted / threshold * 100 : 100)}%` }]} /></View></>
+                ) : threshold > 0 ? <><Text style={styles.shippingReached}>Kostenloser Versand erreicht.</Text><View style={styles.shippingTrack}><View style={[styles.shippingProgress, { width: "100%" }]} /></View></> : null}
                 {Object.entries(vatByRate).map(([rate, amt]) => (
                   <View key={rate} style={styles.sumRow}>
                     <Text style={styles.vatLabel}>{tf("inkl. MwSt {rate}%", { rate })}</Text>
@@ -303,10 +308,10 @@ export default function Warenkorb() {
                 </View>
               </Card>
 
-              <Pressable testID="subscription-toggle" style={styles.termsRow} onPress={() => setSubscription((value) => !value)}>
+              {subscriptionEligible ? <Pressable testID="subscription-toggle" style={styles.termsRow} onPress={() => setSubscription((value) => !value)}>
                 {subscription ? <CheckSquare size={24} color={colors.brandPrimary} weight="fill" /> : <Square size={24} color={colors.muted} />}
                 <Text style={styles.termsText}>Als monatliches Abo bestellen. Der konfigurierte Abo-Rabatt wird serverseitig nach der Mengenstaffel berechnet.</Text>
-              </Pressable>
+              </Pressable> : null}
 
               <SectionTitle style={{ marginTop: 4 }}>Rabattcode</SectionTitle>
               <Card>
@@ -387,6 +392,7 @@ const useStyles = makeStyles((c) => ({
   title: { fontSize: 20, fontWeight: "800", color: c.onSurface },
   content: { padding: 20, gap: 12, paddingBottom: 40 },
   line: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: c.divider },
+  lineImage: { width: 52, height: 52, borderRadius: 9, backgroundColor: c.surfaceTertiary },
   lName: { fontSize: 15, fontWeight: "700", color: c.onSurface },
   step: { width: 30, height: 30, borderRadius: 8, backgroundColor: c.surfaceTertiary, alignItems: "center", justifyContent: "center" },
   qty: { minWidth: 22, textAlign: "center", fontSize: 15, fontWeight: "800", color: c.onSurface },
@@ -397,6 +403,9 @@ const useStyles = makeStyles((c) => ({
   vatLabel: { fontSize: 12, color: c.muted, fontWeight: "600" },
   totalLabel: { fontSize: 16, fontWeight: "800", color: c.onSurface },
   totalVal: { fontSize: 20, fontWeight: "800", color: c.brandPrimary },
+  shippingTrack: { height: 7, borderRadius: 999, backgroundColor: c.surfaceTertiary, overflow: "hidden", marginTop: 7 },
+  shippingProgress: { height: "100%", borderRadius: 999, backgroundColor: c.success },
+  shippingReached: { color: c.success, fontWeight: "800", fontSize: 13, marginTop: 7 },
   rowGap: { flexDirection: "row", gap: 8, marginTop: 8 },
   doneTitle: { fontSize: 18, fontWeight: "800", color: c.onSurface, marginTop: 8 },
   promoRow: { flexDirection: "row", gap: 8, alignItems: "center" },

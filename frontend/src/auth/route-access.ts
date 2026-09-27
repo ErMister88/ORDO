@@ -1,12 +1,13 @@
 export type InternalRole = "admin" | "sales" | "customer";
 
-const PUBLIC_ROUTES = ["/login", "/shop", "/legal", "/passwort-vergessen", "/zahlung"] as const;
+const PUBLIC_ROUTES = ["/login", "/shop", "/marken", "/collections", "/regionen", "/legal", "/passwort-vergessen", "/zahlung"] as const;
 const ADMIN_ROUTES = [
   "/produkte",
   "/benutzer",
   "/abos",
   "/audit",
   "/shop-admin",
+  "/commerce-admin",
   "/maschinen-admin",
   "/vertrieb",
   "/einstellungen",
@@ -36,12 +37,12 @@ function matches(path: string, route: string): boolean {
 
 export function isPublicRoute(path: string): boolean {
   const normalized = normalizePath(path);
-  return PUBLIC_ROUTES.some((route) => matches(normalized, route));
+  return PUBLIC_ROUTES.some((route) => matches(normalized, route)) || /^\/produkte\/[^/]+$/.test(normalized);
 }
 
 export function canAccessRoute(path: string, role: InternalRole | null): boolean {
   const normalized = normalizePath(path);
-  if (PUBLIC_ROUTES.some((route) => matches(normalized, route))) return true;
+  if (isPublicRoute(normalized)) return true;
   if (!role) return false;
   if (ADMIN_ROUTES.some((route) => matches(normalized, route))) return role === "admin";
   if (STAFF_ROUTES.some((route) => matches(normalized, route))) {

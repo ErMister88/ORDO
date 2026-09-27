@@ -34,6 +34,14 @@ test("B2C and anonymous users cannot enter internal routes", () => {
   assert.equal(canAccessRoute("/", null), false);
 });
 
+test("public commerce detail routes stay public without exposing the admin product list", () => {
+  assert.equal(canAccessRoute("/produkte/aiello-classica", null), true);
+  assert.equal(canAccessRoute("/marken/aiello", null), true);
+  assert.equal(canAccessRoute("/collections/bestseller", null), true);
+  assert.equal(canAccessRoute("/regionen/sicilia", null), true);
+  assert.equal(canAccessRoute("/produkte", null), false);
+});
+
 test("route groups, query strings and unknown routes cannot bypass the matrix", () => {
   assert.equal(canAccessRoute("/(tabs)/kunden?tenantId=other", "customer"), false);
   assert.equal(canAccessRoute("/(tabs)/angebote?tenantId=other", "customer"), true);

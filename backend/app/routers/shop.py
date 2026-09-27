@@ -92,6 +92,36 @@ async def _settings(access: TenantBusinessAccess):
 
 async def _quote(body: ShopQuoteIn | ShopOrderIn, access: TenantBusinessAccess) -> BasketQuote:
     settings = await _settings(access)
+    if body.subscription:
+        product_ids = list(dict.fromkeys(item.productId for item in body.items))
+        eligible = await access.products.count_documents({
+            "id": {"$in": product_ids}, "active": {"$ne": False},
+            "b2cAvailable": {"$ne": False}, "subscriptionAllowed": {"$ne": False},
+        })
+        if eligible != len(product_ids):
+            raise HTTPException(status_code=409, detail="Mindestens ein Produkt ist nicht als Abo verfügbar")
+    variant_choices: dict[str, set[str | None]] = {}
+    for item in body.items:
+        variant_choices.setdefault(item.productId, set()).add(item.variantId)
+        if len(variant_choices[item.productId]) > 1:
+            raise HTTPException(status_code=409, detail="Ein Produkt kann nicht mit mehreren Varianten in derselben Preiszeile bestellt werden")
+    product_ids = list(variant_choices)
+    rows = await access.products.find({"id": {"$in": product_ids}, "active": {"$ne": False}, "b2cAvailable": {"$ne": False}}).to_list(len(product_ids))
+    products = {row["id"]: row for row in rows}
+    for product_id, choices in variant_choices.items():
+        product = products.get(product_id)
+        if not product:
+            continue
+        if product.get("availability") == "unavailable":
+            raise HTTPException(status_code=409, detail="Produkt ist nicht verfügbar")
+        active_variants = [row for row in product.get("variants", []) if row.get("active") is not False]
+        variant_id = next(iter(choices))
+        if active_variants and variant_id is None:
+            raise HTTPException(status_code=409, detail="Bitte eine Produktvariante auswählen")
+        if variant_id is not None:
+            variant = next((row for row in active_variants if row.get("id") == variant_id), None)
+            if not variant or variant.get("availability") == "unavailable":
+                raise HTTPException(status_code=409, detail="Produktvariante ist nicht verfügbar")
     from .newsletter import resolve_discount
     percent = await resolve_discount(body.promoCode, access)
     try:
@@ -128,11 +158,13 @@ async def shop_products(
             "contentUnit": p.get("contentUnit", ""), "minimumOrderQuantity": p.get("minimumOrderQuantity"),
             "directPurchaseAllowed": p.get("directPurchaseAllowed", True),
             "financingRequestAllowed": p.get("financingRequestAllowed", False),
+            "subscriptionAllowed": p.get("subscriptionAllowed", True),
             "imageUrl": p.get("imageUrl", ""), "description": p.get("description", ""),
             "b2cPrice": quote.public()["baseUnitPrice"],
             "b2cPriceMinor": quote.base_unit_price_minor,
             "currency": access.context.default_currency,
-            "taxRate": quote.tax_rate, "stock": p.get("stock"),
+            "taxRate": quote.tax_rate,
+            "availability": "unavailable" if isinstance(p.get("stock"), (int, float)) and p["stock"] <= 0 else p.get("availability", "available"),
             "b2cTiers": [{"minQty": float(t["minQty"]), "price": from_minor(t["priceMinor"]),
                            "priceMinor": t["priceMinor"]}
                           for t in engine._validated_b2c_tiers(p)],
@@ -216,8 +248,16 @@ async def create_shop_order(
     basket = await _quote(body, access)
     currency = basket.currency
     lines = []
+    requested_variants = {item.productId: item.variantId for item in body.items if item.variantId}
     for product, quote in basket.lines:
         snapshot = quote.snapshot(product)
+        variant_id = requested_variants.get(product["id"])
+        if variant_id:
+            variant = next(row for row in product.get("variants", []) if row.get("id") == variant_id)
+            snapshot["variantId"] = variant_id
+            snapshot["variantName"] = variant.get("name", "")
+            snapshot["variantSku"] = variant.get("sku", "")
+            snapshot["variantEan"] = variant.get("ean", "")
         snapshot["name"] = snapshot["productName"]
         snapshot["taxMinor"] = included_tax_minor(snapshot["lineTotalMinor"], quote.tax_rate)
         lines.append(snapshot)

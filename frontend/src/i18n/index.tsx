@@ -9,12 +9,14 @@ import {
 
 import { storage } from "@/src/utils/storage";
 import { extraTranslations } from "./translations-extra";
+import { commerceTranslations } from "./translations-commerce";
 import { coreTranslations, SupportedLanguage, type Translation } from "./translations";
 export type { SupportedLanguage } from "./translations";
 
 export const translations: Record<string, Translation> = {
   ...coreTranslations,
   ...extraTranslations,
+  ...commerceTranslations,
 };
 
 const LANGUAGE_STORAGE_KEY = "ordo_ui_language";

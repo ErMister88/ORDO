@@ -89,6 +89,14 @@ class AsyncCursor:
         self._cursor = self._cursor.sort(*args, **kwargs)
         return self
 
+    def skip(self, value):
+        self._cursor = self._cursor.skip(value)
+        return self
+
+    def limit(self, value):
+        self._cursor = self._cursor.limit(value)
+        return self
+
     async def to_list(self, length=None):
         documents = list(self._cursor)
         return documents if length is None else documents[:length]
@@ -1690,7 +1698,16 @@ def test_audit_callsites_are_explicitly_classified():
     assert sorted(tenant_calls) == sorted([
         ("business_config.py", "business_config.create"),
         ("business_config.py", "business_config.update"),
-        ("business_config.py", "business_config.archive"),
+            ("business_config.py", "business_config.archive"),
+            ("commerce.py", "commerce.category.create"),
+            ("commerce.py", "commerce.category.update"),
+            ("commerce.py", "commerce.attribute.create"),
+            ("commerce.py", "commerce.attribute.update"),
+            ("commerce.py", "commerce.bundle.create"),
+            ("commerce.py", "commerce.entity.archive"),
+            ("commerce.py", "commerce.entity.create"),
+            ("commerce.py", "commerce.entity.update"),
+            ("commerce.py", "commerce.homepage.update"),
         ("companies.py", "company.assignment"),
             ("companies.py", "company.create"),
             ("companies.py", "company.address.create"),

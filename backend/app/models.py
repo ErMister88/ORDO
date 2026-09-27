@@ -82,6 +82,25 @@ class DiscountTier(BaseModel):
     price: PositiveMoneyValue
 
 
+class ProductVariantIn(BaseModel):
+    id: str = Field(min_length=1, max_length=100)
+    name: str = Field(min_length=1, max_length=200)
+    sku: str = Field(default="", max_length=100)
+    ean: str = Field(default="", max_length=50)
+    weight: Optional[PositiveQuantity] = None
+    unit: str = Field(default="", max_length=50)
+    availability: Literal["available", "unavailable", "preorder"] = "available"
+    imageUrls: List[str] = Field(default_factory=list, max_length=20)
+    attributeValues: dict[str, Any] = Field(default_factory=dict)
+    active: bool = True
+
+
+class ProductImageIn(BaseModel):
+    url: str = Field(max_length=2_000)
+    sortOrder: int = Field(default=0, ge=-100_000, le=100_000)
+    isPrimary: bool = False
+
+
 class ProductIn(BaseModel):
     sku: str = Field(default="", max_length=100)
     ean: str = Field(default="", max_length=50)
@@ -89,7 +108,7 @@ class ProductIn(BaseModel):
     brandId: Optional[str] = None
     name: str = Field(max_length=200)
     categoryId: Optional[str] = None
-    collectionIds: List[str] = Field(default_factory=list)
+    collectionIds: List[str] = Field(default_factory=list, max_length=100)
     unit: str = "piece"
     packagingUnit: str = Field(default="", max_length=100)
     packageQuantity: Optional[PositiveQuantity] = None
@@ -113,6 +132,23 @@ class ProductIn(BaseModel):
     stock: Optional[float] = None
     b2cPrice: Optional[PositiveMoneyValue] = None
     active: bool = True
+    slug: str = Field(default="", max_length=200)
+    searchKeywords: List[str] = Field(default_factory=list, max_length=100)
+    attributeValues: dict[str, Any] = Field(default_factory=dict)
+    regionIds: List[str] = Field(default_factory=list, max_length=100)
+    shippingClassId: Optional[str] = None
+    availability: Literal["available", "unavailable", "preorder"] = "available"
+    quickAdd: bool = True
+    subscriptionAllowed: bool = True
+    subscriptionIntervals: List[str] = Field(default_factory=list, max_length=20)
+    variants: List[ProductVariantIn] = Field(default_factory=list, max_length=200)
+    images: List[ProductImageIn] = Field(default_factory=list, max_length=100)
+    relatedProductIds: List[str] = Field(default_factory=list, max_length=100)
+    recommendedProductIds: List[str] = Field(default_factory=list, max_length=100)
+    compatibleProductIds: List[str] = Field(default_factory=list, max_length=100)
+    foodInfo: dict[str, Any] = Field(default_factory=dict)
+    seoTitle: str = Field(default="", max_length=200)
+    seoDescription: str = Field(default="", max_length=500)
 
 
 class CustomerPriceIn(BaseModel):
@@ -187,6 +223,7 @@ class ShopCustomerIn(BaseModel):
 class ShopItemIn(BaseModel):
     productId: str
     qty: PositiveQuantity
+    variantId: Optional[str] = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class ShopQuoteIn(BaseModel):
@@ -391,6 +428,61 @@ class ProductCategoryIn(BaseModel):
     description: str = ""
     sortOrder: int = 0
     active: bool = True
+    parentId: Optional[str] = None
+    slug: str = Field(default="", max_length=200)
+    imageUrl: str = Field(default="", max_length=2_000)
+    seoTitle: str = Field(default="", max_length=200)
+    seoDescription: str = Field(default="", max_length=500)
+    defaultSort: Literal["relevance", "newest", "price_asc", "price_desc", "name"] = "relevance"
+
+
+class CommerceEntityIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    slug: str = Field(default="", max_length=200)
+    description: str = Field(default="", max_length=5_000)
+    imageUrl: str = Field(default="", max_length=2_000)
+    seoTitle: str = Field(default="", max_length=200)
+    seoDescription: str = Field(default="", max_length=500)
+    sortOrder: int = Field(default=0, ge=-100_000, le=100_000)
+    active: bool = True
+
+
+class CommerceAttributeIn(CommerceEntityIn):
+    key: str = Field(min_length=1, max_length=100)
+    valueType: Literal["text", "number", "boolean", "select", "multi_select"]
+    options: List[str] = Field(default_factory=list, max_length=500)
+    filterable: bool = False
+    public: bool = True
+    searchable: bool = False
+    categoryIds: List[str] = Field(default_factory=list, max_length=100)
+
+
+class CommerceBundleItemIn(BaseModel):
+    productId: str
+    variantId: Optional[str] = None
+    quantity: PositiveQuantity = 1
+
+
+class CommerceBundleIn(CommerceEntityIn):
+    items: List[CommerceBundleItemIn] = Field(default_factory=list, max_length=100)
+    startsAt: Optional[datetime] = None
+    endsAt: Optional[datetime] = None
+
+
+class CommerceHomepageBlockIn(BaseModel):
+    id: str = Field(default="", max_length=100)
+    type: Literal["hero", "categories", "collection", "products", "brands", "text_image"]
+    title: str = Field(default="", max_length=200)
+    text: str = Field(default="", max_length=2_000)
+    imageUrl: str = Field(default="", max_length=2_000)
+    targetId: Optional[str] = None
+    productIds: List[str] = Field(default_factory=list, max_length=100)
+    active: bool = True
+    sortOrder: int = Field(default=0, ge=-100_000, le=100_000)
+
+
+class CommerceHomepageIn(BaseModel):
+    blocks: List[CommerceHomepageBlockIn] = Field(default_factory=list, max_length=100)
 
 
 class BusinessClassificationIn(BaseModel):

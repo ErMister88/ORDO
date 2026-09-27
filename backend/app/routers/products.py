@@ -1,6 +1,8 @@
 """Products + image upload/serving."""
 import hashlib
 import secrets
+import re
+import unicodedata
 from pymongo.errors import DuplicateKeyError
 from fastapi import Depends, Header, HTTPException, Query
 from typing import Annotated, Optional
@@ -23,8 +25,11 @@ from ..tenant_access import TenantBusinessAccess
 from ..idempotency import IdempotencyService
 from ..pagination import bounded_list
 
-def _product_payload(body: ProductIn, currency: str) -> dict:
+def _product_payload(body: ProductIn, currency: str, tenant_id: str) -> dict:
     payload = body.model_dump()
+    payload["slug"] = _slug(body.slug or body.name)
+    payload["slugKey"] = f"{tenant_id}:{payload['slug']}"
+    payload["searchKeywords"] = list(dict.fromkeys(value.strip() for value in body.searchKeywords if value.strip()))
     payload.update({
         "currency": currency,
         "standardPriceMinor": to_minor(body.standardPrice),
@@ -44,11 +49,27 @@ def _product_payload(body: ProductIn, currency: str) -> dict:
     return payload
 
 
+def _slug(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode()
+    slug = re.sub(r"[^a-z0-9]+", "-", normalized.casefold()).strip("-")
+    if not slug or len(slug) > 200:
+        raise HTTPException(status_code=400, detail="Ungültiger Produkt-Slug")
+    return slug
+
+
 INTERNAL_PRODUCT_FIELDS = {
     "cost", "costMinor", "salesFloor", "salesFloorMinor",
     "absoluteFloor", "absoluteFloorMinor", "internalCosts", "margin", "profitability",
     "metadata",
+    "attributeValues",
 }
+
+
+def _public_taxonomy_row(row: dict) -> dict:
+    return {key: value for key, value in strip_id(row).items() if key not in {
+        "tenantId", "slugKey", "normalizedName", "createdBy", "updatedBy",
+        "createdAt", "updatedAt", "archivedAt", "internalNotes",
+    }}
 
 
 def _product_response(product: dict, role: str) -> dict:
@@ -70,12 +91,24 @@ async def _validate_product_references(access: TenantBusinessAccess, body: Produ
         raise HTTPException(status_code=400, detail="Produktname ist erforderlich")
     if not body.unit.strip():
         raise HTTPException(status_code=400, detail="Einheit ist erforderlich")
-    if body.categoryId and not await access.product_categories.find_one({"id": body.categoryId, "active": {"$ne": False}}):
-        raise HTTPException(status_code=400, detail="Kategorie ist nicht verfügbar")
+    category = None
+    category_lineage: set[str] = set()
+    if body.categoryId:
+        category = await access.product_categories.find_one({"id": body.categoryId, "active": {"$ne": False}})
+        if not category:
+            raise HTTPException(status_code=400, detail="Kategorie ist nicht verfügbar")
+        current = category
+        while current and current.get("id") not in category_lineage:
+            category_lineage.add(current["id"])
+            current = await access.product_categories.find_one({"id": current.get("parentId"), "active": {"$ne": False}}) if current.get("parentId") else None
     if body.brandId and not await access.business_brands.find_one(
         {"id": body.brandId, "active": {"$ne": False}}
     ):
         raise HTTPException(status_code=400, detail="Marke ist nicht verfügbar")
+    slug = _slug(body.slug or body.name)
+    slug_match = await access.products.find_one({"slug": slug})
+    if slug_match and slug_match.get("id") != product_id:
+        raise HTTPException(status_code=409, detail="Produkt-Slug ist bereits vergeben")
     collection_ids = list(dict.fromkeys(body.collectionIds))
     if len(collection_ids) != len(body.collectionIds):
         raise HTTPException(status_code=400, detail="Shop-Collections dürfen nicht doppelt zugeordnet werden")
@@ -90,6 +123,73 @@ async def _validate_product_references(access: TenantBusinessAccess, body: Produ
         existing = await access.products.find_one({"sku": sku})
         if existing and existing.get("id") != product_id:
             raise HTTPException(status_code=409, detail="Artikelnummer ist bereits vergeben")
+    if body.ean.strip():
+        existing = await access.products.find_one({"ean": body.ean.strip()})
+        if existing and existing.get("id") != product_id:
+            raise HTTPException(status_code=409, detail="EAN/GTIN ist bereits vergeben")
+    if body.regionIds and await access.commerce_regions.count_documents({"id": {"$in": list(set(body.regionIds))}, "active": {"$ne": False}}) != len(set(body.regionIds)):
+        raise HTTPException(status_code=400, detail="Region ist nicht verfügbar")
+    if body.shippingClassId and not await access.commerce_shipping_classes.find_one({"id": body.shippingClassId, "active": {"$ne": False}}):
+        raise HTTPException(status_code=400, detail="Versandklasse ist nicht verfügbar")
+    relation_ids = list(dict.fromkeys(body.relatedProductIds + body.recommendedProductIds + body.compatibleProductIds))
+    if product_id and product_id in relation_ids:
+        raise HTTPException(status_code=400, detail="Produkt kann nicht mit sich selbst verknüpft werden")
+    if relation_ids and await access.products.count_documents({"id": {"$in": relation_ids}}) != len(relation_ids):
+        raise HTTPException(status_code=400, detail="Produktbeziehung verweist auf unbekanntes Produkt")
+    attribute_keys = set(body.attributeValues)
+    for variant in body.variants:
+        attribute_keys.update(variant.attributeValues)
+    definitions = await access.commerce_attributes.find({"key": {"$in": list(attribute_keys)}}).to_list(500) if attribute_keys else []
+    if len(definitions) != len(attribute_keys):
+        raise HTTPException(status_code=400, detail="Produkt enthält unbekannte Attribute")
+    definitions_by_key = {definition["key"]: definition for definition in definitions}
+    for definition in definitions:
+        category_ids = definition.get("categoryIds", [])
+        if category_ids and not category_lineage.intersection(category_ids):
+            raise HTTPException(status_code=400, detail=f"Attribut {definition.get('name', definition['id'])} ist für diese Kategorie nicht freigegeben")
+    for values in [body.attributeValues, *(variant.attributeValues for variant in body.variants)]:
+        for key, value in values.items():
+            definition = definitions_by_key[key]
+            value_type = definition.get("valueType")
+            valid = (
+                (value_type == "text" and isinstance(value, str))
+                or (value_type == "number" and isinstance(value, (int, float)) and not isinstance(value, bool))
+                or (value_type == "boolean" and isinstance(value, bool))
+                or (value_type == "select" and isinstance(value, str) and value in definition.get("options", []))
+                or (value_type == "multi_select" and isinstance(value, list) and all(isinstance(item, str) and item in definition.get("options", []) for item in value))
+            )
+            if not valid:
+                raise HTTPException(status_code=400, detail=f"Ungültiger Wert für Attribut {definition.get('name', definition['id'])}")
+    variant_ids = set()
+    variant_skus = {body.sku.strip()} if body.sku.strip() else set()
+    variant_eans = {body.ean.strip()} if body.ean.strip() else set()
+    for variant_model in body.variants:
+        variant = variant_model.model_dump()
+        if not isinstance(variant.get("id"), str) or not variant["id"].strip():
+            raise HTTPException(status_code=400, detail="Jede Variante benötigt eine stabile ID")
+        if variant["id"] in variant_ids:
+            raise HTTPException(status_code=400, detail="Varianten-ID ist doppelt")
+        variant_ids.add(variant["id"])
+        for field, seen in (("sku", variant_skus), ("ean", variant_eans)):
+            value = str(variant.get(field) or "").strip()
+            if value and value in seen:
+                raise HTTPException(status_code=400, detail=f"Varianten-{field.upper()} ist doppelt")
+            if value:
+                seen.add(value)
+    identifier_queries = []
+    if variant_skus:
+        identifier_queries.extend([{"sku": {"$in": list(variant_skus)}}, {"variants.sku": {"$in": list(variant_skus)}}])
+    if variant_eans:
+        identifier_queries.extend([{"ean": {"$in": list(variant_eans)}}, {"variants.ean": {"$in": list(variant_eans)}}])
+    if identifier_queries:
+        candidates = await access.products.find({"$or": identifier_queries}).to_list(500)
+        for candidate in candidates:
+            if candidate.get("id") == product_id:
+                continue
+            existing_skus = {str(candidate.get("sku") or "").strip(), *(str(row.get("sku") or "").strip() for row in candidate.get("variants", []))}
+            existing_eans = {str(candidate.get("ean") or "").strip(), *(str(row.get("ean") or "").strip() for row in candidate.get("variants", []))}
+            if variant_skus.intersection(existing_skus) or variant_eans.intersection(existing_eans):
+                raise HTTPException(status_code=409, detail="SKU oder EAN/GTIN ist bereits vergeben")
 
 
 @api_router.get("/products")
@@ -98,6 +198,7 @@ async def get_products(
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
     limit: Annotated[int, Query(ge=1, le=500)] = 200,
     offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
+    q: Annotated[str, Query(max_length=200)] = "",
 ):
     # Wholesale catalog is B2B-only. Shop customers (shopusers) and any other
     # role must never receive cost/floor/standard pricing. They use /shop/products.
@@ -107,6 +208,12 @@ async def get_products(
         "active": {"$ne": False},
         "b2bAvailable": {"$ne": False},
     }
+    terms = [term for term in re.split(r"\s+", q.strip()) if term][:8]
+    if terms:
+        query["$and"] = [{"$or": [
+            {field: {"$regex": re.escape(term), "$options": "i"}}
+            for field in ("name", "brand", "sku", "ean", "description", "searchKeywords")
+        ]} for term in terms]
     prods = await bounded_list(
         access.products.find(query).sort([("name", 1), ("id", 1)]),
         limit=limit, offset=offset,
@@ -122,7 +229,7 @@ async def create_product(
 ):
     await _validate_product_references(access, body)
     seq = await next_seq("product")
-    payload = _product_payload(body, access.context.default_currency)
+    payload = _product_payload(body, access.context.default_currency, access.context.tenant_id)
     if body.brandId:
         payload["brand"] = (await access.business_brands.find_one({"id": body.brandId}))["name"]
     prod = {"id": f"p{seq}", **payload}
@@ -139,7 +246,7 @@ async def update_product(
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
 ):
     await _validate_product_references(access, body, product_id)
-    payload = _product_payload(body, access.context.default_currency)
+    payload = _product_payload(body, access.context.default_currency, access.context.tenant_id)
     if body.brandId:
         payload["brand"] = (await access.business_brands.find_one({"id": body.brandId}))["name"]
     if "metadata" not in body.model_fields_set:
@@ -200,7 +307,7 @@ async def list_public_product_categories(
     access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
 ):
     rows = await access.product_categories.find({"active": {"$ne": False}}).sort("name", 1).to_list(1000)
-    return [strip_id(row) for row in rows]
+    return [_public_taxonomy_row(row) for row in rows]
 
 
 @api_router.get("/shop/collections")
@@ -208,7 +315,7 @@ async def list_public_shop_collections(
     access: Annotated[TenantBusinessAccess, Depends(public_tenant_business_access)],
 ):
     rows = await access.shop_collections.find({"active": {"$ne": False}}).sort("sortOrder", 1).to_list(1000)
-    return [strip_id(row) for row in rows]
+    return [_public_taxonomy_row(row) for row in rows]
 
 
 @api_router.get("/shop-collections")
@@ -291,7 +398,13 @@ async def create_product_category(
         raise HTTPException(status_code=400, detail="Kategoriename ist erforderlich")
     if await access.product_categories.find_one({"name": name}):
         raise HTTPException(status_code=409, detail="Kategorie existiert bereits")
-    row = {"id": "cat-" + secrets.token_hex(6), **body.model_dump(), "name": name,
+    slug = _slug(body.slug or name)
+    if await access.product_categories.find_one({"slug": slug}):
+        raise HTTPException(status_code=409, detail="Kategorie-Slug existiert bereits")
+    if body.parentId and not await access.product_categories.find_one({"id": body.parentId}):
+        raise HTTPException(status_code=400, detail="Übergeordnete Kategorie nicht gefunden")
+    row = {"id": "cat-" + secrets.token_hex(6), **body.model_dump(), "name": name, "slug": slug,
+           "slugKey": f"{access.context.tenant_id}:{slug}",
            "createdAt": datetime.now(timezone.utc).isoformat()}
     await access.product_categories.insert_one(row)
     await tenant_audit(access, user, "product_category.create", row["id"], {"name": name})
@@ -308,7 +421,21 @@ async def update_product_category(
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Kategoriename ist erforderlich")
-    result = await access.product_categories.update_one({"id": category_id}, {"$set": {**body.model_dump(), "name": name}})
+    slug = _slug(body.slug or name)
+    duplicate = await access.product_categories.find_one({"slug": slug})
+    if duplicate and duplicate.get("id") != category_id:
+        raise HTTPException(status_code=409, detail="Kategorie-Slug existiert bereits")
+    current = body.parentId
+    visited = set()
+    while current:
+        if current == category_id or current in visited:
+            raise HTTPException(status_code=400, detail="Kategoriehierarchie enthält einen Zyklus")
+        visited.add(current)
+        parent = await access.product_categories.find_one({"id": current})
+        if not parent:
+            raise HTTPException(status_code=400, detail="Übergeordnete Kategorie nicht gefunden")
+        current = parent.get("parentId")
+    result = await access.product_categories.update_one({"id": category_id}, {"$set": {**body.model_dump(), "name": name, "slug": slug, "slugKey": f"{access.context.tenant_id}:{slug}"}})
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Kategorie nicht gefunden")
     row = await access.product_categories.find_one({"id": category_id})
@@ -323,6 +450,8 @@ async def archive_product_category(
     user: Annotated[dict, Depends(require_roles("admin"))],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
 ):
+    if await access.product_categories.find_one({"parentId": category_id, "active": {"$ne": False}}):
+        raise HTTPException(status_code=409, detail="Kategorie mit aktiven Unterkategorien kann nicht archiviert werden")
     result = await access.product_categories.update_one(
         {"id": category_id}, {"$set": {"active": False}}
     )
