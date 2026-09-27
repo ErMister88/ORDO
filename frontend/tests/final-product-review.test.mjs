@@ -9,7 +9,9 @@ test("quick create is role-aware and available on compact layouts without header
   assert.match(shell, /MobileQuickCreate/);
   assert.match(shell, /global-new-mobile/);
   assert.match(shell, /bottom: 76/);
-  assert.match(shell, /languageSwitcher:[\s\S]*top: 10/);
+  assert.match(shell, /languageSwitcherFloating:[\s\S]*top: 10/);
+  assert.match(shell, /publicLanguageBar/);
+  assert.match(shell, /publicRoute \? <View style=\{styles\.publicLanguageBar\}>/);
   assert.match(shell, /role === "admin"/);
   assert.match(shell, /role === "admin" \|\| role === "sales"/);
   assert.match(shell, /actions\.length/);

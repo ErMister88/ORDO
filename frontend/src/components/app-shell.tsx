@@ -85,7 +85,12 @@ export function AppShell({ children }: { children: ReactNode }) {
     );
   }
   if (!desktop || !user || publicRoute) {
-    return <View style={{ flex: 1 }}><View style={{ flex: 1 }}>{children}</View>{user && !publicRoute ? <><NotificationBell />{(user.role === "admin" || user.role === "sales") ? <MobileQuickCreate role={user.role} /> : null}</> : null}<LanguageSwitcher /></View>;
+    return <View style={{ flex: 1 }}>
+      {publicRoute ? <View style={styles.publicLanguageBar}><LanguageSwitcher floating={false} /></View> : null}
+      <View style={{ flex: 1 }}>{children}</View>
+      {user && !publicRoute ? <><NotificationBell />{(user.role === "admin" || user.role === "sales") ? <MobileQuickCreate role={user.role} /> : null}</> : null}
+      {!publicRoute ? <LanguageSwitcher /> : null}
+    </View>;
   }
   return <View style={{ flex: 1, flexDirection: "row" }}><DesktopSidebar /><View style={{ flex: 1 }}>{children}</View><NotificationBell /><LanguageSwitcher /></View>;
 }
@@ -132,11 +137,11 @@ function NotificationBell() {
   </Pressable>;
 }
 
-function LanguageSwitcher() {
+function LanguageSwitcher({ floating = true }: { floating?: boolean }) {
   const styles = useStyles();
   const { language, setLanguage, t } = useI18n();
   return (
-    <View style={styles.languageSwitcher} testID="language-switcher" accessibilityLabel={t("Sprache")}>
+    <View style={[styles.languageSwitcher, floating && styles.languageSwitcherFloating]} testID="language-switcher" accessibilityLabel={t("Sprache")}>
       {(Object.keys(languageLabels) as SupportedLanguage[]).map((value) => (
         <Pressable
           key={value}
@@ -231,10 +236,14 @@ const useStyles = makeStyles((c) => ({
   profileName: { color: c.onSurfaceInverse, fontSize: 12.5, fontWeight: "700" },
   profileRole: { color: c.inverseSubtle, fontSize: 11, marginTop: 1 },
   languageSwitcher: {
-    position: "absolute", top: 10, right: 12, zIndex: 100,
     flexDirection: "row", gap: 2, padding: 3, borderRadius: 10,
     backgroundColor: c.surface, borderWidth: 1, borderColor: c.border,
     ...tokens.shadow,
+  },
+  languageSwitcherFloating: { position: "absolute", top: 10, right: 12, zIndex: 100 },
+  publicLanguageBar: {
+    flexDirection: "row", justifyContent: "flex-end", paddingHorizontal: 12, paddingVertical: 6,
+    backgroundColor: c.surface, borderBottomWidth: 1, borderBottomColor: c.divider, zIndex: 100,
   },
   notificationBell: {
     position: "absolute", top: 10, right: 126, zIndex: 100,
