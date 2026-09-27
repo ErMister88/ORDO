@@ -80,6 +80,37 @@ def test_sales_can_create_prospect_offer_with_immutable_recipient_snapshot(monke
     assert "costMinor" not in response["items"][0]
 
 
+@pytest.mark.parametrize("role, actor_id", [("admin", "admin-a"), ("sales", "sales-a")])
+def test_staff_can_create_name_only_prospect_offer_without_customer(monkeypatch, role, actor_id):
+    database = AsyncDatabase(f"final_review_name_only_{role}")
+    scoped = access(database, TENANT_A, actor_user_id=actor_id, role=role)
+    run(scoped.products.insert_one(product()))
+
+    async def sequence(_name):
+        return 16
+
+    monkeypatch.setattr(offers, "next_seq", sequence)
+    response = run(offers.create_offer(
+        OfferCreate(
+            prospectRecipient={"name": "  Ristorante Roma  "},
+            items=[OfferItemIn(productId="p1", qty=1, price=20)],
+        ),
+        principal(scoped), scoped,
+    ))
+
+    stored = database.raw.offers.find_one({"id": response["id"]})
+    assert database.raw.companies.count_documents({}) == 0
+    assert stored["companyId"] is None
+    assert stored["offerKind"] == "prospect"
+    assert stored["recipientSnapshot"] == {
+        "name": "Ristorante Roma", "contactName": "", "email": "", "phone": "",
+        "street": "", "houseNumber": "", "zip": "", "city": "",
+        "country": "DE", "vatId": "",
+    }
+    assert stored["billingAddressSnapshot"] is None
+    assert stored["deliveryAddressSnapshot"] is None
+
+
 def test_prospect_offer_rejects_whitespace_only_recipient(monkeypatch):
     database = AsyncDatabase("final_review_empty_prospect")
     scoped = access(database, TENANT_A, actor_user_id="sales-a", role="sales")
@@ -231,6 +262,15 @@ def test_offer_to_customer_preserves_snapshot_and_links_company(monkeypatch):
     assert database.raw.customer_addresses.find_one({
         "companyId": result["id"]
     })["city"] == "Bolzano"
+    run(scoped.companies.update_one(
+        {"id": result["id"]},
+        {"$set": {"name": "Nuovo Bar GmbH", "city": "Merano"}},
+    ))
+    changed_company = database.raw.companies.find_one({"id": result["id"]})
+    historical_offer = database.raw.offers.find_one({"id": "A-1"})
+    assert changed_company["name"] == "Nuovo Bar GmbH"
+    assert historical_offer["recipientSnapshot"]["name"] == "Nuovo Bar"
+    assert historical_offer["recipientSnapshot"]["city"] == "Bolzano"
 
 
 def test_sales_cannot_convert_another_salespersons_prospect():

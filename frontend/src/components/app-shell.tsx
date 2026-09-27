@@ -86,13 +86,13 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
   if (!desktop || !user || publicRoute) {
     return <View style={{ flex: 1 }}>
-      {publicRoute ? <View style={styles.publicLanguageBar}><LanguageSwitcher floating={false} /></View> : null}
+      {publicRoute ? <View style={styles.publicLanguageBar}><LanguageSwitcher /></View> : null}
+      {user && !publicRoute ? <MobileUtilityBar /> : null}
       <View style={{ flex: 1 }}>{children}</View>
-      {user && !publicRoute ? <><NotificationBell />{(user.role === "admin" || user.role === "sales") ? <MobileQuickCreate role={user.role} /> : null}</> : null}
-      {!publicRoute ? <LanguageSwitcher /> : null}
+      {user && !publicRoute && (user.role === "admin" || user.role === "sales") ? <MobileQuickCreate role={user.role} /> : null}
     </View>;
   }
-  return <View style={{ flex: 1, flexDirection: "row" }}><DesktopSidebar /><View style={{ flex: 1 }}>{children}</View><NotificationBell /><LanguageSwitcher /></View>;
+  return <View style={{ flex: 1, flexDirection: "row" }}><DesktopSidebar /><View style={{ flex: 1 }}>{children}</View><NotificationBell /></View>;
 }
 
 const quickActions = (role?: string): [string, string][] => (
@@ -123,7 +123,15 @@ function MobileQuickCreate({ role }: { role: string }) {
   </View>;
 }
 
-function NotificationBell() {
+function MobileUtilityBar() {
+  const styles = useStyles();
+  return <View style={styles.mobileUtilityBar} testID="mobile-utility-bar">
+    <NotificationBell floating={false} />
+    <LanguageSwitcher />
+  </View>;
+}
+
+function NotificationBell({ floating = true }: { floating?: boolean }) {
   const styles = useStyles();
   const { colors } = useTheme();
   const router = useRouter();
@@ -131,17 +139,17 @@ function NotificationBell() {
     queryKey: ["notifications"], queryFn: () => apiGet("/notifications"), refetchInterval: 60000,
   });
   const unread = (notifications.data ?? []).filter((row) => !row.readAt).length;
-  return <Pressable accessibilityLabel="Benachrichtigungen" testID="notification-bell" onPress={() => router.push("/benachrichtigungen")} style={styles.notificationBell}>
+  return <Pressable accessibilityLabel="Benachrichtigungen" testID="notification-bell" onPress={() => router.push("/benachrichtigungen")} style={[styles.notificationBell, floating && styles.notificationBellFloating]}>
     <Bell size={19} color={colors.onSurface} weight={unread ? "fill" : "regular"} />
     {unread ? <View style={styles.notificationBadge}><Text style={styles.notificationBadgeText}>{Math.min(unread, 99)}</Text></View> : null}
   </Pressable>;
 }
 
-function LanguageSwitcher({ floating = true }: { floating?: boolean }) {
+function LanguageSwitcher({ dark = false }: { dark?: boolean }) {
   const styles = useStyles();
   const { language, setLanguage, t } = useI18n();
   return (
-    <View style={[styles.languageSwitcher, floating && styles.languageSwitcherFloating]} testID="language-switcher" accessibilityLabel={t("Sprache")}>
+    <View style={[styles.languageSwitcher, dark && styles.languageSwitcherDark]} testID="language-switcher" accessibilityLabel={t("Sprache")}>
       {(Object.keys(languageLabels) as SupportedLanguage[]).map((value) => (
         <Pressable
           key={value}
@@ -150,7 +158,7 @@ function LanguageSwitcher({ floating = true }: { floating?: boolean }) {
           onPress={() => { void setLanguage(value); }}
           style={[styles.languageButton, language === value && styles.languageButtonActive]}
         >
-          <Text style={[styles.languageText, language === value && styles.languageTextActive]}>{languageLabels[value]}</Text>
+          <Text style={[styles.languageText, dark && styles.languageTextDark, language === value && styles.languageTextActive]}>{languageLabels[value]}</Text>
         </Pressable>
       ))}
     </View>
@@ -195,10 +203,13 @@ function DesktopSidebar() {
           </View>
         ))}
       </ScrollView>
-      <View style={styles.profile}>
+      <View style={styles.sidebarFooter}>
+        <LanguageSwitcher dark />
+        <View style={styles.profile}>
         <View style={styles.avatar}><Text style={styles.avatarText}>{user?.name?.charAt(0)?.toUpperCase()}</Text></View>
         <View style={{ flex: 1 }}><Text style={styles.profileName} numberOfLines={1}>{user?.name}</Text><Text style={styles.profileRole}>{user?.role === "admin" ? "Administrator" : user?.role === "sales" ? "Vertrieb" : "Kunde"}</Text></View>
         <Pressable onPress={logout} hitSlop={8}><SignOut size={18} color={colors.inverseMuted} /></Pressable>
+        </View>
       </View>
     </View>
   );
@@ -220,7 +231,8 @@ const useStyles = makeStyles((c) => ({
   itemActive: { backgroundColor: c.inverseActive },
   itemText: { color: c.inverseMuted, fontSize: 13.5, fontWeight: "600" },
   itemTextActive: { color: c.onSurfaceInverse, fontWeight: "700" },
-  profile: { flexDirection: "row", alignItems: "center", gap: 10, borderTopWidth: 1, borderTopColor: c.inverseBorder, paddingTop: 16 },
+  sidebarFooter: { gap: 12, borderTopWidth: 1, borderTopColor: c.inverseBorder, paddingTop: 14 },
+  profile: { flexDirection: "row", alignItems: "center", gap: 10 },
   avatar: { width: 34, height: 34, borderRadius: 9, backgroundColor: c.inverseActive, alignItems: "center", justifyContent: "center" },
   avatarText: { color: c.onSurfaceInverse, fontWeight: "800" },
   quickButton: { marginHorizontal: 6, marginBottom: 16, minHeight: 42, borderRadius: 10, backgroundColor: c.brandPrimary, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7 },
@@ -240,17 +252,23 @@ const useStyles = makeStyles((c) => ({
     backgroundColor: c.surface, borderWidth: 1, borderColor: c.border,
     ...tokens.shadow,
   },
-  languageSwitcherFloating: { position: "absolute", top: 10, right: 12, zIndex: 100 },
+  languageSwitcherDark: { alignSelf: "flex-start", backgroundColor: c.inverseActive, borderColor: c.inverseBorder, shadowOpacity: 0, elevation: 0 },
+  languageTextDark: { color: c.inverseMuted },
   publicLanguageBar: {
     flexDirection: "row", justifyContent: "flex-end", paddingHorizontal: 12, paddingVertical: 6,
-    backgroundColor: c.surface, borderBottomWidth: 1, borderBottomColor: c.divider, zIndex: 100,
+    backgroundColor: c.surface, borderBottomWidth: 1, borderBottomColor: c.divider,
+  },
+  mobileUtilityBar: {
+    flexDirection: "row", justifyContent: "flex-end", alignItems: "center", gap: 8,
+    paddingHorizontal: 12, paddingVertical: 6, backgroundColor: c.surface,
+    borderBottomWidth: 1, borderBottomColor: c.divider,
   },
   notificationBell: {
-    position: "absolute", top: 10, right: 126, zIndex: 100,
     width: 36, height: 36, borderRadius: 10, backgroundColor: c.surface,
     borderWidth: 1, borderColor: c.border, alignItems: "center", justifyContent: "center",
     ...tokens.shadow,
   },
+  notificationBellFloating: { position: "absolute", top: 10, right: 12, zIndex: 100 },
   notificationBadge: { position: "absolute", top: -5, right: -5, minWidth: 18, height: 18, borderRadius: 9, paddingHorizontal: 4, backgroundColor: c.error, alignItems: "center", justifyContent: "center" },
   notificationBadgeText: { color: c.onError, fontSize: 10, fontWeight: "900" },
   languageButton: { minWidth: 30, height: 28, borderRadius: 7, alignItems: "center", justifyContent: "center" },

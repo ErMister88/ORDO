@@ -9,7 +9,7 @@ import {
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Image } from "expo-image";
-import { CaretDown, Export, Plus, ImageSquare } from "phosphor-react-native";
+import { CaretDown, CaretUp, Export, Plus, ImageSquare } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
@@ -19,6 +19,31 @@ import { shareOfferPdf } from "@/src/lib/pdf";
 import { ScreenHeader } from "@/src/components/screen-header";
 import { Card, Input, Button, StatusBadge, SectionTitle, EmptyState, Muted } from "@/src/components/ui";
 import { LocalizedText as Text, useI18n } from "@/src/i18n";
+
+type ProspectCustomerForm = {
+  name: string;
+  contactName: string;
+  email: string;
+  phone: string;
+  vatId: string;
+  taxNumber: string;
+  street: string;
+  houseNumber: string;
+  zip: string;
+  city: string;
+  country: string;
+};
+
+function prospectCustomerForm(offer: any): ProspectCustomerForm {
+  const recipient = offer.recipientSnapshot ?? {};
+  return {
+    name: recipient.name ?? "", contactName: recipient.contactName ?? "",
+    email: recipient.email ?? "", phone: recipient.phone ?? "",
+    vatId: recipient.vatId ?? "", taxNumber: "",
+    street: recipient.street ?? "", houseNumber: recipient.houseNumber ?? "",
+    zip: recipient.zip ?? "", city: recipient.city ?? "", country: recipient.country || "DE",
+  };
+}
 
 export default function Angebote() {
   const { tf } = useI18n();
@@ -67,13 +92,32 @@ export default function Angebote() {
   });
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [duplicateOffer, setDuplicateOffer] = useState<{ offerId: string; matches: any[] } | null>(null);
+  const [customerDraft, setCustomerDraft] = useState<(ProspectCustomerForm & { offerId: string }) | null>(null);
+  const updateCustomerDraft = (field: keyof ProspectCustomerForm, value: string) => {
+    setCustomerDraft((draft) => draft ? { ...draft, [field]: value } : draft);
+    setDuplicateOffer(null);
+  };
   const convertProspect = useMutation({
-    mutationFn: async ({ offer, confirm, existingCompanyId }: { offer: any; confirm: boolean; existingCompanyId?: string }) => {
-      const recipient = offer.recipientSnapshot ?? {};
+    mutationFn: async ({ offer, form, confirm, existingCompanyId }: { offer: any; form: ProspectCustomerForm; confirm: boolean; existingCompanyId?: string }) => {
+      const addressValues = [form.street, form.houseNumber, form.zip, form.city].map((value) => value.trim());
+      const hasAddress = addressValues.some(Boolean);
+      if (hasAddress && (!form.street.trim() || !form.zip.trim() || !form.city.trim() || !form.country.trim())) {
+        throw new Error("Für eine Adresse sind Straße, PLZ, Ort und Land erforderlich.");
+      }
+      const [firstName, ...lastNameParts] = form.contactName.trim().split(/\s+/);
       const payload = {
-        name: recipient.name ?? "", city: recipient.city ?? "",
-        email: recipient.email ?? "", phone: recipient.phone ?? "",
-        vatId: recipient.vatId ?? "", status: "Lead",
+        name: form.name.trim(), city: form.city.trim(),
+        email: form.email.trim(), phone: form.phone.trim(),
+        vatId: form.vatId.trim(), taxNumber: form.taxNumber.trim(), status: "Lead",
+        primaryAddress: hasAddress ? {
+          type: "main", label: "Hauptadresse", street: form.street.trim(),
+          houseNumber: form.houseNumber.trim(), zip: form.zip.trim(),
+          city: form.city.trim(), country: form.country.trim(),
+        } : null,
+        primaryContact: form.contactName.trim() && form.email.trim() ? {
+          firstName, lastName: lastNameParts.join(" ") || "–",
+          email: form.email.trim(), phone: form.phone.trim(),
+        } : null,
         confirmPotentialDuplicate: confirm,
         existingCompanyId: existingCompanyId ?? null,
       };
@@ -88,6 +132,7 @@ export default function Angebote() {
     },
     onSuccess: (company: any) => {
       setDuplicateOffer(null);
+      setCustomerDraft(null);
       qc.invalidateQueries({ queryKey: ["offers"] });
       qc.invalidateQueries({ queryKey: ["companies"] });
       router.push(`/kunde/${company.id}`);
@@ -171,6 +216,7 @@ export default function Angebote() {
                   : 0);
               }, 0) : 0;
               const hasHistoricalCost = isAdmin && o.items.every((it: any) => typeof it.costMinor === "number");
+              const activeCustomerDraft = customerDraft?.offerId === o.id ? customerDraft : null;
               return (
                 <Card key={o.id} testID={`offer-${o.id}`}>
                   <View style={styles.offerTop}>
@@ -209,9 +255,23 @@ export default function Angebote() {
                     </Pressable>
                   )}
                   {isStaff && !o.companyId ? <View style={styles.actions}>
-                    {duplicateOffer?.offerId === o.id ? <><Text style={[styles.hint, { color: colors.warning }]}>Mögliche Dublette gefunden. Prüfen Sie den Kundenstamm oder bestätigen Sie die Neuanlage.</Text>{(duplicateOffer?.matches ?? []).filter((match) => !match.restricted).map((match) => <Button key={match.id} title={tf("Mit {name} verknüpfen", { name: match.name })} kind="secondary" onPress={() => convertProspect.mutate({ offer: o, confirm: false, existingCompanyId: match.id })} />)}</> : null}
-                    {convertProspect.isError && convertProspect.variables?.offer.id === o.id ? <Muted>{convertProspect.error.message}</Muted> : null}
-                    <Button testID={`offer-to-customer-${o.id}`} title={duplicateOffer?.offerId === o.id ? "Trotzdem als Kunde anlegen" : "Als Kunde anlegen"} kind="secondary" loading={convertProspect.isPending && convertProspect.variables?.offer.id === o.id} onPress={() => convertProspect.mutate({ offer: o, confirm: duplicateOffer?.offerId === o.id })} />
+                    {activeCustomerDraft ? <View style={styles.customerConversion} testID={`offer-customer-form-${o.id}`}>
+                      <Text style={styles.fieldLabel}>Interessent als Kunde übernehmen</Text>
+                      <Input testID={`offer-customer-name-${o.id}`} value={activeCustomerDraft.name} onChangeText={(value) => updateCustomerDraft("name", value)} placeholder="Kundenname *" />
+                      <View style={styles.inputRow}><Input value={activeCustomerDraft.contactName} onChangeText={(value) => updateCustomerDraft("contactName", value)} placeholder="Ansprechpartner" style={{ flex: 1 }} /><Input value={activeCustomerDraft.email} onChangeText={(value) => updateCustomerDraft("email", value)} placeholder="E-Mail" autoCapitalize="none" style={{ flex: 1 }} /></View>
+                      <View style={styles.inputRow}><Input value={activeCustomerDraft.phone} onChangeText={(value) => updateCustomerDraft("phone", value)} placeholder="Telefon" style={{ flex: 1 }} /><Input value={activeCustomerDraft.vatId} onChangeText={(value) => updateCustomerDraft("vatId", value)} placeholder="USt-ID" style={{ flex: 1 }} /></View>
+                      <Input value={activeCustomerDraft.taxNumber} onChangeText={(value) => updateCustomerDraft("taxNumber", value)} placeholder="Steuernummer" />
+                      <View style={styles.inputRow}><Input value={activeCustomerDraft.street} onChangeText={(value) => updateCustomerDraft("street", value)} placeholder="Straße" style={{ flex: 1 }} /><Input value={activeCustomerDraft.houseNumber} onChangeText={(value) => updateCustomerDraft("houseNumber", value)} placeholder="Nr." style={{ flex: 0.4 }} /></View>
+                      <View style={styles.inputRow}><Input value={activeCustomerDraft.zip} onChangeText={(value) => updateCustomerDraft("zip", value)} placeholder="PLZ" style={{ flex: 0.4 }} /><Input value={activeCustomerDraft.city} onChangeText={(value) => updateCustomerDraft("city", value)} placeholder="Ort" style={{ flex: 1 }} /></View>
+                      <Input value={activeCustomerDraft.country} onChangeText={(value) => updateCustomerDraft("country", value)} placeholder="Land" />
+                      <Muted>Der ursprüngliche Angebotsempfänger bleibt als historischer Snapshot unverändert.</Muted>
+                      {duplicateOffer?.offerId === o.id ? <><Text style={[styles.hint, { color: colors.warning }]}>Mögliche Dublette gefunden. Prüfen Sie den Kundenstamm oder bestätigen Sie die Neuanlage.</Text>{(duplicateOffer?.matches ?? []).filter((match) => !match.restricted).map((match) => <Button key={match.id} title={tf("Mit {name} verknüpfen", { name: match.name })} kind="secondary" onPress={() => convertProspect.mutate({ offer: o, form: activeCustomerDraft, confirm: false, existingCompanyId: match.id })} />)}</> : null}
+                      {convertProspect.isError && convertProspect.variables?.offer.id === o.id ? <Muted>{convertProspect.error.message}</Muted> : null}
+                      <View style={styles.actionRow}>
+                        <Button title="Abbrechen" kind="secondary" style={{ flex: 1 }} onPress={() => { setCustomerDraft(null); setDuplicateOffer(null); }} />
+                        <Button testID={`offer-customer-save-${o.id}`} title={duplicateOffer?.offerId === o.id ? "Trotzdem als Kunde anlegen" : "Kunde speichern"} style={{ flex: 1 }} disabled={!activeCustomerDraft.name.trim()} loading={convertProspect.isPending && convertProspect.variables?.offer.id === o.id} onPress={() => convertProspect.mutate({ offer: o, form: activeCustomerDraft, confirm: duplicateOffer?.offerId === o.id })} />
+                      </View>
+                    </View> : <Button testID={`offer-to-customer-${o.id}`} title="Als Kunde anlegen" kind="secondary" onPress={() => { setDuplicateOffer(null); setCustomerDraft({ offerId: o.id, ...prospectCustomerForm(o) }); }} />}
                   </View> : null}
 
                   {!isStaff && o.status === "Freigegeben" && (
@@ -306,6 +366,7 @@ function CreateOffer({
   const [targetMode, setTargetMode] = useState<"customer" | "prospect">(defaultCompanyId || companies.length ? "customer" : "prospect");
   const [companyId, setCompanyId] = useState(defaultCompanyId || companies[0]?.id || "");
   const [recipient, setRecipient] = useState({ name: "", contactName: "", email: "", phone: "", street: "", houseNumber: "", zip: "", city: "", country: "DE", vatId: "" });
+  const [showRecipientDetails, setShowRecipientDetails] = useState(false);
   const [productId, setProductId] = useState(defaultProductId || activeProducts[0]?.id || "");
   const [qty, setQty] = useState(() => {
     const parsed = Number(defaultQuantity);
@@ -382,7 +443,10 @@ function CreateOffer({
     onSuccess: (created: any) => {
       setMsg(created.status === "Freigabe nötig" ? "Angebot erstellt und zur Admin-Freigabe eingereicht." : "Angebot erstellt");
       setItems([]);
-      if (targetMode === "prospect") setRecipient({ name: "", contactName: "", email: "", phone: "", street: "", houseNumber: "", zip: "", city: "", country: "DE", vatId: "" });
+      if (targetMode === "prospect") {
+        setRecipient({ name: "", contactName: "", email: "", phone: "", street: "", houseNumber: "", zip: "", city: "", country: "DE", vatId: "" });
+        setShowRecipientDetails(false);
+      }
       qc.invalidateQueries({ queryKey: ["my-price-approvals"] });
       onCreated();
     },
@@ -425,10 +489,16 @@ function CreateOffer({
       </> : <View style={styles.prospectFields} testID="prospect-recipient-form">
         <Text style={styles.fieldLabel}>Angebotsempfänger</Text>
         <Input testID="prospect-name" value={recipient.name} onChangeText={(name) => setRecipient((value) => ({ ...value, name }))} placeholder="Unternehmen / Name *" />
+        <Pressable testID="prospect-details-toggle" style={styles.detailsToggle} onPress={() => setShowRecipientDetails((value) => !value)}>
+          <Text style={styles.detailsToggleText}>{showRecipientDetails ? "Weitere Daten ausblenden" : "Weitere Daten hinzufügen"}</Text>
+          {showRecipientDetails ? <CaretUp size={16} color={colors.brandPrimary} /> : <CaretDown size={16} color={colors.brandPrimary} />}
+        </Pressable>
+        {showRecipientDetails ? <View style={styles.prospectDetails} testID="prospect-optional-fields">
         <View style={styles.inputRow}><Input value={recipient.contactName} onChangeText={(contactName) => setRecipient((value) => ({ ...value, contactName }))} placeholder="Ansprechpartner" style={{ flex: 1 }} /><Input value={recipient.email} onChangeText={(email) => setRecipient((value) => ({ ...value, email }))} placeholder="E-Mail" autoCapitalize="none" style={{ flex: 1 }} /></View>
         <View style={styles.inputRow}><Input value={recipient.phone} onChangeText={(phone) => setRecipient((value) => ({ ...value, phone }))} placeholder="Telefon" style={{ flex: 1 }} /><Input value={recipient.vatId} onChangeText={(vatId) => setRecipient((value) => ({ ...value, vatId }))} placeholder="USt-ID" style={{ flex: 1 }} /></View>
         <View style={styles.inputRow}><Input value={recipient.street} onChangeText={(street) => setRecipient((value) => ({ ...value, street }))} placeholder="Straße" style={{ flex: 1 }} /><Input value={recipient.houseNumber} onChangeText={(houseNumber) => setRecipient((value) => ({ ...value, houseNumber }))} placeholder="Nr." style={{ flex: 0.4 }} /></View>
         <View style={styles.inputRow}><Input value={recipient.zip} onChangeText={(zip) => setRecipient((value) => ({ ...value, zip }))} placeholder="PLZ" style={{ flex: 0.4 }} /><Input value={recipient.city} onChangeText={(city) => setRecipient((value) => ({ ...value, city }))} placeholder="Ort" style={{ flex: 1 }} /></View>
+        </View> : null}
         <Muted>Der Empfänger wird unveränderlich im Angebot gespeichert. Ein Kundenkonto kann später daraus angelegt werden.</Muted>
       </View>}
 
@@ -568,6 +638,10 @@ const useStyles = makeStyles((c) => ({
   targetTabText: { fontSize: 13, fontWeight: "700", color: c.onSurfaceSecondary },
   targetTabTextActive: { color: c.onBrandPrimary },
   prospectFields: { gap: 8 },
+  prospectDetails: { gap: 8 },
+  detailsToggle: { minHeight: 40, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 12, borderRadius: 10, backgroundColor: c.brandTertiary },
+  detailsToggleText: { color: c.brandPrimary, fontWeight: "800", fontSize: 13 },
+  customerConversion: { gap: 8, padding: 12, borderRadius: 12, backgroundColor: c.surfaceTertiary },
   select: {
     flexDirection: "row",
     alignItems: "center",

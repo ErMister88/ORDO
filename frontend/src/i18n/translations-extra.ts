@@ -453,4 +453,10 @@ export const extraTranslations: Record<string, Translation> = {
   "Bildzuordnung prüfen": { it: "Verifica associazione immagine", en: "Check image association" },
   "Das Produkt wurde gespeichert, aber die Bildzuordnung konnte nicht vollständig abgeschlossen werden.": { it: "Il prodotto è stato salvato, ma non è stato possibile completare l'associazione dell'immagine.", en: "The product was saved, but the image association could not be completed." },
   "Die Maschine wurde gespeichert, aber die Bildzuordnung konnte nicht vollständig abgeschlossen werden.": { it: "La macchina è stata salvata, ma non è stato possibile completare l'associazione dell'immagine.", en: "The machine was saved, but the image association could not be completed." },
+  "Weitere Daten hinzufügen": { it: "Aggiungi altri dati", en: "Add more details" },
+  "Weitere Daten ausblenden": { it: "Nascondi altri dati", en: "Hide additional details" },
+  "Interessent als Kunde übernehmen": { it: "Converti il potenziale cliente in cliente", en: "Convert prospect to customer" },
+  "Kunde speichern": { it: "Salva cliente", en: "Save customer" },
+  "Der ursprüngliche Angebotsempfänger bleibt als historischer Snapshot unverändert.": { it: "Il destinatario originale dell'offerta rimane invariato come snapshot storico.", en: "The original quote recipient remains unchanged as a historical snapshot." },
+  "Für eine Adresse sind Straße, PLZ, Ort und Land erforderlich.": { it: "Per salvare un indirizzo sono necessari via, CAP, località e paese.", en: "Street, postcode, city and country are required to save an address." },
 };

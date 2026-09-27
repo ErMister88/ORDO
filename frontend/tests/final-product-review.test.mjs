@@ -9,7 +9,10 @@ test("quick create is role-aware and available on compact layouts without header
   assert.match(shell, /MobileQuickCreate/);
   assert.match(shell, /global-new-mobile/);
   assert.match(shell, /bottom: 76/);
-  assert.match(shell, /languageSwitcherFloating:[\s\S]*top: 10/);
+  assert.match(shell, /MobileUtilityBar/);
+  assert.match(shell, /mobile-utility-bar/);
+  assert.match(shell, /sidebarFooter/);
+  assert.doesNotMatch(shell, /languageSwitcherFloating/);
   assert.match(shell, /publicLanguageBar/);
   assert.match(shell, /publicRoute \? <View style=\{styles\.publicLanguageBar\}>/);
   assert.match(shell, /role === "admin"/);
@@ -28,6 +31,12 @@ test("offer UI supports prospect snapshots and server pricing without a fake com
   assert.match(offers, /offer-to-customer/);
   assert.match(offers, /existingCompanyId/);
   assert.match(offers, /Mit \{name\} verknüpfen/);
+  assert.match(offers, /prospect-details-toggle/);
+  assert.match(offers, /Weitere Daten hinzufügen/);
+  assert.match(offers, /disabled=\{items\.length === 0 \|\| \(targetMode === "customer" \? !companyId : !recipient\.name\.trim\(\)\)\}/);
+  assert.match(offers, /offer-customer-form-/);
+  assert.match(offers, /prospectCustomerForm/);
+  assert.match(offers, /historischer Snapshot unverändert/);
   assert.doesNotMatch(offers, /fakeCompany|temporaryCompany/i);
 });
 
