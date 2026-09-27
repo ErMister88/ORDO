@@ -133,6 +133,7 @@ test("dashboard metrics and shared field accessibility do not leak German in IT/
   assert.match(ui, /accessibilityLabel=\{t\(title\)\}/);
   assert.match(ui, /props\.accessibilityLabel \? t\(props\.accessibilityLabel\)/);
   assert.match(dashboard, /row\.orders === 1 \? "\{orders\} Bestellung/);
+  assert.match(dashboard, /user\?\.role === "admin" \? t\("Administrator"\)/);
   assert.equal(catalog["DB nicht vollständig"].en, "Contribution margin incomplete");
   assert.equal(catalog["DB nicht vollständig"].it, "Margine di contribuzione incompleto");
 });

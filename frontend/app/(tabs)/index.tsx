@@ -19,7 +19,7 @@ import { Card, KPICard, SectionTitle, InfoRow, Muted, PageContainer, LoadingStat
 import { LocalizedText as Text, useI18n } from "@/src/i18n";
 
 export default function Dashboard() {
-  useI18n();
+  const { t } = useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const { user, signOut } = useAuth();
@@ -38,7 +38,7 @@ export default function Dashboard() {
   }, []);
 
   const roleLabel =
-    user?.role === "admin" ? "Administrator" : user?.role === "sales" ? "Vertrieb" : "Kundenportal";
+    user?.role === "admin" ? t("Administrator") : user?.role === "sales" ? t("Vertrieb") : t("Kundenportal");
 
   return (
     <View style={styles.root}>
