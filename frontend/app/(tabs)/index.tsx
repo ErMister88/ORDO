@@ -118,6 +118,7 @@ function StaffDash({
 }) {
   const styles = useStyles();
   const { colors } = useTheme();
+  const { tf } = useI18n();
   const { width } = useWindowDimensions();
   const desktop = width >= tokens.layout.tablet;
   return (
@@ -130,7 +131,7 @@ function StaffDash({
           </View>
           <Text style={styles.heroLabel}>Umsatz diesen Monat</Text>
           <Text style={styles.heroValue}>{euro(data.revenueMonth)}</Text>
-          <Text style={styles.heroSub}>{data.ordersCount} Bestellungen im sichtbaren Kundenbestand</Text>
+          <Text style={styles.heroSub}>{tf("{orders} Bestellungen im sichtbaren Kundenbestand", { orders: data.ordersCount })}</Text>
         </View>
         <View style={styles.kpiArea}>
           <View style={styles.kpiGrid}>
@@ -153,7 +154,7 @@ function StaffDash({
             <View style={{ flex: 1 }}>
               <Text style={styles.alertTitle}>Preisfreigabe erforderlich</Text>
               <Text style={styles.alertSub}>
-                {data.pendingApprovals} Angebot(e) warten auf Ihre Freigabe
+                {tf("{count} Angebot(e) warten auf Ihre Freigabe", { count: data.pendingApprovals })}
               </Text>
             </View>
           </View>
@@ -209,7 +210,7 @@ function StaffDash({
                 <View style={{ flex: 1 }}>
                   <Text style={styles.followName}>{f.name}</Text>
                   <Text style={styles.followSub}>
-                    {f.days == null ? "Noch keine Bestellung" : `${f.days} Tage seit letzter Bestellung`}
+                    {f.days == null ? "Noch keine Bestellung" : tf("{days} Tage seit letzter Bestellung", { days: f.days })}
                   </Text>
                 </View>
                 <ArrowRight size={18} color={colors.muted} />
@@ -218,9 +219,9 @@ function StaffDash({
           </Card>
         </>
       )}
-      {data.topSalesReps ? <><SectionTitle>Top Vertrieb</SectionTitle><Card style={{ padding: 0, overflow: "hidden" }}>{data.topSalesReps.length === 0 ? <Muted style={{ padding: 16 }}>Im gewählten Zeitraum liegen keine zugeordneten Bestellungen vor.</Muted> : data.topSalesReps.map((row: any, index: number) => <Pressable key={row.userId} onPress={() => onSales(row.userId)} style={[styles.rankingRow, index > 0 && styles.activityBorder]}><Text style={styles.rank}>{index + 1}</Text><View style={{ flex: 1 }}><Text style={styles.activityTitle}>{salesNames[row.userId] || row.name}</Text><Text style={styles.activityMeta}>{row.orders} Bestellungen · {row.activeCustomers} aktive Kunden</Text></View><View style={{ alignItems: "flex-end" }}><Text style={styles.activityTitle}>{euro(row.revenue)}</Text>{row.marginDataComplete ? <Text style={styles.activityMeta}>DB {euro(row.margin)}</Text> : <Text style={styles.activityMeta}>DB nicht vollständig</Text>}</View><ArrowRight size={16} color={colors.muted} /></Pressable>)}</Card></> : null}
-      {data.topCustomers?.length ? <><SectionTitle>Top Kunden</SectionTitle><Card style={{ padding: 0, overflow: "hidden" }}>{data.topCustomers.map((row: any, index: number) => <Pressable key={row.companyId} onPress={() => onCustomer(row.companyId)} style={[styles.rankingRow, index > 0 && styles.activityBorder]}><Text style={styles.rank}>{index + 1}</Text><View style={{ flex: 1 }}><Text style={styles.activityTitle}>{row.name}</Text><Text style={styles.activityMeta}>{row.orders} Bestellungen · Menge {num(row.quantity)}</Text></View><Text style={styles.activityTitle}>{euro(row.revenue)}</Text><ArrowRight size={16} color={colors.muted} /></Pressable>)}</Card></> : null}
-      {data.managementAlerts?.length ? <><SectionTitle>Handlungsbedarf</SectionTitle><Card>{data.managementAlerts.slice(0, 10).map((alert: any) => <Pressable key={`${alert.type}-${alert.id}`} onPress={() => alert.companyId ? onCustomer(alert.companyId) : undefined} style={styles.systemRow}><Warning size={17} color={colors.warning} /><Text style={styles.systemText}>{alert.type === "invoice_overdue" ? `Rechnung ${alert.id} ist überfällig` : alert.title}</Text></Pressable>)}</Card></> : null}
+      {data.topSalesReps ? <><SectionTitle>Top Vertrieb</SectionTitle><Card style={{ padding: 0, overflow: "hidden" }}>{data.topSalesReps.length === 0 ? <Muted style={{ padding: 16 }}>Im gewählten Zeitraum liegen keine zugeordneten Bestellungen vor.</Muted> : data.topSalesReps.map((row: any, index: number) => <Pressable key={row.userId} onPress={() => onSales(row.userId)} style={[styles.rankingRow, index > 0 && styles.activityBorder]}><Text style={styles.rank}>{index + 1}</Text><View style={{ flex: 1 }}><Text style={styles.activityTitle}>{salesNames[row.userId] || row.name}</Text><Text style={styles.activityMeta}>{tf("{orders} Bestellungen · {activeCustomers} aktive Kunden", { orders: row.orders, activeCustomers: row.activeCustomers })}</Text></View><View style={{ alignItems: "flex-end" }}><Text style={styles.activityTitle}>{euro(row.revenue)}</Text>{row.marginDataComplete ? <Text style={styles.activityMeta}>{tf("DB {amount}", { amount: euro(row.margin) })}</Text> : <Text style={styles.activityMeta}>DB nicht vollständig</Text>}</View><ArrowRight size={16} color={colors.muted} /></Pressable>)}</Card></> : null}
+      {data.topCustomers?.length ? <><SectionTitle>Top Kunden</SectionTitle><Card style={{ padding: 0, overflow: "hidden" }}>{data.topCustomers.map((row: any, index: number) => <Pressable key={row.companyId} onPress={() => onCustomer(row.companyId)} style={[styles.rankingRow, index > 0 && styles.activityBorder]}><Text style={styles.rank}>{index + 1}</Text><View style={{ flex: 1 }}><Text style={styles.activityTitle}>{row.name}</Text><Text style={styles.activityMeta}>{tf("{orders} Bestellungen · Menge {quantity}", { orders: row.orders, quantity: num(row.quantity) })}</Text></View><Text style={styles.activityTitle}>{euro(row.revenue)}</Text><ArrowRight size={16} color={colors.muted} /></Pressable>)}</Card></> : null}
+      {data.managementAlerts?.length ? <><SectionTitle>Handlungsbedarf</SectionTitle><Card>{data.managementAlerts.slice(0, 10).map((alert: any) => <Pressable key={`${alert.type}-${alert.id}`} onPress={() => alert.companyId ? onCustomer(alert.companyId) : undefined} style={styles.systemRow}><Warning size={17} color={colors.warning} /><Text style={styles.systemText}>{alert.type === "invoice_overdue" ? tf("Rechnung {id} ist überfällig", { id: alert.id }) : alert.title}</Text></Pressable>)}</Card></> : null}
     </>
   );
 }
@@ -228,6 +229,7 @@ function StaffDash({
 function CustomerDash({ data }: { data: any }) {
   const styles = useStyles();
   const { colors } = useTheme();
+  const { tf } = useI18n();
   return (
     <>
       <View style={styles.hero} testID="hero-customer">
@@ -254,10 +256,10 @@ function CustomerDash({ data }: { data: any }) {
           <Card testID="customer-contract-card">
             <Text style={styles.cardTitle}>{data.contract.machine || "Kaffeeliefervertrag"}</Text>
             <InfoRow label="Preis" value={`${euro(data.contract.price)}/kg`} />
-            <InfoRow label="Mindestabnahme" value={`${num(data.contract.minQtyMonth)} kg/Monat`} />
-            <InfoRow label="Laufzeit" value={`${data.contract.termMonths} Monate`} />
+            <InfoRow label="Mindestabnahme" value={tf("{quantity} kg/Monat", { quantity: num(data.contract.minQtyMonth) })} />
+            <InfoRow label="Laufzeit" value={tf("{months} Monate", { months: data.contract.termMonths })} />
             {data.contract.serviceRate ? (
-              <InfoRow label="Service" value={`${euro(data.contract.serviceRate)}/Monat`} />
+              <InfoRow label="Service" value={tf("{amount}/Monat", { amount: euro(data.contract.serviceRate) })} />
             ) : null}
           </Card>
         </>

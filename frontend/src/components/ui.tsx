@@ -130,6 +130,7 @@ export function Button({
 }) {
   const styles = useStyles();
   const { colors } = useTheme();
+  const { t } = useI18n();
   const isDisabled = disabled || loading;
   return (
     <Pressable
@@ -137,7 +138,7 @@ export function Button({
       onPress={onPress}
       disabled={isDisabled}
       accessibilityRole="button"
-      accessibilityLabel={title}
+      accessibilityLabel={t(title)}
       accessibilityState={{ disabled: isDisabled, busy: Boolean(loading) }}
       style={({ pressed }) => [
         styles.button,
@@ -169,9 +170,9 @@ export const Input = React.forwardRef<TextInput, TextInputProps>(function Input(
     <TextInput
       ref={ref}
       placeholderTextColor={colors.muted}
-      accessibilityLabel={props.accessibilityLabel ?? props.placeholder}
       style={[styles.input, style]}
       {...props}
+      accessibilityLabel={props.accessibilityLabel ? t(props.accessibilityLabel) : props.placeholder ? t(props.placeholder) : undefined}
       placeholder={props.placeholder ? t(props.placeholder) : undefined}
     />
   );

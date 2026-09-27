@@ -96,6 +96,16 @@ test("dynamic shop translations preserve every interpolation placeholder", () =>
     "ab {quantity} · {price}/{unit}",
     "Bestellnummer {id} · Summe {total} · {status}",
     "Kostenpflichtig bestellen · {total}",
+    "{orders} Bestellungen im sichtbaren Kundenbestand",
+    "{count} Angebot(e) warten auf Ihre Freigabe",
+    "{days} Tage seit letzter Bestellung",
+    "{orders} Bestellungen · {activeCustomers} aktive Kunden",
+    "{orders} Bestellungen · Menge {quantity}",
+    "Rechnung {id} ist überfällig",
+    "DB {amount}",
+    "{quantity} kg/Monat",
+    "{months} Monate",
+    "{amount}/Monat",
   ];
   const placeholders = (value) => [...value.matchAll(/\{([A-Za-z0-9_]+)\}/g)].map((match) => match[1]).sort();
 
@@ -104,4 +114,22 @@ test("dynamic shop translations preserve every interpolation placeholder", () =>
     assert.deepEqual(placeholders(catalog[source].it), placeholders(source), `Italian placeholders differ for ${source}`);
     assert.deepEqual(placeholders(catalog[source].en), placeholders(source), `English placeholders differ for ${source}`);
   }
+});
+
+test("dashboard metrics and shared field accessibility do not leak German in IT/EN", async () => {
+  const dashboard = await readFile(new URL("../app/(tabs)/index.tsx", import.meta.url), "utf8");
+  const ui = await readFile(new URL("../src/components/ui.tsx", import.meta.url), "utf8");
+  for (const source of [
+    "{orders} Bestellungen im sichtbaren Kundenbestand",
+    "{days} Tage seit letzter Bestellung",
+    "{orders} Bestellungen · {activeCustomers} aktive Kunden",
+    "{orders} Bestellungen · Menge {quantity}",
+    "Rechnung {id} ist überfällig",
+  ]) {
+    assert.match(dashboard, new RegExp(`tf\\(${JSON.stringify(source).replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}`));
+  }
+  assert.match(ui, /accessibilityLabel=\{t\(title\)\}/);
+  assert.match(ui, /props\.accessibilityLabel \? t\(props\.accessibilityLabel\)/);
+  assert.equal(catalog["DB nicht vollständig"].en, "Contribution margin incomplete");
+  assert.equal(catalog["DB nicht vollständig"].it, "Margine di contribuzione incompleto");
 });
