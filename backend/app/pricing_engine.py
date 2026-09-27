@@ -340,6 +340,46 @@ class PricingEngine:
         )
         return product, quote
 
+    async def quote_b2b_prospect(
+        self,
+        product_id: str,
+        quantity: Any,
+    ) -> tuple[dict[str, Any], PriceQuote]:
+        """Quote the tenant's configured B2B base price for a prospect.
+
+        Prospects have no customer contract, customer price or customer-scoped
+        promotion. This deliberately keeps the existing-customer pricing rules
+        separate while preserving the same product, tax and money validation.
+        """
+        qty = _quantity(quantity)
+        product = await self._product(product_id)
+        try:
+            base_minor = amount_minor(
+                product, "standardPrice", expected_currency=self.currency
+            )
+        except MoneyError as exc:
+            raise PricingError(
+                "Für dieses B2B-Produkt ist kein gültiger Preis hinterlegt"
+            ) from exc
+        if base_minor <= 0:
+            raise PricingError(
+                "Für dieses B2B-Produkt ist kein gültiger Preis hinterlegt"
+            )
+        quote = PriceQuote(
+            pricing_context="b2b",
+            product_id=product_id,
+            quantity=qty,
+            currency=self.currency,
+            tax_rate=_tax_rate(product),
+            price_semantics="net",
+            base_unit_price_minor=base_minor,
+            final_unit_price_minor=base_minor,
+            line_total_minor=_line_total(base_minor, qty),
+            price_source="b2b_standard",
+            base_price_source="b2b_standard",
+        )
+        return product, quote
+
     def _validated_b2c_tiers(self, product: Mapping[str, Any]) -> list[dict[str, Any]]:
         tiers = product.get("b2cTiers") or []
         if not isinstance(tiers, list):

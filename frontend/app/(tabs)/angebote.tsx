@@ -21,7 +21,7 @@ import { Card, Input, Button, StatusBadge, SectionTitle, EmptyState, Muted } fro
 import { LocalizedText as Text, useI18n } from "@/src/i18n";
 
 export default function Angebote() {
-  useI18n();
+  const { tf } = useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const { user } = useAuth();
@@ -66,6 +66,33 @@ export default function Angebote() {
     },
   });
   const [notes, setNotes] = useState<Record<string, string>>({});
+  const [duplicateOffer, setDuplicateOffer] = useState<{ offerId: string; matches: any[] } | null>(null);
+  const convertProspect = useMutation({
+    mutationFn: async ({ offer, confirm, existingCompanyId }: { offer: any; confirm: boolean; existingCompanyId?: string }) => {
+      const recipient = offer.recipientSnapshot ?? {};
+      const payload = {
+        name: recipient.name ?? "", city: recipient.city ?? "",
+        email: recipient.email ?? "", phone: recipient.phone ?? "",
+        vatId: recipient.vatId ?? "", status: "Lead",
+        confirmPotentialDuplicate: confirm,
+        existingCompanyId: existingCompanyId ?? null,
+      };
+      if (!confirm && !existingCompanyId) {
+        const check = await apiPost("/companies/duplicate-check", payload);
+        if ((check.matches ?? []).length) {
+          setDuplicateOffer({ offerId: offer.id, matches: check.matches });
+          throw new Error("Mögliche Dublette gefunden. Bitte bestehenden Kunden prüfen.");
+        }
+      }
+      return apiPost(`/offers/${offer.id}/customer`, payload);
+    },
+    onSuccess: (company: any) => {
+      setDuplicateOffer(null);
+      qc.invalidateQueries({ queryKey: ["offers"] });
+      qc.invalidateQueries({ queryKey: ["companies"] });
+      router.push(`/kunde/${company.id}`);
+    },
+  });
 
   return (
     <View style={styles.root}>
@@ -130,14 +157,14 @@ export default function Angebote() {
             const visibleOffers = (offers.data ?? []).filter((o: any) => {
               if (oStatus !== "Alle" && o.status !== oStatus) return false;
               if (!q) return true;
-              const cname = (o.companySnapshot?.name ?? compMap[o.companyId]?.name ?? "").toLowerCase();
+              const cname = (o.companySnapshot?.name ?? o.recipientSnapshot?.name ?? compMap[o.companyId]?.name ?? "").toLowerCase();
               return o.id.toLowerCase().includes(q) || cname.includes(q);
             });
             return visibleOffers.length === 0 ? (
               <EmptyState title="Keine Angebote" subtitle="Keine Treffer für diese Filter" />
             ) : (
               visibleOffers.map((o: any) => {
-              const comp = o.companySnapshot || compMap[o.companyId];
+              const comp = o.companySnapshot || o.recipientSnapshot || compMap[o.companyId];
               const monthlyDb = isAdmin ? o.items.reduce((s: number, it: any) => {
                 return s + (typeof it.costMinor === "number"
                   ? (it.price - it.costMinor / 100) * it.qty
@@ -151,6 +178,7 @@ export default function Angebote() {
                     <StatusBadge status={o.status} />
                   </View>
                   {comp ? <Text style={styles.offerCompany}>{comp.name}</Text> : null}
+                  {!o.companyId ? <Muted>Interessent · noch nicht im Kundenstamm</Muted> : null}
                   {o.items.map((it: any, idx: number) => {
                     const p = prodMap[it.productId];
                     return (
@@ -180,6 +208,11 @@ export default function Angebote() {
                       <Text style={styles.shareText}>Als PDF teilen</Text>
                     </Pressable>
                   )}
+                  {isStaff && !o.companyId ? <View style={styles.actions}>
+                    {duplicateOffer?.offerId === o.id ? <><Text style={[styles.hint, { color: colors.warning }]}>Mögliche Dublette gefunden. Prüfen Sie den Kundenstamm oder bestätigen Sie die Neuanlage.</Text>{(duplicateOffer?.matches ?? []).filter((match) => !match.restricted).map((match) => <Button key={match.id} title={tf("Mit {name} verknüpfen", { name: match.name })} kind="secondary" onPress={() => convertProspect.mutate({ offer: o, confirm: false, existingCompanyId: match.id })} />)}</> : null}
+                    {convertProspect.isError && convertProspect.variables?.offer.id === o.id ? <Muted>{convertProspect.error.message}</Muted> : null}
+                    <Button testID={`offer-to-customer-${o.id}`} title={duplicateOffer?.offerId === o.id ? "Trotzdem als Kunde anlegen" : "Als Kunde anlegen"} kind="secondary" loading={convertProspect.isPending && convertProspect.variables?.offer.id === o.id} onPress={() => convertProspect.mutate({ offer: o, confirm: duplicateOffer?.offerId === o.id })} />
+                  </View> : null}
 
                   {!isStaff && o.status === "Freigegeben" && (
                     <>
@@ -263,13 +296,16 @@ function CreateOffer({
   defaultQuantity?: string;
   onCreated: () => void;
 }) {
+  const { tf } = useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const { user } = useAuth();
   const qc = useQueryClient();
   const isAdmin = user?.role === "admin";
   const activeProducts = products.filter((p) => p.active !== false);
+  const [targetMode, setTargetMode] = useState<"customer" | "prospect">(defaultCompanyId || companies.length ? "customer" : "prospect");
   const [companyId, setCompanyId] = useState(defaultCompanyId || companies[0]?.id || "");
+  const [recipient, setRecipient] = useState({ name: "", contactName: "", email: "", phone: "", street: "", houseNumber: "", zip: "", city: "", country: "DE", vatId: "" });
   const [productId, setProductId] = useState(defaultProductId || activeProducts[0]?.id || "");
   const [qty, setQty] = useState(() => {
     const parsed = Number(defaultQuantity);
@@ -298,9 +334,9 @@ function CreateOffer({
   const parsed = Number((price || "").replace(",", "."));
   const q = Number(qty) || 0;
   const baseQuote = useQuery({
-    queryKey: ["b2b-offer-quote", companyId, product?.id, q],
-    queryFn: () => apiPost("/pricing/b2b/quote", { companyId, items: [{ productId: product.id, qty: q }] }),
-    enabled: !!companyId && !!product && q > 0,
+    queryKey: ["b2b-offer-quote", targetMode, companyId, product?.id, q],
+    queryFn: () => apiPost(targetMode === "customer" ? "/pricing/b2b/quote" : "/pricing/b2b/prospect-quote", targetMode === "customer" ? { companyId, items: [{ productId: product.id, qty: q }] } : { items: [{ productId: product.id, qty: q }] }),
+    enabled: (targetMode === "prospect" || !!companyId) && !!product && q > 0,
   });
 
   const state = useMemo(() => {
@@ -319,7 +355,7 @@ function CreateOffer({
       setMsg("Position unter absoluter Preisgrenze – nicht zulässig.");
       return;
     }
-    const approved = (myApprovals.data ?? []).find((row: any) => row.companyId === companyId && row.productId === productId && row.requestedPriceMinor === Math.round(parsed * 100));
+    const approved = targetMode === "customer" ? (myApprovals.data ?? []).find((row: any) => row.companyId === companyId && row.productId === productId && row.requestedPriceMinor === Math.round(parsed * 100)) : null;
     setItems((prev) => [...prev, { productId, qty: q, price: parsed, ...(approved ? { approvalId: approved.id } : {}) }]);
     setPrice("");
     setQty("60");
@@ -336,7 +372,8 @@ function CreateOffer({
   const create = useMutation({
     mutationFn: () =>
       apiPostIdempotent("/offers", {
-        companyId,
+        companyId: targetMode === "customer" ? companyId : null,
+        prospectRecipient: targetMode === "prospect" ? recipient : null,
         termMonths: 48,
         items,
         billingAddressId: billingAddressId || null,
@@ -345,6 +382,7 @@ function CreateOffer({
     onSuccess: (created: any) => {
       setMsg(created.status === "Freigabe nötig" ? "Angebot erstellt und zur Admin-Freigabe eingereicht." : "Angebot erstellt");
       setItems([]);
+      if (targetMode === "prospect") setRecipient({ name: "", contactName: "", email: "", phone: "", street: "", houseNumber: "", zip: "", city: "", country: "DE", vatId: "" });
       qc.invalidateQueries({ queryKey: ["my-price-approvals"] });
       onCreated();
     },
@@ -359,6 +397,12 @@ function CreateOffer({
     <Card testID="create-offer-card">
       <SectionTitle>Neues Angebot</SectionTitle>
 
+      <View style={styles.targetTabs}>
+        <Pressable testID="offer-target-customer" onPress={() => setTargetMode("customer")} style={[styles.targetTab, targetMode === "customer" && styles.targetTabActive]}><Text style={[styles.targetTabText, targetMode === "customer" && styles.targetTabTextActive]}>Bestehender Kunde</Text></Pressable>
+        <Pressable testID="offer-target-prospect" onPress={() => setTargetMode("prospect")} style={[styles.targetTab, targetMode === "prospect" && styles.targetTabActive]}><Text style={[styles.targetTabText, targetMode === "prospect" && styles.targetTabTextActive]}>Interessent</Text></Pressable>
+      </View>
+
+      {targetMode === "customer" ? <>
       <Text style={styles.fieldLabel}>Kunde</Text>
       <Pressable style={styles.select} testID="select-company" onPress={() => setShowComp((s) => !s)}>
         <Text style={styles.selectText}>{company?.name ?? "Kunde wählen"}</Text>
@@ -378,6 +422,15 @@ function CreateOffer({
             <Text style={styles.optionText}>{c.name}</Text>
           </Pressable>
         ))}
+      </> : <View style={styles.prospectFields} testID="prospect-recipient-form">
+        <Text style={styles.fieldLabel}>Angebotsempfänger</Text>
+        <Input testID="prospect-name" value={recipient.name} onChangeText={(name) => setRecipient((value) => ({ ...value, name }))} placeholder="Unternehmen / Name *" />
+        <View style={styles.inputRow}><Input value={recipient.contactName} onChangeText={(contactName) => setRecipient((value) => ({ ...value, contactName }))} placeholder="Ansprechpartner" style={{ flex: 1 }} /><Input value={recipient.email} onChangeText={(email) => setRecipient((value) => ({ ...value, email }))} placeholder="E-Mail" autoCapitalize="none" style={{ flex: 1 }} /></View>
+        <View style={styles.inputRow}><Input value={recipient.phone} onChangeText={(phone) => setRecipient((value) => ({ ...value, phone }))} placeholder="Telefon" style={{ flex: 1 }} /><Input value={recipient.vatId} onChangeText={(vatId) => setRecipient((value) => ({ ...value, vatId }))} placeholder="USt-ID" style={{ flex: 1 }} /></View>
+        <View style={styles.inputRow}><Input value={recipient.street} onChangeText={(street) => setRecipient((value) => ({ ...value, street }))} placeholder="Straße" style={{ flex: 1 }} /><Input value={recipient.houseNumber} onChangeText={(houseNumber) => setRecipient((value) => ({ ...value, houseNumber }))} placeholder="Nr." style={{ flex: 0.4 }} /></View>
+        <View style={styles.inputRow}><Input value={recipient.zip} onChangeText={(zip) => setRecipient((value) => ({ ...value, zip }))} placeholder="PLZ" style={{ flex: 0.4 }} /><Input value={recipient.city} onChangeText={(city) => setRecipient((value) => ({ ...value, city }))} placeholder="Ort" style={{ flex: 1 }} /></View>
+        <Muted>Der Empfänger wird unveränderlich im Angebot gespeichert. Ein Kundenkonto kann später daraus angelegt werden.</Muted>
+      </View>}
 
       {items.length > 0 && (
         <View style={styles.lineList}>
@@ -402,7 +455,7 @@ function CreateOffer({
           })}
         </View>
         )}
-      {(addresses.data ?? []).length > 0 ? <>
+      {targetMode === "customer" && (addresses.data ?? []).length > 0 ? <>
         <Text style={styles.fieldLabel}>Rechnungsadresse</Text><View style={styles.addressChips}>{(addresses.data ?? []).filter((row: any) => row.type === "billing" || row.type === "main").map((row: any) => <Pressable key={row.id} onPress={() => setBillingAddressId(row.id)} style={[styles.addressChip, billingAddressId === row.id && styles.addressChipActive]}><Text style={[styles.addressChipText, billingAddressId === row.id && styles.addressChipTextActive]}>{row.label || `${row.street} ${row.houseNumber}`}</Text></Pressable>)}</View>
         <Text style={styles.fieldLabel}>Lieferadresse</Text><View style={styles.addressChips}>{(addresses.data ?? []).filter((row: any) => row.type === "shipping" || row.type === "main").map((row: any) => <Pressable key={row.id} onPress={() => setDeliveryAddressId(row.id)} style={[styles.addressChip, deliveryAddressId === row.id && styles.addressChipActive]}><Text style={[styles.addressChipText, deliveryAddressId === row.id && styles.addressChipTextActive]}>{row.label || `${row.street} ${row.houseNumber}`}</Text></Pressable>)}</View>
       </> : null}
@@ -492,8 +545,8 @@ function CreateOffer({
 
       <Button
         testID="create-offer-submit"
-        title={`Angebot erstellen${items.length ? ` (${items.length})` : ""}`}
-        disabled={items.length === 0 || !companyId}
+        title={items.length ? tf("Angebot erstellen ({count})", { count: items.length }) : "Angebot erstellen"}
+        disabled={items.length === 0 || (targetMode === "customer" ? !companyId : !recipient.name.trim())}
         loading={create.isPending}
         onPress={() => {
           setMsg("");
@@ -509,6 +562,12 @@ const useStyles = makeStyles((c) => ({
   root: { flex: 1, backgroundColor: c.surfaceSecondary },
   content: { padding: 20, gap: 12, paddingBottom: 32 },
   fieldLabel: { fontSize: 13, fontWeight: "700", color: c.onSurfaceSecondary, marginTop: 8, marginBottom: 4 },
+  targetTabs: { flexDirection: "row", gap: 8, padding: 4, borderRadius: 12, backgroundColor: c.surfaceTertiary },
+  targetTab: { flex: 1, minHeight: 40, alignItems: "center", justifyContent: "center", borderRadius: 9, paddingHorizontal: 8 },
+  targetTabActive: { backgroundColor: c.brandPrimary },
+  targetTabText: { fontSize: 13, fontWeight: "700", color: c.onSurfaceSecondary },
+  targetTabTextActive: { color: c.onBrandPrimary },
+  prospectFields: { gap: 8 },
   select: {
     flexDirection: "row",
     alignItems: "center",

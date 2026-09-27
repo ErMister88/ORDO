@@ -11,7 +11,10 @@ from ..audit_service import tenant_audit
 from ..core import api_router, strip_id
 from ..customer_activity import record_customer_activity
 from ..deps import current_user, require_roles, tenant_business_access, visible_company_ids
-from ..models import B2BPromotionIn, CustomerPriceIn, PriceApprovalDecisionIn, PricingQuoteIn
+from ..models import (
+    B2BPromotionIn, CustomerPriceIn, PriceApprovalDecisionIn,
+    PricingQuoteIn, ProspectPricingQuoteIn,
+)
 from ..money import MoneyError, amount_minor, from_minor, require_minor, to_minor
 from ..pricing_engine import PricingEngine, PricingError
 from ..tenant_access import TenantBusinessAccess
@@ -178,6 +181,31 @@ async def quote_b2b(
     return {
         "pricingContext": "b2b", "currency": engine.currency, "priceSemantics": "net",
         "lines": lines, "totalMinor": total_minor, "total": from_minor(total_minor),
+    }
+
+
+@api_router.post("/pricing/b2b/prospect-quote")
+async def quote_b2b_prospect(
+    body: ProspectPricingQuoteIn,
+    user: Annotated[dict, Depends(require_roles("admin", "sales"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    if not body.items:
+        raise HTTPException(status_code=400, detail="Keine Artikel angegeben")
+    engine = PricingEngine(access)
+    try:
+        lines = [
+            (await engine.quote_b2b_prospect(item.productId, item.qty))[1].public()
+            for item in body.items
+        ]
+        total_minor = require_minor(sum(line["lineTotalMinor"] for line in lines))
+    except (PricingError, MoneyError) as exc:
+        raise _pricing_http(exc) from exc
+    return {
+        "pricingContext": "b2b", "customerContext": "prospect",
+        "currency": engine.currency, "priceSemantics": "net",
+        "lines": lines, "totalMinor": total_minor,
+        "total": from_minor(total_minor),
     }
 
 

@@ -19,7 +19,7 @@ import { Card, InfoRow, Button, Input, StatusBadge, EmptyState, Muted, LoadingSt
 import { LocalizedText as Text, localizedAlert, useI18n } from "@/src/i18n";
 
 export default function KundeDetail() {
-  useI18n();
+  const { t, tf } = useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
@@ -72,6 +72,13 @@ export default function KundeDetail() {
   });
   const quoteMap: Record<string, any> = {};
   (pricingQuote.data?.lines ?? []).forEach((line: any) => { quoteMap[line.productId] = line; });
+  const missingMasterData = c ? [
+    !c.email && t("E-Mail"),
+    !c.phone && t("Telefon"),
+    !c.vatId && t("USt-ID"),
+    addresses.isSuccess && (addresses.data ?? []).length === 0 && t("Adresse"),
+    contacts.isSuccess && (contacts.data ?? []).length === 0 && t("Ansprechpartner"),
+  ].filter(Boolean) as string[] : [];
 
   const payInvoice = useMutation({
     mutationFn: (invId: string) => apiPutIdempotent(`/invoices/${invId}/pay`, {}),
@@ -141,6 +148,7 @@ export default function KundeDetail() {
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <PageContainer narrow style={styles.page}>
         {company.isLoading ? <LoadingState label="Kundenprofil wird geladen…" /> : company.isError ? <ErrorState onRetry={() => company.refetch()} /> : null}
+        {c && missingMasterData.length > 0 && (isAdmin || user?.role === "sales") ? <Card testID="master-data-incomplete" style={styles.incompleteCard}><Text style={styles.incompleteTitle}>Stammdaten vervollständigen</Text><Muted>{tf("Fehlend: {fields}. Der Kunde kann bereits verwendet und später ergänzt werden.", { fields: missingMasterData.join(", ") })}</Muted></Card> : null}
         {c && (
           <Card testID="company-info-card">
             <View style={styles.metaRow}>
@@ -664,6 +672,8 @@ const useStyles = makeStyles((c) => ({
   subtitle: { fontSize: 14, color: c.muted, marginTop: 2 },
   content: { padding: tokens.spacing.lg, paddingBottom: 24 },
   page: { gap: 12 },
+  incompleteCard: { borderColor: c.warning, backgroundColor: c.surfaceTertiary },
+  incompleteTitle: { fontSize: 15, fontWeight: "800", color: c.warning, marginBottom: 4 },
   metaRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   metaText: { fontSize: 14, color: c.onSurfaceSecondary },
   divider: { height: 1, backgroundColor: c.divider, marginVertical: 6 },

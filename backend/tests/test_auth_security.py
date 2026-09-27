@@ -518,7 +518,9 @@ def test_admin_password_reset_invalidates_tokens_and_requires_password_change(mo
     result = run(users.admin_reset_password("user", admin, access))
     current = database.raw.users.find_one({"id": "user"})
 
-    assert verify_pw(result["initialPassword"], current["hashed_password"])
+    assert "initialPassword" not in result
+    assert result["invitationQueued"] in {True, False}
+    assert not verify_pw("password", current["hashed_password"])
     assert current["must_change_password"] is True
     assert current["authVersion"] == 1
     with pytest.raises(HTTPException) as old_session:

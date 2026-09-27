@@ -1716,6 +1716,8 @@ def test_audit_callsites_are_explicitly_classified():
         ("machines.py", "machine_update"),
         ("offers.py", "offer.accept"),
         ("offers.py", "offer.approve"),
+        ("offers.py", "offer.customer.create"),
+        ("offers.py", "offer.customer.link"),
             ("orders.py", "order.status"),
             ("payment_integrity.py", "payment.confirmed"),
             ("payment_integrity.py", "payment.checkout_initiated"),
@@ -1745,6 +1747,7 @@ def test_audit_callsites_are_explicitly_classified():
     assert sorted(global_calls) == sorted([
         ("auth.py", "login"),
         ("users.py", "identity.create"),
+        ("users.py", "identity.reuse"),
         ("users.py", "identity.reset"),
     ])
     assert legacy_calls == []

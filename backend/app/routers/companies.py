@@ -1,4 +1,5 @@
 """Companies / customers."""
+import re
 import secrets
 from fastapi import Depends, HTTPException, Query
 from typing import Annotated
@@ -47,6 +48,68 @@ async def _validate_customer_classifications(
     return customer_type_id, tag_ids
 
 
+def _duplicate_key(value: str | None) -> str:
+    return " ".join((value or "").strip().casefold().split())
+
+
+async def find_company_duplicates(
+    access: TenantBusinessAccess,
+    user: dict,
+    *,
+    name: str = "",
+    email: str = "",
+    vat_id: str = "",
+) -> list[dict]:
+    """Return safe tenant-local duplicate hints without exposing full records."""
+    wanted = {
+        "name": _duplicate_key(name),
+        "email": _duplicate_key(email),
+        "vatId": _duplicate_key(vat_id),
+    }
+    if not any(wanted.values()):
+        return []
+    clauses = []
+    if wanted["name"]:
+        words = [re.escape(part) for part in wanted["name"].split()]
+        name_pattern = r"\s+".join(words)
+        clauses.append({"name": {"$regex": rf"^\s*{name_pattern}\s*$", "$options": "i"}})
+    for key in ("email", "vatId"):
+        if wanted[key]:
+            clauses.append({key: {"$regex": rf"^\s*{re.escape(wanted[key])}\s*$", "$options": "i"}})
+    visible_ids = None
+    if user.get("role") == "sales":
+        visible_ids = set(await visible_company_ids(user, access))
+    matches = []
+    for row in await access.companies.find({"$or": clauses}).to_list(25):
+        fields = {
+            "name": _duplicate_key(row.get("name")),
+            "email": _duplicate_key(row.get("email")),
+            "vatId": _duplicate_key(row.get("vatId")),
+        }
+        reasons = [
+            key for key, value in wanted.items()
+            if value and fields[key] == value
+        ]
+        if reasons:
+            if visible_ids is not None and row.get("id") not in visible_ids:
+                matches.append({
+                    "id": f"restricted-{len(matches)}",
+                    "name": "Möglicherweise bereits vorhanden",
+                    "city": "",
+                    "reasons": reasons,
+                    "restricted": True,
+                })
+            else:
+                matches.append({
+                    "id": row.get("id"),
+                    "name": row.get("name", ""),
+                    "city": row.get("city", ""),
+                    "reasons": reasons,
+                    "restricted": False,
+                })
+    return matches
+
+
 @api_router.get("/companies")
 async def get_companies(
     user: Annotated[dict, Depends(require_roles("admin", "sales"))],
@@ -92,9 +155,31 @@ async def create_company(
     user: Annotated[dict, Depends(require_roles("admin", "sales"))],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
 ):
+    return await create_company_record(body, user, access)
+
+
+async def create_company_record(
+    body: CompanyCreateIn,
+    user: dict,
+    access: TenantBusinessAccess,
+    *,
+    source_offer_id: str | None = None,
+):
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Kundenname ist erforderlich")
+    duplicates = await find_company_duplicates(
+        access, user, name=name, email=body.email, vat_id=body.vatId
+    )
+    if duplicates and not body.confirmPotentialDuplicate:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "potential_customer_duplicate",
+                "message": "Mögliche Dublette gefunden. Bitte prüfen und ausdrücklich bestätigen.",
+                "matches": duplicates,
+            },
+        )
     # Validate related master data before the company write so a malformed
     # address/contact cannot leave a partially-created customer behind.
     if body.primaryAddress is not None:
@@ -134,6 +219,9 @@ async def create_company(
         "createdAt": now,
         "createdBy": user["id"],
     }
+    if source_offer_id:
+        company["sourceOfferId"] = source_offer_id
+        company["sourceOfferKey"] = f"{access.context.tenant_id}:{source_offer_id}"
     await access.companies.insert_one(company)
     if body.primaryAddress is not None:
         await _create_address(company["id"], body.primaryAddress, user, access)
@@ -145,6 +233,19 @@ async def create_company(
     )
     await tenant_audit(access, user, "company.create", company["id"], {"name": name})
     return strip_id(company)
+
+
+@api_router.post("/companies/duplicate-check")
+async def check_company_duplicates(
+    body: CompanyCreateIn,
+    user: Annotated[dict, Depends(require_roles("admin", "sales"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    return {
+        "matches": await find_company_duplicates(
+            access, user, name=body.name, email=body.email, vat_id=body.vatId
+        )
+    }
 
 
 async def _require_visible_company(company_id: str, user: dict, access: TenantBusinessAccess) -> dict:

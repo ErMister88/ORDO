@@ -495,6 +495,36 @@ def test_create_user_writes_global_identity_and_server_owned_membership(monkeypa
     assert membership["tenantId"] == TENANT_A
     assert membership["role"] == "customer"
     assert membership["companyId"] == "c1"
+    assert "initialPassword" not in result
+
+
+def test_create_sales_reuses_global_identity_without_password_disclosure(monkeypatch):
+    database = AsyncDatabase("membership_reuse_global_identity")
+    access_a, admin_a = tenant_access(database, TENANT_A)
+    database.raw.users.insert_one({
+        "id": "shared", "name": "Shared Person", "email": "shared@example.test",
+        "hashed_password": hash_pw("existing-password"), "active": True,
+        "authVersion": 0, "must_change_password": False,
+    })
+    monkeypatch.setattr(users, "db", database)
+
+    async def no_audit(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(users, "global_audit", no_audit)
+    monkeypatch.setattr(users, "tenant_audit", no_audit)
+    result = run(users.create_user(
+        CreateUserIn(name="Ignored Rename", email="SHARED@example.test", role="sales"),
+        admin_a, access_a,
+    ))
+
+    assert result["id"] == "shared"
+    assert result["accessMethod"] == "existing_identity"
+    assert "initialPassword" not in result
+    assert database.raw.users.count_documents({"email": "shared@example.test"}) == 1
+    membership = database.raw.tenant_memberships.find_one({"userId": "shared"})
+    assert membership["role"] == "sales"
+    assert membership["status"] == "active"
 
 
 def test_create_user_compensates_identity_and_new_company_when_membership_fails(

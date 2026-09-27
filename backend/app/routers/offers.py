@@ -10,7 +10,10 @@ from ..core import api_router, strip_id, next_seq, logger
 from ..audit_service import tenant_audit
 from ..customer_master import company_snapshot, resolve_address_snapshot
 from ..deps import current_user, require_roles, tenant_business_access, visible_company_ids
-from ..models import OfferCreate, DecisionIn, AcceptOfferIn
+from ..models import (
+    AcceptOfferIn, CompanyCreateIn, CustomerAddressIn, CustomerContactIn,
+    DecisionIn, OfferCreate, OfferCustomerCreateIn,
+)
 from ..emailer import send_email, email_shell, company_recipient, items_html
 from ..money import amount_minor, from_minor, line_total_minor, to_minor
 from ..observability import report_operational_failure
@@ -19,6 +22,7 @@ from ..snapshots import clone_snapshot_items, items_total_minor, product_item_sn
 from ..tenant_access import TenantBusinessAccess
 from ..idempotency import IdempotencyService
 from ..pagination import bounded_list
+from .companies import create_company_record
 
 
 def _offer_response(offer: dict, user: dict) -> dict:
@@ -28,7 +32,11 @@ def _offer_response(offer: dict, user: dict) -> dict:
 
 async def offer_references_visible(access: TenantBusinessAccess, offer: dict) -> bool:
     company_id = offer.get("companyId")
-    if not isinstance(company_id, str) or not await access.companies.find_one({"id": company_id}):
+    if company_id is None:
+        recipient = offer.get("recipientSnapshot")
+        if not isinstance(recipient, dict) or not str(recipient.get("name", "")).strip():
+            return False
+    elif not isinstance(company_id, str) or not await access.companies.find_one({"id": company_id}):
         return False
     for item in offer.get("items", []):
         if item.get("snapshotVersion") == 1 and item.get("currency") == offer.get("currency"):
@@ -47,8 +55,16 @@ async def get_offers(
     offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
 ):
     ids = await visible_company_ids(user, access)
+    query: dict = {"companyId": {"$in": ids}}
+    if user.get("role") == "admin":
+        query = {"$or": [query, {"companyId": None, "offerKind": "prospect"}]}
+    elif user.get("role") == "sales":
+        query = {"$or": [
+            query,
+            {"companyId": None, "offerKind": "prospect", "createdBy": user["id"]},
+        ]}
     offers = await bounded_list(
-        access.offers.find({"companyId": {"$in": ids}}).sort([("createdAt", -1), ("id", -1)]),
+        access.offers.find(query).sort([("createdAt", -1), ("id", -1)]),
         limit=limit, offset=offset,
     )
     return [_offer_response(o, user) for o in offers]
@@ -61,16 +77,38 @@ async def create_offer(
     *,
     operation_id: str | None = None,
 ):
-    ids = await visible_company_ids(user, access)
-    if body.companyId not in ids:
-        raise HTTPException(status_code=403, detail="Keine Berechtigung")
+    if bool(body.companyId) == bool(body.prospectRecipient):
+        raise HTTPException(
+            status_code=400,
+            detail="Genau ein bestehender Kunde oder ein Angebotsempfänger ist erforderlich",
+        )
     if operation_id:
         existing = await access.offers.find_one({"operationId": operation_id})
         if existing:
             return _offer_response(existing, user)
-    company = await access.companies.find_one({"id": body.companyId})
-    if not company:
-        raise HTTPException(status_code=404, detail="Kunde nicht gefunden")
+    company = None
+    if body.companyId:
+        ids = await visible_company_ids(user, access)
+        if body.companyId not in ids:
+            raise HTTPException(status_code=403, detail="Keine Berechtigung")
+        company = await access.companies.find_one({"id": body.companyId})
+        if not company:
+            raise HTTPException(status_code=404, detail="Kunde nicht gefunden")
+        recipient_snapshot = company_snapshot(company)
+    else:
+        prospect = body.prospectRecipient
+        if prospect is None:
+            raise HTTPException(status_code=400, detail="Angebotsempfänger fehlt")
+        if not prospect.name.strip():
+            raise HTTPException(status_code=400, detail="Angebotsempfänger fehlt")
+        email = prospect.email.strip().lower()
+        if email and "@" not in email:
+            raise HTTPException(status_code=400, detail="Ungültige E-Mail-Adresse")
+        recipient_snapshot = {
+            key: (value.strip() if isinstance(value, str) else value)
+            for key, value in prospect.model_dump().items()
+        }
+        recipient_snapshot["email"] = email
     needs_approval = False
     currency = access.context.default_currency
     snapshots = []
@@ -78,13 +116,24 @@ async def create_offer(
     for it in body.items:
         approved_once = False
         try:
-            prod, base_quote = await PricingEngine(access).quote_b2b(
-                body.companyId, it.productId, it.qty
-            )
+            engine = PricingEngine(access)
+            if company is not None:
+                prod, base_quote = await engine.quote_b2b(
+                    body.companyId, it.productId, it.qty
+                )
+            else:
+                prod, base_quote = await engine.quote_b2b_prospect(
+                    it.productId, it.qty
+                )
         except PricingError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         offer_minor = to_minor(it.price)
         if it.approvalId:
+            if company is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Einmalige Kundenpreisfreigaben gelten nicht für Interessenten",
+                )
             approval_filter = {
                 "id": it.approvalId, "status": "approved", "persistence": "one_time",
                 "companyId": body.companyId, "productId": it.productId,
@@ -131,6 +180,7 @@ async def create_offer(
     offer = {
         "id": offer_no,
         "companyId": body.companyId,
+        "offerKind": "customer" if company is not None else "prospect",
         "createdBy": user["id"],
         "status": "Freigabe nötig" if needs_approval else "Freigegeben",
         "items": snapshots,
@@ -140,15 +190,24 @@ async def create_offer(
         "salesAttribution": {
             "actorUserId": user["id"], "actorName": user.get("name", ""),
             "actorRole": user.get("role"), "membershipId": access.context.membership_id,
-            "salesRepId": company.get("assignedSalesRepId"),
-            "salesRepName": company.get("assignedSalesRepName", ""),
+            "salesRepId": company.get("assignedSalesRepId") if company else (
+                user["id"] if user.get("role") == "sales" else None
+            ),
+            "salesRepName": company.get("assignedSalesRepName", "") if company else (
+                user.get("name", "") if user.get("role") == "sales" else ""
+            ),
         },
-        "companySnapshot": company_snapshot(company),
-        "billingAddressSnapshot": await resolve_address_snapshot(
-            access, body.companyId, body.billingAddressId, preferred_type="billing"
+        "companySnapshot": company_snapshot(company) if company else None,
+        "recipientSnapshot": recipient_snapshot,
+        "billingAddressSnapshot": (
+            await resolve_address_snapshot(
+                access, body.companyId, body.billingAddressId, preferred_type="billing"
+            ) if company else _prospect_address_snapshot(recipient_snapshot, "billing")
         ),
-        "deliveryAddressSnapshot": await resolve_address_snapshot(
-            access, body.companyId, body.deliveryAddressId, preferred_type="shipping"
+        "deliveryAddressSnapshot": (
+            await resolve_address_snapshot(
+                access, body.companyId, body.deliveryAddressId, preferred_type="shipping"
+            ) if company else _prospect_address_snapshot(recipient_snapshot, "shipping")
         ),
         "reason": body.reason or ("Preis unter Vertriebslimit" if needs_approval else ""),
         "termMonths": body.termMonths,
@@ -181,6 +240,21 @@ async def create_offer(
             )
         raise
     return _offer_response(offer, user)
+
+
+def _prospect_address_snapshot(recipient: dict, address_type: str) -> dict | None:
+    if not any(recipient.get(key) for key in ("street", "zip", "city")):
+        return None
+    return {
+        "addressId": None,
+        "type": address_type,
+        "label": recipient.get("name", ""),
+        "street": recipient.get("street", ""),
+        "houseNumber": recipient.get("houseNumber", ""),
+        "zip": recipient.get("zip", ""),
+        "city": recipient.get("city", ""),
+        "country": recipient.get("country", "DE"),
+    }
 
 
 @api_router.post("/offers")
@@ -220,7 +294,11 @@ async def approve_offer(
         raise HTTPException(status_code=404, detail="Angebot nicht gefunden")
     await access.offers.update_one({"id": offer_id}, {"$set": {"status": "Freigegeben", "decisionNote": body.note}})
     try:
-        email, cname = await company_recipient(access, o["companyId"])
+        if o.get("companyId"):
+            email, cname = await company_recipient(access, o["companyId"])
+        else:
+            recipient = o.get("recipientSnapshot") or {}
+            email, cname = recipient.get("email"), recipient.get("name", "")
         if email:
             rows = await items_html(access, o["items"])
             total = from_minor(o.get(
@@ -262,6 +340,11 @@ async def accept_offer(
     o = await access.offers.find_one({"id": offer_id})
     if not o or not await offer_references_visible(access, o):
         raise HTTPException(status_code=404, detail="Angebot nicht gefunden")
+    if not o.get("companyId"):
+        raise HTTPException(
+            status_code=409,
+            detail="Interessentenangebot muss zuerst einem Kunden zugeordnet werden",
+        )
     ids = await visible_company_ids(user, access)
     if o["companyId"] not in ids:
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
@@ -319,6 +402,120 @@ async def accept_offer(
     if order_created:
         await tenant_audit(access, user, "offer.accept", offer_id, {"orderId": order_no})
     return strip_id(redact_internal_snapshot_fields(order))
+
+
+@api_router.post("/offers/{offer_id}/customer")
+async def convert_offer_recipient_to_customer(
+    offer_id: str,
+    body: OfferCustomerCreateIn,
+    user: Annotated[dict, Depends(require_roles("admin", "sales"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    offer = await access.offers.find_one({"id": offer_id})
+    if not offer or not await offer_references_visible(access, offer):
+        raise HTTPException(status_code=404, detail="Angebot nicht gefunden")
+    if offer.get("companyId"):
+        company = await access.companies.find_one({"id": offer["companyId"]})
+        if not company:
+            raise HTTPException(status_code=404, detail="Kunde nicht gefunden")
+        return strip_id(company)
+    if user.get("role") == "sales" and offer.get("createdBy") != user["id"]:
+        raise HTTPException(status_code=404, detail="Angebot nicht gefunden")
+
+    if body.existingCompanyId:
+        visible_ids = await visible_company_ids(user, access)
+        if body.existingCompanyId not in visible_ids:
+            raise HTTPException(status_code=404, detail="Kunde nicht gefunden")
+        existing_company = await access.companies.find_one({"id": body.existingCompanyId})
+        if not existing_company:
+            raise HTTPException(status_code=404, detail="Kunde nicht gefunden")
+        updated = await access.offers.update_one(
+            {"id": offer_id, "companyId": None},
+            {"$set": {
+                "companyId": existing_company["id"],
+                "companySnapshot": company_snapshot(existing_company),
+                "convertedToCustomerAt": datetime.now(timezone.utc).isoformat(),
+                "convertedToCustomerBy": user["id"],
+            }},
+        )
+        if updated.matched_count == 0:
+            current = await access.offers.find_one({"id": offer_id})
+            if not current or current.get("companyId") != existing_company["id"]:
+                raise HTTPException(status_code=409, detail="Angebot wurde parallel verändert")
+        await tenant_audit(
+            access, user, "offer.customer.link", offer_id,
+            {"companyId": existing_company["id"]},
+        )
+        return strip_id(existing_company)
+
+    recipient = offer.get("recipientSnapshot") or {}
+    address = body.primaryAddress
+    if address is None and all(
+        str(recipient.get(key, "")).strip() for key in ("street", "zip", "city")
+    ):
+        address = CustomerAddressIn(
+            type="main", label="Hauptadresse", street=recipient["street"],
+            houseNumber=recipient.get("houseNumber", ""), zip=recipient["zip"],
+            city=recipient["city"], country=recipient.get("country") or "DE",
+        )
+    contact = body.primaryContact
+    contact_name = str(recipient.get("contactName", "")).strip()
+    recipient_email = str(recipient.get("email", "")).strip()
+    if contact is None and contact_name and recipient_email:
+        parts = contact_name.split(None, 1)
+        contact = CustomerContactIn(
+            firstName=parts[0], lastName=parts[1] if len(parts) > 1 else "–",
+            email=recipient_email, phone=recipient.get("phone", ""),
+        )
+    merged = CompanyCreateIn(
+        **{
+            **body.model_dump(exclude={"primaryAddress", "primaryContact", "existingCompanyId"}),
+            "name": body.name.strip() or recipient.get("name", ""),
+            "email": body.email.strip() or recipient_email,
+            "phone": body.phone.strip() or recipient.get("phone", ""),
+            "city": body.city.strip() or recipient.get("city", ""),
+            "vatId": body.vatId.strip() or recipient.get("vatId", ""),
+            "primaryAddress": address,
+            "primaryContact": contact,
+        }
+    )
+    existing = await access.companies.find_one({"sourceOfferId": offer_id})
+    if existing:
+        company = strip_id(existing)
+    else:
+        try:
+            company = await create_company_record(
+                merged, user, access, source_offer_id=offer_id
+            )
+        except HTTPException as exc:
+            # A concurrent conversion may create the customer after the
+            # initial idempotency check but before duplicate detection.
+            existing = await access.companies.find_one({"sourceOfferId": offer_id})
+            if not existing or exc.status_code != 409:
+                raise
+            company = strip_id(existing)
+        except DuplicateKeyError:
+            existing = await access.companies.find_one({"sourceOfferId": offer_id})
+            if not existing:
+                raise
+            company = strip_id(existing)
+    updated = await access.offers.update_one(
+        {"id": offer_id, "companyId": None},
+        {"$set": {
+            "companyId": company["id"],
+            "companySnapshot": company_snapshot(company),
+            "convertedToCustomerAt": datetime.now(timezone.utc).isoformat(),
+            "convertedToCustomerBy": user["id"],
+        }},
+    )
+    if updated.matched_count == 0:
+        current = await access.offers.find_one({"id": offer_id})
+        if not current or current.get("companyId") != company["id"]:
+            raise HTTPException(status_code=409, detail="Angebot wurde parallel verändert")
+    await tenant_audit(
+        access, user, "offer.customer.create", offer_id, {"companyId": company["id"]}
+    )
+    return company
 
 
 @api_router.post("/offers/{offer_id}/accept")

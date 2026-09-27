@@ -24,7 +24,7 @@ const FILTERS = [
 ];
 
 export default function Kunden() {
-  useI18n();
+  const { tf } = useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const router = useRouter();
@@ -36,6 +36,7 @@ export default function Kunden() {
   const [salesFilter, setSalesFilter] = useState("all");
   const [showCreate, setShowCreate] = useState(params.new === "1");
   const [createError, setCreateError] = useState("");
+  const [duplicateMatches, setDuplicateMatches] = useState<any[]>([]);
   const emptyForm = { name: "", street: "", houseNumber: "", zip: "", city: "", country: "Deutschland", email: "", phone: "", vatId: "", taxNumber: "", status: "Lead", customerTypeId: "", customerTagIds: [] as string[], contactFirstName: "", contactLastName: "", contactTitle: "", contactPhone: "", contactMobile: "", contactEmail: "" };
   const [form, setForm] = useState(emptyForm);
 
@@ -43,18 +44,30 @@ export default function Kunden() {
   const salesStaff = useQuery({ queryKey: ["sales-staff"], queryFn: () => apiGet("/staff/sales"), enabled: user?.role === "admin" });
   const customerTypes = useQuery({ queryKey: ["config-customer-types"], queryFn: () => apiGet("/business-config/customer-types") });
   const customerTags = useQuery({ queryKey: ["config-customer-tags"], queryFn: () => apiGet("/business-config/customer-tags") });
-  const createCustomer = useMutation({
-    mutationFn: () => apiPost("/companies", {
+  const customerPayload = (confirmPotentialDuplicate = false) => ({
       name: form.name, city: form.city, email: form.email, phone: form.phone, vatId: form.vatId,
       taxNumber: form.taxNumber, status: form.status,
       customerTypeId: form.customerTypeId || null, customerTagIds: form.customerTagIds,
-      primaryAddress: { type: "main", label: "Hauptadresse", street: form.street, houseNumber: form.houseNumber, zip: form.zip, city: form.city, country: form.country, active: true },
+      confirmPotentialDuplicate,
+      ...(form.street.trim() && form.zip.trim() && form.city.trim() ? { primaryAddress: { type: "main", label: "Hauptadresse", street: form.street, houseNumber: form.houseNumber, zip: form.zip, city: form.city, country: form.country, active: true } } : {}),
       ...(form.contactFirstName && form.contactLastName && form.contactEmail ? { primaryContact: { firstName: form.contactFirstName, lastName: form.contactLastName, title: form.contactTitle, phone: form.contactPhone, mobile: form.contactMobile, email: form.contactEmail, active: true } } : {}),
-    }),
+  });
+  const createCustomer = useMutation({
+    mutationFn: async (confirmPotentialDuplicate: boolean) => {
+      if (!confirmPotentialDuplicate) {
+        const check = await apiPost("/companies/duplicate-check", customerPayload());
+        if ((check.matches ?? []).length) {
+          setDuplicateMatches(check.matches);
+          throw new Error("Mögliche Dublette gefunden. Bitte prüfen Sie den bestehenden Kunden.");
+        }
+      }
+      return apiPost("/companies", customerPayload(confirmPotentialDuplicate));
+    },
     onSuccess: (company: any) => {
       qc.invalidateQueries({ queryKey: ["companies"] });
       setShowCreate(false);
       setForm(emptyForm);
+      setDuplicateMatches([]);
       router.push(`/kunde/${company.id}`);
     },
     onError: (error: Error) => setCreateError(error.message),
@@ -73,7 +86,7 @@ export default function Kunden() {
 
   return (
     <View style={styles.root}>
-      <ScreenHeader title="Kunden" subtitle={`${data?.length ?? 0} Unternehmen`} />
+      <ScreenHeader title="Kunden" subtitle={tf("{count} Unternehmen", { count: data?.length ?? 0 })} />
 
       <View style={styles.actionBar}>
         <Pressable testID="create-customer-button" style={styles.createButton} onPress={() => setShowCreate((value) => !value)}>
@@ -152,8 +165,9 @@ export default function Kunden() {
             <View style={styles.formRow}><Input value={form.contactPhone} onChangeText={(contactPhone) => setForm((value) => ({ ...value, contactPhone }))} placeholder="Telefon" style={styles.formInput} /><Input value={form.contactMobile} onChangeText={(contactMobile) => setForm((value) => ({ ...value, contactMobile }))} placeholder="Mobil" style={styles.formInput} /></View>
             <Input value={form.contactEmail} onChangeText={(contactEmail) => setForm((value) => ({ ...value, contactEmail }))} placeholder="E-Mail Ansprechpartner" autoCapitalize="none" />
             <Text style={styles.formHint}>{user?.role === "sales" ? "Sie werden automatisch als zuständiger Vertrieb eingetragen." : "Der Kunde startet ohne Vertriebszuordnung."}</Text>
+            {duplicateMatches.length ? <View style={styles.duplicateBox} testID="customer-duplicate-warning"><Text style={styles.duplicateTitle}>Mögliche Dublette</Text>{duplicateMatches.map((match) => <Button key={match.id} title={match.restricted ? match.name : tf("{name} öffnen", { name: `${match.name}${match.city ? ` · ${match.city}` : ""}` })} kind="secondary" disabled={match.restricted} onPress={() => router.push(`/kunde/${match.id}`)} />)}<Button title="Trotzdem anlegen" kind="secondary" loading={createCustomer.isPending} onPress={() => createCustomer.mutate(true)} /></View> : null}
             {createError ? <Text style={styles.formError}>{createError}</Text> : null}
-            <Button title="Kunde anlegen" loading={createCustomer.isPending} disabled={!form.name.trim() || !form.street.trim() || !form.zip.trim() || !form.city.trim()} onPress={() => { setCreateError(""); createCustomer.mutate(); }} />
+            <Button title="Kunde anlegen" loading={createCustomer.isPending} disabled={!form.name.trim()} onPress={() => { setCreateError(""); setDuplicateMatches([]); createCustomer.mutate(false); }} />
           </Card>
         ) : null}
         ListEmptyComponent={
@@ -239,6 +253,8 @@ const useStyles = makeStyles((c) => ({
   formHint: { fontSize: 13, color: c.muted },
   selectionWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   formError: { fontSize: 13, color: c.error, fontWeight: "700" },
+  duplicateBox: { gap: 8, padding: 12, borderRadius: 12, borderWidth: 1, borderColor: c.warning, backgroundColor: c.surfaceTertiary },
+  duplicateTitle: { fontSize: 14, fontWeight: "800", color: c.warning },
   row: {
     flexDirection: "row",
     alignItems: "center",

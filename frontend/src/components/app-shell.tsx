@@ -85,9 +85,37 @@ export function AppShell({ children }: { children: ReactNode }) {
     );
   }
   if (!desktop || !user || publicRoute) {
-    return <View style={{ flex: 1 }}><View style={{ flex: 1 }}>{children}</View>{user && !publicRoute ? <NotificationBell /> : null}<LanguageSwitcher /></View>;
+    return <View style={{ flex: 1 }}><View style={{ flex: 1 }}>{children}</View>{user && !publicRoute ? <><NotificationBell />{(user.role === "admin" || user.role === "sales") ? <MobileQuickCreate role={user.role} /> : null}</> : null}<LanguageSwitcher /></View>;
   }
   return <View style={{ flex: 1, flexDirection: "row" }}><DesktopSidebar /><View style={{ flex: 1 }}>{children}</View><NotificationBell /><LanguageSwitcher /></View>;
+}
+
+const quickActions = (role?: string): [string, string][] => (
+  role === "admin" || role === "sales" ? [
+    ["Neuer Kunde", "/(tabs)/kunden?new=1"],
+    ["Neues Angebot", "/(tabs)/angebote?new=1"],
+    ["Neue Bestellung", "/(tabs)/bestellungen?new=1"],
+    ...(role === "admin" ? [
+      ["Neue Rechnung", "/(tabs)/bestellungen?createInvoice=1"] as [string, string],
+      ["Neuer Vertriebler", "/benutzer?new=sales"] as [string, string],
+    ] : []),
+    ["Neue Aufgabe", "/(tabs)/kunden"],
+  ] : []
+);
+
+function MobileQuickCreate({ role }: { role: string }) {
+  const styles = useStyles();
+  const { colors } = useTheme();
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  return <View style={styles.mobileQuickWrap} testID="mobile-quick-create">
+    {open ? <View style={styles.mobileQuickMenu}>
+      {quickActions(role).map(([label, target]) => <Pressable key={label} style={styles.mobileQuickItem} onPress={() => { setOpen(false); router.push(target as any); }}><Text style={styles.mobileQuickItemText}>{label}</Text></Pressable>)}
+    </View> : null}
+    <Pressable accessibilityLabel="Neu" testID="global-new-mobile" onPress={() => setOpen((value) => !value)} style={styles.mobileQuickButton}>
+      <Plus size={22} color={colors.onBrandPrimary} weight="bold" />
+    </Pressable>
+  </View>;
 }
 
 function NotificationBell() {
@@ -131,6 +159,7 @@ function DesktopSidebar() {
   const [quickOpen, setQuickOpen] = useState(false);
   const path = usePathname();
   const router = useRouter();
+  const actions = quickActions(user?.role);
   const active = (item: NavItem) => (item.match ?? [item.path]).some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
   const logout = async () => { await signOut(); router.replace("/login"); };
   return (
@@ -139,18 +168,12 @@ function DesktopSidebar() {
         <View style={styles.mark}><Text style={styles.markText}>O</Text></View>
         <View><Text style={styles.brand}>ORDO</Text><Text style={styles.tenant}>S&S coffee and more</Text></View>
       </View>
-      <Pressable testID="global-new" onPress={() => setQuickOpen((value) => !value)} style={styles.quickButton}>
+      {actions.length ? <><Pressable testID="global-new" onPress={() => setQuickOpen((value) => !value)} style={styles.quickButton}>
         <Plus size={18} color={colors.onBrandPrimary} weight="bold" /><Text style={styles.quickButtonText}>Neu</Text>
       </Pressable>
       {quickOpen ? <View style={styles.quickMenu}>
-        {[
-          ["Neuer Kunde", "/(tabs)/kunden?new=1"],
-          ["Neue Bestellung", "/(tabs)/bestellungen"],
-          ["Neues Angebot", "/(tabs)/angebote"],
-          ["Neue Rechnung", "/(tabs)/bestellungen?createInvoice=1"],
-          ["Neue Aufgabe", "/(tabs)/kunden"],
-        ].map(([label, target]) => <Pressable key={label} onPress={() => { setQuickOpen(false); router.push(target as any); }} style={styles.quickItem}><Text style={styles.quickItemText}>{label}</Text></Pressable>)}
-      </View> : null}
+        {actions.map(([label, target]) => <Pressable key={label} onPress={() => { setQuickOpen(false); router.push(target as any); }} style={styles.quickItem}><Text style={styles.quickItemText}>{label}</Text></Pressable>)}
+      </View> : null}</> : null}
       <ScrollView style={styles.nav} contentContainerStyle={styles.navContent} showsVerticalScrollIndicator={false}>
         {groups(user?.role).map((group) => (
           <View key={group.label} style={styles.group}>
@@ -200,6 +223,11 @@ const useStyles = makeStyles((c) => ({
   quickMenu: { marginHorizontal: 6, marginTop: -10, marginBottom: 14, borderRadius: 10, padding: 6, backgroundColor: c.inverseActive },
   quickItem: { minHeight: 34, justifyContent: "center", paddingHorizontal: 10 },
   quickItemText: { color: c.onSurfaceInverse, fontWeight: "700", fontSize: 12.5 },
+  mobileQuickWrap: { position: "absolute", right: 16, bottom: 76, zIndex: 110, alignItems: "flex-end", gap: 8 },
+  mobileQuickButton: { width: 52, height: 52, borderRadius: 26, backgroundColor: c.brandPrimary, alignItems: "center", justifyContent: "center", ...tokens.shadow },
+  mobileQuickMenu: { minWidth: 190, borderRadius: 14, padding: 7, backgroundColor: c.surface, borderWidth: 1, borderColor: c.border, ...tokens.shadow },
+  mobileQuickItem: { minHeight: 40, justifyContent: "center", paddingHorizontal: 12, borderRadius: 9 },
+  mobileQuickItemText: { color: c.onSurface, fontSize: 13, fontWeight: "700" },
   profileName: { color: c.onSurfaceInverse, fontSize: 12.5, fontWeight: "700" },
   profileRole: { color: c.inverseSubtle, fontSize: 11, marginTop: 1 },
   languageSwitcher: {

@@ -7,29 +7,31 @@ import {
   Platform,
 } from "react-native";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArrowLeft, Plus, Key, CaretDown, ShieldCheck } from "phosphor-react-native";
+import { ArrowLeft, Plus, Key, CaretDown } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
 import { apiGet, apiPost } from "@/src/api/client";
 import { Card, Input, Button, SectionTitle, Muted } from "@/src/components/ui";
-import { LocalizedText as Text } from "@/src/i18n";
+import { LocalizedText as Text, useI18n } from "@/src/i18n";
 
 type Role = "sales" | "customer";
 type CompanyMode = "existing" | "new";
 
 export default function Benutzer() {
+  const { tf } = useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const router = useRouter();
+  const params = useLocalSearchParams<{ new?: string }>();
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
 
   const users = useQuery({ queryKey: ["users"], queryFn: () => apiGet("/users") });
   const companies = useQuery({ queryKey: ["companies"], queryFn: () => apiGet("/companies") });
 
-  const [showForm, setShowForm] = useState(false);
+  const [showForm, setShowForm] = useState(params.new === "sales");
   const [role, setRole] = useState<Role>("sales");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -38,7 +40,6 @@ export default function Benutzer() {
   const [showComp, setShowComp] = useState(false);
   const [newComp, setNewComp] = useState({ name: "", city: "", email: "" });
   const [msg, setMsg] = useState("");
-  const [credential, setCredential] = useState<{ name: string; email: string; password: string } | null>(null);
 
   const resetForm = () => {
     setRole("sales");
@@ -62,16 +63,16 @@ export default function Benutzer() {
     onSuccess: (u: any) => {
       qc.invalidateQueries({ queryKey: ["users"] });
       qc.invalidateQueries({ queryKey: ["companies"] });
-      setCredential({ name: u.name, email: u.email, password: u.initialPassword });
       setShowForm(false);
       resetForm();
+      setMsg(u.accessMethod === "existing_identity" ? "Bestehende globale Identität wurde diesem Tenant zugeordnet." : u.invitationQueued ? "Einladung zum sicheren Festlegen des Passworts wurde vorgemerkt." : "Benutzer wurde angelegt. Die Einladung konnte nicht vorgemerkt werden; bitte Passwortreset erneut senden.");
     },
     onError: (e: any) => setMsg(e.message || "Fehler beim Anlegen"),
   });
 
   const resetPw = useMutation({
     mutationFn: (id: string) => apiPost(`/users/${id}/reset`, {}),
-    onSuccess: (r: any) => setCredential({ name: r.email, email: r.email, password: r.initialPassword }),
+    onSuccess: (r: any) => setMsg(r.invitationQueued ? "Sicherer Passwortreset wurde vorgemerkt." : "Passwort wurde gesperrt; die Einladung konnte nicht vorgemerkt werden."),
   });
 
   const submit = () => {
@@ -100,7 +101,6 @@ export default function Benutzer() {
         </View>
         <Pressable
           onPress={() => {
-            setCredential(null);
             resetForm();
             setShowForm((s) => !s);
           }}
@@ -114,22 +114,7 @@ export default function Benutzer() {
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-          {credential && (
-            <Card testID="credential-card" style={{ borderWidth: 1.5, borderColor: colors.success }}>
-              <View style={styles.credHead}>
-                <ShieldCheck size={22} color={colors.success} weight="fill" />
-                <Text style={styles.credTitle}>Zugangsdaten (einmalig sichtbar)</Text>
-              </View>
-              <Muted>Notieren Sie dieses Passwort jetzt – es wird nicht erneut angezeigt.</Muted>
-              <View style={styles.credBox}>
-                <Text style={styles.credLabel}>E-Mail</Text>
-                <Text style={styles.credValue} selectable testID="cred-email">{credential.email}</Text>
-                <Text style={[styles.credLabel, { marginTop: 8 }]}>Passwort</Text>
-                <Text style={styles.credPw} selectable testID="cred-password">{credential.password}</Text>
-              </View>
-              <Button title="Verstanden" kind="secondary" onPress={() => setCredential(null)} style={{ marginTop: 10 }} testID="cred-close" />
-            </Card>
-          )}
+          {msg && !showForm ? <Card testID="user-notice"><Text style={styles.noticeText}>{msg}</Text></Card> : null}
 
           {showForm && (
             <Card testID="user-form">
@@ -224,7 +209,7 @@ export default function Benutzer() {
             </Card>
           )}
 
-          <SectionTitle style={{ marginTop: 4 }}>Alle Benutzer ({users.data?.length ?? 0})</SectionTitle>
+          <SectionTitle style={{ marginTop: 4 }}>{tf("Alle Benutzer ({count})", { count: users.data?.length ?? 0 })}</SectionTitle>
           {(users.data ?? []).map((u: any) => (
             <Card key={u.id} testID={`user-${u.id}`}>
               <View style={styles.userRow}>
@@ -235,6 +220,7 @@ export default function Benutzer() {
                     {roleLabel(u.role)}
                     {u.companyName ? ` · ${u.companyName}` : ""}
                   </Muted>
+                  <Muted>{u.identityActive && u.status === "active" ? "Aktiv" : "Inaktiv"}{u.role === "sales" ? ` · ${tf("{count} zugewiesene Kunden", { count: u.assignedCustomerCount ?? 0 })}` : ""}</Muted>
                 </View>
                 {u.role !== "admin" && (
                   <Pressable
@@ -306,10 +292,5 @@ const useStyles = makeStyles((c) => ({
     backgroundColor: c.brandTertiary,
   },
   resetText: { color: c.brandPrimary, fontWeight: "700", fontSize: 13 },
-  credHead: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 4 },
-  credTitle: { fontSize: 15, fontWeight: "800", color: c.onSurface },
-  credBox: { backgroundColor: c.surfaceTertiary, borderRadius: 12, padding: 14, marginTop: 8 },
-  credLabel: { fontSize: 12, fontWeight: "700", color: c.muted },
-  credValue: { fontSize: 15, fontWeight: "600", color: c.onSurface, marginTop: 2 },
-  credPw: { fontSize: 20, fontWeight: "800", color: c.brandPrimary, marginTop: 2, letterSpacing: 1 },
+  noticeText: { color: c.success, fontWeight: "700", fontSize: 14 },
 }));

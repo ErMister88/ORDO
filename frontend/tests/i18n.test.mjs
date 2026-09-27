@@ -42,9 +42,34 @@ test("critical B2C, B2B, admin and payment UI has translations", () => {
     "Zahlung wird bestätigt",
     "Zahlung bestätigt",
     "Zahlung nicht abgeschlossen",
+    "Bestehender Kunde",
+    "Interessent",
+    "Angebotsempfänger",
+    "Mögliche Dublette",
+    "Stammdaten vervollständigen",
+    "Neuer Vertriebler",
+    "Als Kunde anlegen",
   ]) {
     assert.ok(catalog[source], `missing critical translation: ${source}`);
   }
+});
+
+test("final review terminology is professionally localized without raw German", () => {
+  const keys = [
+    "Bestehender Kunde",
+    "Angebotsempfänger",
+    "Mögliche Dublette",
+    "Stammdaten vervollständigen",
+    "Trotzdem als Kunde anlegen",
+    "Neuer Vertriebler",
+  ];
+  for (const source of keys) {
+    assert.ok(catalog[source], `missing final-review translation: ${source}`);
+    assert.notEqual(catalog[source].it, source);
+    assert.notEqual(catalog[source].en, source);
+  }
+  assert.equal(catalog["Interessent"].en, "Prospect");
+  assert.equal(catalog["Angebotsempfänger"].it, "Destinatario dell'offerta");
 });
 
 test("language switching is persistent and outside session/cart providers", async () => {

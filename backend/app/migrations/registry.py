@@ -18,6 +18,7 @@ from .versions.v0010_payment_integrity import MIGRATION as V0010_PAYMENT_INTEGRI
 from .versions.v0011_operational_reliability import MIGRATION as V0011_OPERATIONAL_RELIABILITY
 from .versions.v0012_storage_communication_worker import MIGRATION as V0012_STORAGE_COMMUNICATION_WORKER
 from .versions.v0013_production_hardening import MIGRATION as V0013_PRODUCTION_HARDENING
+from .versions.v0014_final_product_review import MIGRATION as V0014_FINAL_PRODUCT_REVIEW
 
 
 _MIGRATIONS: tuple[Migration, ...] = (
@@ -34,6 +35,7 @@ _MIGRATIONS: tuple[Migration, ...] = (
     replace(V0011_OPERATIONAL_RELIABILITY, depends_on=(10,)),
     replace(V0012_STORAGE_COMMUNICATION_WORKER, depends_on=(11,)),
     replace(V0013_PRODUCTION_HARDENING, depends_on=(12,)),
+    replace(V0014_FINAL_PRODUCT_REVIEW, depends_on=(13,)),
 )
 
 

@@ -211,8 +211,8 @@ def test_complete_validator_includes_database_and_exact_schema(monkeypatch):
         })
     report = run(build_report(database))
     assert report["status"] == "READY"
-    assert report["runtime"]["capabilities"]["schema"]["expectedVersion"] == 13
-    assert report["runtime"]["capabilities"]["schema"]["appliedVersion"] == 13
+    assert report["runtime"]["capabilities"]["schema"]["expectedVersion"] == 14
+    assert report["runtime"]["capabilities"]["schema"]["appliedVersion"] == 14
 
 
 def test_pagination_bounds_and_offset_are_enforced_without_unbounded_reads():
@@ -384,6 +384,6 @@ def test_migration_13_is_additive_tenant_first_and_registered_after_12():
     result = migration13.apply(database, type("Context", (), {"checkpoint": lambda self: None})())
     assert plan.expected_changes["documentsChanged"] == 0
     assert result == {"indexesEnsured": len(migration13.INDEXES), "documentsChanged": 0}
-    assert get_migrations()[-1].version == 13 and get_migrations()[-1].depends_on == (12,)
+    assert next(item for item in get_migrations() if item.version == 13).depends_on == (12,)
     assert all(keys[0][0] == "tenantId" for collection, keys, _name, _options in migration13.INDEXES if collection != "auth_rate_limits")
     assert all(database[name].count_documents({}) == 0 for name in database.list_collection_names())

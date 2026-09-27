@@ -35,8 +35,22 @@ class OfferItemIn(BaseModel):
     approvalId: Optional[str] = None
 
 
+class ProspectRecipientIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    contactName: str = Field(default="", max_length=200)
+    email: str = Field(default="", max_length=320)
+    phone: str = Field(default="", max_length=80)
+    street: str = Field(default="", max_length=300)
+    houseNumber: str = Field(default="", max_length=50)
+    zip: str = Field(default="", max_length=30)
+    city: str = Field(default="", max_length=200)
+    country: str = Field(default="DE", max_length=100)
+    vatId: str = Field(default="", max_length=100)
+
+
 class OfferCreate(BaseModel):
-    companyId: str
+    companyId: Optional[str] = None
+    prospectRecipient: Optional[ProspectRecipientIn] = None
     items: List[OfferItemIn] = Field(max_length=200)
     termMonths: int = 48
     reason: Optional[str] = ""
@@ -126,6 +140,10 @@ class B2BPromotionIn(BaseModel):
 
 class PricingQuoteIn(BaseModel):
     companyId: str
+    items: List[OrderItemIn]
+
+
+class ProspectPricingQuoteIn(BaseModel):
     items: List[OrderItemIn]
 
 
@@ -329,6 +347,11 @@ class CompanyCreateIn(BaseModel):
     customerTagIds: List[str] = Field(default_factory=list)
     primaryAddress: Optional[CustomerAddressIn] = None
     primaryContact: Optional[CustomerContactIn] = None
+    confirmPotentialDuplicate: bool = False
+
+
+class OfferCustomerCreateIn(CompanyCreateIn):
+    existingCompanyId: Optional[str] = None
 
 
 class PriceApprovalDecisionIn(BaseModel):
