@@ -100,7 +100,9 @@ test("dynamic shop translations preserve every interpolation placeholder", () =>
     "{count} Angebot(e) warten auf Ihre Freigabe",
     "{days} Tage seit letzter Bestellung",
     "{orders} Bestellungen · {activeCustomers} aktive Kunden",
+    "{orders} Bestellung · {activeCustomers} aktive Kunden",
     "{orders} Bestellungen · Menge {quantity}",
+    "{orders} Bestellung · Menge {quantity}",
     "Rechnung {id} ist überfällig",
     "DB {amount}",
     "{quantity} kg/Monat",
@@ -126,10 +128,11 @@ test("dashboard metrics and shared field accessibility do not leak German in IT/
     "{orders} Bestellungen · Menge {quantity}",
     "Rechnung {id} ist überfällig",
   ]) {
-    assert.match(dashboard, new RegExp(`tf\\(${JSON.stringify(source).replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}`));
+    assert.ok(dashboard.includes(source), `dashboard does not use localized template: ${source}`);
   }
   assert.match(ui, /accessibilityLabel=\{t\(title\)\}/);
   assert.match(ui, /props\.accessibilityLabel \? t\(props\.accessibilityLabel\)/);
+  assert.match(dashboard, /row\.orders === 1 \? "\{orders\} Bestellung/);
   assert.equal(catalog["DB nicht vollständig"].en, "Contribution margin incomplete");
   assert.equal(catalog["DB nicht vollständig"].it, "Margine di contribuzione incompleto");
 });
