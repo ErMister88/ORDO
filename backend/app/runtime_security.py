@@ -33,6 +33,8 @@ ABUSE_RULES = (
     AbuseRule("POST", "/api/shop/equipment-requests", 20, 60 * 60),
     AbuseRule("POST", "/api/newsletter/subscribe", 10, 60 * 60),
     AbuseRule("POST", "/api/shop/orders/", 40, 15 * 60, prefix=True),
+    AbuseRule("GET", "/api/public/offers/", 120, 60, prefix=True),
+    AbuseRule("POST", "/api/public/offers/", 30, 15 * 60, prefix=True),
     AbuseRule("POST", "/api/operations/reconciliation/run", 6, 60 * 60),
 )
 

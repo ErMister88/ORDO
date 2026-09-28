@@ -21,6 +21,7 @@ from .versions.v0013_production_hardening import MIGRATION as V0013_PRODUCTION_H
 from .versions.v0014_final_product_review import MIGRATION as V0014_FINAL_PRODUCT_REVIEW
 from .versions.v0015_category_first_commerce import MIGRATION as V0015_CATEGORY_FIRST_COMMERCE
 from .versions.v0016_financial_operations import MIGRATION as V0016_FINANCIAL_OPERATIONS
+from .versions.v0017_offer_delivery import MIGRATION as V0017_OFFER_DELIVERY
 
 
 _MIGRATIONS: tuple[Migration, ...] = (
@@ -40,6 +41,7 @@ _MIGRATIONS: tuple[Migration, ...] = (
     replace(V0014_FINAL_PRODUCT_REVIEW, depends_on=(13,)),
     replace(V0015_CATEGORY_FIRST_COMMERCE, depends_on=(14,)),
     replace(V0016_FINANCIAL_OPERATIONS, depends_on=(15,)),
+    replace(V0017_OFFER_DELIVERY, depends_on=(16,)),
 )
 
 

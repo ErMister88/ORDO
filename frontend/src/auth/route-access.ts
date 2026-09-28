@@ -1,6 +1,6 @@
 export type InternalRole = "admin" | "sales" | "customer";
 
-const PUBLIC_ROUTES = ["/login", "/shop", "/marken", "/collections", "/regionen", "/legal", "/passwort-vergessen", "/zahlung"] as const;
+const PUBLIC_ROUTES = ["/login", "/shop", "/marken", "/collections", "/regionen", "/legal", "/passwort-vergessen", "/zahlung", "/angebot"] as const;
 const ADMIN_ROUTES = [
   "/produkte",
   "/benutzer",

@@ -9,6 +9,7 @@ from pymongo.errors import DuplicateKeyError
 from ..core import api_router, strip_id, next_seq, logger
 from ..audit_service import tenant_audit
 from ..customer_master import company_snapshot, resolve_address_snapshot
+from ..customer_activity import record_customer_activity
 from ..deps import current_user, require_roles, tenant_business_access, visible_company_ids
 from ..models import (
     AcceptOfferIn, CompanyCreateIn, CustomerAddressIn, CustomerContactIn,
@@ -26,8 +27,13 @@ from .companies import create_company_record
 
 
 def _offer_response(offer: dict, user: dict) -> dict:
-    payload = offer if user.get("role") == "admin" else redact_internal_snapshot_fields(offer)
-    return strip_id(payload)
+    payload = strip_id(offer if user.get("role") == "admin" else redact_internal_snapshot_fields(offer))
+    payload.pop("publicAccess", None)
+    acceptance = payload.get("acceptanceSnapshot")
+    if isinstance(acceptance, dict):
+        acceptance.pop("tokenReference", None)
+    payload.pop("tenantId", None)
+    return payload
 
 
 async def offer_references_visible(access: TenantBusinessAccess, offer: dict) -> bool:
@@ -183,6 +189,8 @@ async def create_offer(
         "offerKind": "customer" if company is not None else "prospect",
         "createdBy": user["id"],
         "status": "Freigabe nötig" if needs_approval else "Freigegeben",
+        "deliveryStatus": "DRAFT",
+        "responseStatus": "OPEN",
         "items": snapshots,
         "currency": currency,
         "netTotalMinor": items_total_minor(snapshots, currency=currency),
@@ -239,6 +247,21 @@ async def create_offer(
                 {"$unset": {"consumedAt": "", "consumedByOfferId": ""}},
             )
         raise
+    await tenant_audit(access, user, "offer.create", offer_no, {"companyId": body.companyId})
+    if body.companyId:
+        try:
+            await record_customer_activity(
+                access,
+                company_id=body.companyId,
+                actor=user,
+                activity_type="offer_created",
+                title="Angebot erstellt",
+                reference={"resourceType": "offer", "resourceId": offer_no},
+            )
+        except Exception:
+            await report_operational_failure(
+                access, logger, operation="offer.customer_activity", category="audit",
+            )
     return _offer_response(offer, user)
 
 
@@ -460,7 +483,12 @@ async def convert_offer_recipient_to_customer(
         )
     contact = body.primaryContact
     contact_name = str(recipient.get("contactName", "")).strip()
-    recipient_email = str(recipient.get("email", "")).strip()
+    delivery_recipient = offer.get("deliveryRecipient") or {}
+    saved_delivery_email = (
+        str(delivery_recipient.get("email", "")).strip()
+        if delivery_recipient.get("savedForLater") is True else ""
+    )
+    recipient_email = str(recipient.get("email", "")).strip() or saved_delivery_email
     if contact is None and contact_name and recipient_email:
         parts = contact_name.split(None, 1)
         contact = CustomerContactIn(

@@ -5,15 +5,16 @@ import {
   Pressable,
   KeyboardAvoidingView,
   Platform,
+  Share,
 } from "react-native";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Image } from "expo-image";
-import { CaretDown, CaretUp, Export, Plus, ImageSquare } from "phosphor-react-native";
+import { CaretDown, CaretUp, DownloadSimple, Envelope, Eye, LinkSimple, Plus, ImageSquare } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
 import { useAuth } from "@/src/auth/auth";
-import { apiGet, apiPost, apiPostIdempotent, fileUrl } from "@/src/api/client";
+import { apiGet, apiGetBlob, apiPost, apiPostIdempotent, fileUrl } from "@/src/api/client";
 import { euro, num } from "@/src/lib/format";
 import { shareOfferPdf } from "@/src/lib/pdf";
 import { ScreenHeader } from "@/src/components/screen-header";
@@ -45,8 +46,16 @@ function prospectCustomerForm(offer: any): ProspectCustomerForm {
   };
 }
 
+function displayedOfferStatus(offer: any): string {
+  const external: Record<string, string> = {
+    VIEWED: "Geöffnet", ACCEPTED: "Angenommen", DECLINED: "Abgelehnt",
+    EXPIRED: "Abgelaufen", CANCELLED: "Widerrufen",
+  };
+  return external[offer.responseStatus] ?? offer.status;
+}
+
 export default function Angebote() {
-  const { tf } = useI18n();
+  const { tf, language } = useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const { user } = useAuth();
@@ -69,6 +78,73 @@ export default function Angebote() {
     queryKey: ["companies"],
     queryFn: () => apiGet("/companies"),
     enabled: isStaff,
+  });
+  const capabilities = useQuery<any>({
+    queryKey: ["runtime-capabilities"], queryFn: () => apiGet("/health/ready"), enabled: isStaff,
+  });
+  const emailAvailable = capabilities.data?.capabilities?.email?.status === "available";
+  const [offerLinks, setOfferLinks] = useState<Record<string, string>>({});
+  const [deliveryOfferId, setDeliveryOfferId] = useState<string | null>(null);
+  const [deliveryEmails, setDeliveryEmails] = useState<Record<string, string>>({});
+  const [saveRecipientEmails, setSaveRecipientEmails] = useState<Record<string, boolean>>({});
+  const [actionMessage, setActionMessage] = useState<Record<string, string>>({});
+
+  const openOfferPdf = async (offer: any, download: boolean) => {
+    setActionMessage((current) => ({ ...current, [offer.id]: "" }));
+    try {
+      if (Platform.OS !== "web") {
+        await apiPost(`/offers/${offer.id}/document`, { locale: language });
+        await shareOfferPdf(offer, offer.companySnapshot || offer.recipientSnapshot, prodMap);
+        return;
+      }
+      const blob = await apiGetBlob(`/offers/${offer.id}/pdf?locale=${language}&disposition=${download ? "attachment" : "inline"}`);
+      const url = globalThis.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.target = download ? "_self" : "_blank";
+      if (download) anchor.download = `Angebot-${offer.id}.pdf`;
+      anchor.click();
+      globalThis.setTimeout(() => globalThis.URL.revokeObjectURL(url), 30_000);
+    } catch (error) {
+      setActionMessage((current) => ({ ...current, [offer.id]: error instanceof Error ? error.message : "PDF konnte nicht erstellt werden." }));
+    }
+  };
+
+  const createSecureLink = useMutation({
+    mutationFn: (offer: any) => apiPost(`/offers/${offer.id}/public-link`, { locale: language, expiresInDays: 30 }),
+    onSuccess: async (result: any, offer: any) => {
+      setOfferLinks((current) => ({ ...current, [offer.id]: result.url }));
+      let copied = false;
+      try {
+        if (Platform.OS === "web" && globalThis.navigator?.clipboard) {
+          await globalThis.navigator.clipboard.writeText(result.url);
+          copied = true;
+        } else {
+          await Share.share({ message: result.url });
+          copied = true;
+        }
+      } catch {
+        copied = false;
+      }
+      setActionMessage((current) => ({ ...current, [offer.id]: copied ? "Sicherer Link wurde erstellt und kopiert." : "Sicherer Link wurde erstellt. Bitte manuell kopieren." }));
+      qc.invalidateQueries({ queryKey: ["offers"] });
+    },
+    onError: (error: Error, offer: any) => setActionMessage((current) => ({ ...current, [offer.id]: error.message })),
+  });
+
+  const sendOffer = useMutation({
+    mutationFn: ({ offer, email }: { offer: any; email: string }) => apiPostIdempotent(`/offers/${offer.id}/send`, {
+      email: email.trim() || null,
+      locale: language,
+      saveRecipientEmail: Boolean(saveRecipientEmails[offer.id]),
+      message: "",
+    }),
+    onSuccess: (_result, variables) => {
+      setDeliveryOfferId(null);
+      setActionMessage((current) => ({ ...current, [variables.offer.id]: "Versand wurde sicher vorgemerkt." }));
+      qc.invalidateQueries({ queryKey: ["offers"] });
+    },
+    onError: (error: Error, variables) => setActionMessage((current) => ({ ...current, [variables.offer.id]: error.message })),
   });
 
   const prodMap: Record<string, any> = {};
@@ -185,7 +261,7 @@ export default function Angebote() {
             style={{ marginBottom: 8 }}
           />
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
-            {["Alle", "Freigabe nötig", "Freigegeben", "Angenommen", "Abgelehnt"].map((s) => (
+            {["Alle", "Freigabe nötig", "Freigegeben", "Geöffnet", "Angenommen", "Abgelehnt"].map((s) => (
               <Pressable
                 key={s}
                 testID={`offer-filter-${s}`}
@@ -200,7 +276,7 @@ export default function Angebote() {
           {(() => {
             const q = oSearch.trim().toLowerCase();
             const visibleOffers = (offers.data ?? []).filter((o: any) => {
-              if (oStatus !== "Alle" && o.status !== oStatus) return false;
+              if (oStatus !== "Alle" && displayedOfferStatus(o) !== oStatus) return false;
               if (!q) return true;
               const cname = (o.companySnapshot?.name ?? o.recipientSnapshot?.name ?? compMap[o.companyId]?.name ?? "").toLowerCase();
               return o.id.toLowerCase().includes(q) || cname.includes(q);
@@ -221,7 +297,7 @@ export default function Angebote() {
                 <Card key={o.id} testID={`offer-${o.id}`}>
                   <View style={styles.offerTop}>
                     <Text style={styles.offerId}>{o.id}</Text>
-                    <StatusBadge status={o.status} />
+                    <StatusBadge status={displayedOfferStatus(o)} />
                   </View>
                   {comp ? <Text style={styles.offerCompany}>{comp.name}</Text> : null}
                   {!o.companyId ? <Muted>Interessent · noch nicht im Kundenstamm</Muted> : null}
@@ -244,16 +320,26 @@ export default function Angebote() {
                   })}
                   {o.reason ? <Muted style={{ fontStyle: "italic" }}>{`„${o.reason}"`}</Muted> : null}
 
-                  {o.status === "Freigegeben" && (
-                    <Pressable
-                      testID={`share-offer-${o.id}`}
-                      style={styles.shareBtn}
-                      onPress={() => shareOfferPdf(o, comp, prodMap)}
-                    >
-                      <Export size={16} color={colors.brandPrimary} weight="bold" />
-                      <Text style={styles.shareText}>Als PDF teilen</Text>
-                    </Pressable>
-                  )}
+                  {isStaff && o.status === "Freigegeben" ? <View style={styles.offerDelivery} testID={`offer-actions-${o.id}`}>
+                    <View style={styles.offerActionGrid}>
+                      <Pressable style={styles.offerActionButton} onPress={() => void openOfferPdf(o, false)} testID={`offer-pdf-view-${o.id}`}><Eye size={16} color={colors.brandPrimary} /><Text style={styles.shareText}>PDF anzeigen</Text></Pressable>
+                      <Pressable style={styles.offerActionButton} onPress={() => void openOfferPdf(o, true)} testID={`offer-pdf-download-${o.id}`}><DownloadSimple size={16} color={colors.brandPrimary} /><Text style={styles.shareText}>PDF herunterladen</Text></Pressable>
+                      <Pressable style={styles.offerActionButton} onPress={() => createSecureLink.mutate(o)} testID={`offer-secure-link-${o.id}`}><LinkSimple size={16} color={colors.brandPrimary} /><Text style={styles.shareText}>Sicheren Link kopieren</Text></Pressable>
+                      {emailAvailable ? <Pressable style={styles.offerActionButton} onPress={() => { setDeliveryOfferId(deliveryOfferId === o.id ? null : o.id); setDeliveryEmails((current) => ({ ...current, [o.id]: current[o.id] ?? o.recipientSnapshot?.email ?? o.companySnapshot?.email ?? "" })); }} testID={`offer-email-${o.id}`}><Envelope size={16} color={colors.brandPrimary} /><Text style={styles.shareText}>Per E-Mail senden</Text></Pressable> : null}
+                    </View>
+                    {!emailAvailable ? <Muted>E-Mail-Versand nicht konfiguriert / derzeit nicht verfügbar.</Muted> : null}
+                    {offerLinks[o.id] ? <Muted selectable>{offerLinks[o.id]}</Muted> : null}
+                    {deliveryOfferId === o.id ? <View style={styles.deliveryForm}>
+                      <Input value={deliveryEmails[o.id] ?? ""} onChangeText={(value) => setDeliveryEmails((current) => ({ ...current, [o.id]: value }))} placeholder="Empfänger-E-Mail" autoCapitalize="none" keyboardType="email-address" />
+                      <Pressable style={styles.rememberRow} onPress={() => setSaveRecipientEmails((current) => ({ ...current, [o.id]: !current[o.id] }))}>
+                        <View style={[styles.checkbox, saveRecipientEmails[o.id] && styles.checkboxActive]} />
+                        <Text style={styles.rememberText}>Für später übernehmen</Text>
+                      </Pressable>
+                      <Button title="Versand vormerken" loading={sendOffer.isPending && sendOffer.variables?.offer.id === o.id} disabled={!deliveryEmails[o.id]?.includes("@")} onPress={() => sendOffer.mutate({ offer: o, email: deliveryEmails[o.id] ?? "" })} />
+                    </View> : null}
+                    {actionMessage[o.id] ? <Muted>{actionMessage[o.id]}</Muted> : null}
+                  </View> : null}
+                  {!isStaff && o.status === "Freigegeben" ? <Pressable testID={`share-offer-${o.id}`} style={styles.shareBtn} onPress={() => shareOfferPdf(o, comp, prodMap)}><Text style={styles.shareText}>Als PDF teilen</Text></Pressable> : null}
                   {isStaff && !o.companyId ? <View style={styles.actions}>
                     {activeCustomerDraft ? <View style={styles.customerConversion} testID={`offer-customer-form-${o.id}`}>
                       <Text style={styles.fieldLabel}>Interessent als Kunde übernehmen</Text>
@@ -679,6 +765,14 @@ const useStyles = makeStyles((c) => ({
   filterChipText: { fontSize: 13, fontWeight: "700", color: c.onSurfaceSecondary },
   filterChipTextActive: { color: c.onBrandPrimary },
   actions: { gap: 10, marginTop: 6, borderTopWidth: 1, borderTopColor: c.divider, paddingTop: 10 },
+  offerDelivery: { gap: 8, marginTop: 8, borderTopWidth: 1, borderTopColor: c.divider, paddingTop: 10 },
+  offerActionGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  offerActionButton: { minHeight: 42, flexGrow: 1, minWidth: 150, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingHorizontal: 12, borderRadius: 10, backgroundColor: c.brandTertiary },
+  deliveryForm: { gap: 8, padding: 10, borderRadius: 10, backgroundColor: c.surfaceTertiary },
+  rememberRow: { minHeight: 38, flexDirection: "row", alignItems: "center", gap: 8 },
+  checkbox: { width: 18, height: 18, borderRadius: 4, borderWidth: 2, borderColor: c.border },
+  checkboxActive: { backgroundColor: c.brandPrimary, borderColor: c.brandPrimary },
+  rememberText: { color: c.onSurfaceSecondary, fontSize: 13, fontWeight: "700" },
   approvalActions: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 },
   actionRow: { flexDirection: "row", gap: 10 },
   shareBtn: {

@@ -58,6 +58,22 @@ class OfferCreate(BaseModel):
     deliveryAddressId: Optional[str] = None
 
 
+class OfferDocumentIn(BaseModel):
+    locale: Literal["de", "it", "en"] = "de"
+
+
+class OfferPublicLinkIn(BaseModel):
+    locale: Literal["de", "it", "en"] = "de"
+    expiresInDays: Annotated[int, Field(ge=1, le=365)] = 30
+
+
+class OfferDeliveryIn(BaseModel):
+    email: Optional[str] = Field(default=None, max_length=320)
+    locale: Literal["de", "it", "en"] = "de"
+    message: str = Field(default="", max_length=5_000)
+    saveRecipientEmail: bool = False
+
+
 class OrderItemIn(BaseModel):
     productId: str
     qty: PositiveQuantity

@@ -356,8 +356,9 @@ def test_migration_14_is_additive_and_registered_after_13():
 
     assert result == {"indexesEnsured": len(migration14.INDEXES), "documentsChanged": 0}
     assert plan.expected_changes["documentsChanged"] == 0
-    assert get_migrations()[-3].version == 14
-    assert get_migrations()[-3].depends_on == (13,)
+    assert any(migration.version == 14 for migration in get_migrations())
+    registered = next(migration for migration in get_migrations() if migration.version == 14)
+    assert registered.depends_on == (13,)
     assert all(
         keys[0][0] == "tenantId"
         for _collection, keys, name, _options in migration14.INDEXES

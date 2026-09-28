@@ -14,7 +14,7 @@ from .routers import (  # noqa: F401,E402
     auth, users, products, pricing, companies, offers, orders, invoices, dashboard, analytics,
     subscriptions, billing, payments, audit, shop, newsletter, push, machines, crm,
     business_config, commerce, operations, stripe_webhooks, files, notifications,
-    financial_operations,
+    financial_operations, offer_delivery,
 )
 
 import os

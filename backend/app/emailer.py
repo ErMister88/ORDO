@@ -142,6 +142,16 @@ async def send_email(
         row = await access.email_outbox.find_one({"deduplicationKey": idempotency_key})
         if not row:
             raise
+    if template_key == "offer.delivery" and resource_id:
+        delivery_status = (
+            "SENT" if row.get("status") == "sent"
+            else "DELIVERY_FAILED" if row.get("status") in {"failed", "dead"}
+            else "READY"
+        )
+        await access.offers.update_one(
+            {"id": resource_id},
+            {"$set": {"deliveryStatus": delivery_status, "deliveryOutboxId": row["id"]}},
+        )
     from .background_jobs import BackgroundJobQueue
     try:
         await BackgroundJobQueue(access).enqueue(
@@ -220,6 +230,13 @@ async def deliver_outbox_email(
                 "$unset": {"deliveryLease": "", "deliveryLeaseUntil": ""},
             },
         )
+        if row.get("templateKey") == "offer.delivery" and row.get("resourceId"):
+            await access.offers.update_one(
+                {"id": row["resourceId"], "deliveryOutboxId": outbox_id},
+                {"$set": {"deliveryStatus": "DELIVERY_FAILED", "deliveryFailedAt": datetime.now(timezone.utc)}},
+            )
+            from .audit_service import tenant_audit
+            await tenant_audit(access, None, "offer.delivery.failed", row["resourceId"], {"outboxId": outbox_id})
         raise
     update = await access.email_outbox.update_one(
         {"id": outbox_id, "status": "processing", "deliveryLease": delivery_lease},
@@ -233,6 +250,27 @@ async def deliver_outbox_email(
     )
     if update.matched_count != 1:
         raise RuntimeError("Email delivery lease was lost before completion")
+    if row.get("templateKey") == "offer.delivery" and row.get("resourceId"):
+        await access.offers.update_one(
+            {"id": row["resourceId"], "deliveryOutboxId": outbox_id},
+            {"$set": {"deliveryStatus": "SENT", "sentAt": datetime.now(timezone.utc)}},
+        )
+        from .audit_service import tenant_audit
+        from .customer_activity import record_customer_activity
+        await tenant_audit(access, None, "offer.delivery.sent", row["resourceId"], {"outboxId": outbox_id})
+        offer = await access.offers.find_one({"id": row["resourceId"]})
+        if offer and isinstance(offer.get("companyId"), str):
+            try:
+                await record_customer_activity(
+                    access,
+                    company_id=offer["companyId"],
+                    actor={"id": "system:email", "name": "E-Mail-System"},
+                    activity_type="offer_sent",
+                    title="Angebot versendet",
+                    reference={"resourceType": "offer", "resourceId": row["resourceId"]},
+                )
+            except Exception:
+                pass
     return {"resourceType": "email_outbox", "resourceId": outbox_id, "status": "sent"}
 
 

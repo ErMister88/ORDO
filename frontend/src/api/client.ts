@@ -79,6 +79,30 @@ export async function apiGet<T = any>(path: string, extraHeaders: Record<string,
   return res.json();
 }
 
+export async function apiGetBlob(path: string): Promise<Blob> {
+  const { headers, token } = await authContext();
+  const res = await requestFetch(`${API}/api${path}`, { headers });
+  await handleAuthFailure(res, token);
+  if (!res.ok) throw await responseError(res, `Fehler ${res.status}`);
+  return res.blob();
+}
+
+export async function publicApiGet<T = any>(path: string): Promise<T> {
+  const res = await requestFetch(`${API}/api${path}`);
+  if (!res.ok) throw await responseError(res, `Fehler ${res.status}`);
+  return res.json();
+}
+
+export async function publicApiPost<T = any>(path: string, body?: any): Promise<T> {
+  const res = await requestFetch(`${API}/api${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+  });
+  if (!res.ok) throw await responseError(res, `Fehler ${res.status}`);
+  return res.json();
+}
+
 export async function apiPost<T = any>(path: string, body?: any, extraHeaders: Record<string, string> = {}): Promise<T> {
   const { headers, token } = await authContext();
   const res = await requestFetch(`${API}/api${path}`, {

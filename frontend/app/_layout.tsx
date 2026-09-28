@@ -105,6 +105,7 @@ export default function RootLayout() {
                   <Stack.Screen name="systembetrieb" options={{ presentation: "card" }} />
                   <Stack.Screen name="benachrichtigungen" options={{ presentation: "card" }} />
                   <Stack.Screen name="zahlung" options={{ presentation: "card" }} />
+                  <Stack.Screen name="angebot/[token]" options={{ presentation: "card" }} />
                   </Stack></AppShell>
                 </CartProvider>
               </AuthProvider>
