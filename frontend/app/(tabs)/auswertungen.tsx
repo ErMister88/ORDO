@@ -48,6 +48,35 @@ export default function Auswertungen() {
     queryKey: ["analytics", months],
     queryFn: () => apiGet(`/analytics?months=${months}`),
   });
+  const commissionStart = useMemo(() => {
+    const value = new Date();
+    value.setUTCMonth(value.getUTCMonth() - months + 1, 1);
+    value.setUTCHours(0, 0, 0, 0);
+    return value.toISOString();
+  }, [months]);
+  const commission = useQuery({ queryKey: ["commission-ledger", user?.id, commissionStart], queryFn: () => apiGet(`/commission/ledger?start=${encodeURIComponent(commissionStart)}`), enabled: user?.role === "admin" || user?.role === "sales" });
+  const settlements = useQuery({ queryKey: ["commission-settlements", user?.id, commissionStart], queryFn: () => apiGet(`/commission/settlements?start=${encodeURIComponent(commissionStart)}`), enabled: user?.role === "admin" || user?.role === "sales" });
+  const commissionByCurrency = useMemo(() => {
+    const totals: Record<string, { pending: number; pendingQty: number; earned: number; earnedQty: number; adjustments: number; settled: number; paidOut: number }> = {};
+    const bucketFor = (currency: string) => totals[currency] ?? {
+      pending: 0, pendingQty: 0, earned: 0, earnedQty: 0,
+      adjustments: 0, settled: 0, paidOut: 0,
+    };
+    for (const row of commission.data ?? []) {
+      const bucket = bucketFor(row.currency);
+      if (row.status === "PENDING") { bucket.pending += row.amountMinor ?? 0; bucket.pendingQty += row.quantity ?? 0; }
+      if (row.status === "EARNED") { bucket.earned += row.amountMinor ?? 0; bucket.earnedQty += row.quantity ?? 0; }
+      if (["ADJUSTED", "REVERSED"].includes(row.status)) bucket.adjustments += row.amountMinor ?? 0;
+      totals[row.currency] = bucket;
+    }
+    for (const row of settlements.data ?? []) {
+      const bucket = bucketFor(row.currency);
+      if (row.status === "LOCKED") bucket.settled += row.amountMinor ?? 0;
+      if (row.status === "PAID_OUT") bucket.paidOut += row.amountMinor ?? 0;
+      totals[row.currency] = bucket;
+    }
+    return totals;
+  }, [commission.data, settlements.data]);
 
   const series = data?.series ?? [];
   const chartWidth = width - 40 - 32; // screen padding + card padding
@@ -192,6 +221,12 @@ export default function Auswertungen() {
             </View>
           ))}
         </Card>
+        <SectionTitle>Provisionen</SectionTitle>
+        {Object.keys(commissionByCurrency).length === 0 ? <Card><Muted>Noch keine Provisionsbewegungen</Muted></Card> : Object.entries(commissionByCurrency).map(([currency, values]) => <Card key={currency} testID={`commission-summary-${currency}`}><Text style={styles.tableMonth}>{currency}</Text><View style={styles.tableRow}><Text style={styles.tableMonth}>Vorgemerkt</Text><Text style={styles.tableVal}>{(values.pending / 100).toFixed(2)} {currency} · {num(values.pendingQty)} kg</Text></View><View style={styles.tableRow}><Text style={styles.tableMonth}>Verdient</Text><Text style={styles.tableVal}>{(values.earned / 100).toFixed(2)} {currency} · {num(values.earnedQty)} kg</Text></View><View style={styles.tableRow}><Text style={styles.tableMonth}>Korrekturen</Text><Text style={styles.tableVal}>{(values.adjustments / 100).toFixed(2)} {currency}</Text></View><View style={styles.tableRow}><Text style={styles.tableMonth}>Abgerechnet</Text><Text style={styles.tableVal}>{(values.settled / 100).toFixed(2)} {currency}</Text></View><View style={styles.tableRow}><Text style={styles.tableMonth}>Ausgezahlt</Text><Text style={styles.tableVal}>{(values.paidOut / 100).toFixed(2)} {currency}</Text></View></Card>)}
+        <SectionTitle>Provisionsbewegungen</SectionTitle>
+        {(commission.data ?? []).length === 0 ? <Card><Muted>Noch keine Provisionsbewegungen</Muted></Card> : (commission.data ?? []).slice(0, 100).map((row: any) => <Card key={row.id}><View style={styles.tableRow}><Text style={styles.tableMonth}>{row.status}</Text><Text style={styles.tableVal}>{((row.amountMinor ?? 0) / 100).toFixed(2)} {row.currency}</Text></View><Muted>{[row.companyId, row.orderId, row.invoiceId, row.productId].filter(Boolean).join(" · ")}</Muted>{row.quantity != null ? <Muted>{num(row.quantity)} kg · {((row.agreementSnapshot?.rateMinor ?? 0) / 100).toFixed(2)} {row.currency}/kg</Muted> : null}</Card>)}
+        <SectionTitle>Abrechnungen</SectionTitle>
+        {(settlements.data ?? []).length === 0 ? <Card><Muted>Noch keine Abrechnung</Muted></Card> : (settlements.data ?? []).map((row: any) => <Card key={row.id}><View style={styles.tableRow}><Text style={styles.tableMonth}>{row.status}</Text><Text style={styles.tableVal}>{((row.amountMinor ?? 0) / 100).toFixed(2)} {row.currency}</Text></View></Card>)}
       </ScrollView>
     </View>
   );

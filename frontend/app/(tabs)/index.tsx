@@ -145,6 +145,8 @@ function StaffDash({
         </View>
       </View>
 
+      {data.receivables && Object.keys(data.receivables).length > 0 ? <><SectionTitle>Forderungen</SectionTitle><View style={styles.kpiGrid}>{Object.entries(data.receivables).map(([currency, values]: [string, any]) => <Card key={currency} style={{ flex: 1 }} testID={`receivables-${currency}`}><Text style={styles.activityTitle}>{currency}</Text><InfoRow label="Offen" value={`${((values.openMinor ?? 0) / 100).toFixed(2)} ${currency}`} /><InfoRow label="Heute fällig" value={`${((values.dueMinor ?? 0) / 100).toFixed(2)} ${currency}`} /><InfoRow label="Überfällig" value={`${((values.overdueMinor ?? 0) / 100).toFixed(2)} ${currency}`} /></Card>)}</View></> : null}
+
       {data.pendingApprovals > 0 && (
         <Pressable onPress={onApprovals} testID="approval-alert">
           <View style={[styles.alert, { borderColor: colors.warning }]}>

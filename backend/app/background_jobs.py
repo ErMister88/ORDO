@@ -17,7 +17,7 @@ from .tenant_access import TenantBusinessAccess
 
 LEASE_SECONDS = 120
 MAX_ATTEMPTS = 5
-SAFE_RETRY_JOB_TYPES = frozenset({"reconcile.tenant", "email.deliver"})
+SAFE_RETRY_JOB_TYPES = frozenset({"reconcile.tenant", "email.deliver", "accounting.sync"})
 
 
 def _now() -> datetime:
@@ -203,6 +203,20 @@ async def process_one_job(access: TenantBusinessAccess, *, worker_id: str) -> di
                 raise RuntimeError("Email job has no valid outbox reference")
             result = await deliver_outbox_email(access, outbox_id, attempt=claim.attempts)
             completion = result
+        elif claim.job_type == "accounting.sync":
+            from .accounting import process_accounting_sync
+            sync_id = claim.payload.get("syncId")
+            if not isinstance(sync_id, str) or not sync_id:
+                raise RuntimeError("Accounting job has no valid sync reference")
+            try:
+                result = await process_accounting_sync(access, sync_id=sync_id)
+            except Exception:
+                await access.accounting_syncs.update_one(
+                    {"id": sync_id, "status": {"$ne": "completed"}},
+                    {"$set": {"status": "failed", "updatedAt": _now()}},
+                )
+                raise
+            completion = {"resourceType": "accounting_sync", "resourceId": sync_id}
         else:
             raise RuntimeError("Unsupported background job type")
         await queue.complete(claim, completion)

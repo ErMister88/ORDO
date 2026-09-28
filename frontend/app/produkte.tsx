@@ -37,6 +37,10 @@ type Form = {
   unit: string;
   packagingUnit: string;
   packageQuantity: string;
+  unitsPerCase: string;
+  kgPerCase: string;
+  casesPerPallet: string;
+  kgPerPallet: string;
   contentAmount: string;
   contentUnit: string;
   minimumOrderQuantity: string;
@@ -84,6 +88,10 @@ const EMPTY: Form = {
   unit: "piece",
   packagingUnit: "",
   packageQuantity: "",
+  unitsPerCase: "",
+  kgPerCase: "",
+  casesPerPallet: "",
+  kgPerPallet: "",
   contentAmount: "",
   contentUnit: "",
   minimumOrderQuantity: "",
@@ -182,6 +190,10 @@ export default function Produkte() {
       unit: p.unit,
       packagingUnit: p.packagingUnit ?? "",
       packageQuantity: p.packageQuantity != null ? String(p.packageQuantity) : "",
+      unitsPerCase: p.unitsPerCase != null ? String(p.unitsPerCase) : "",
+      kgPerCase: p.kgPerCase != null ? String(p.kgPerCase) : "",
+      casesPerPallet: p.casesPerPallet != null ? String(p.casesPerPallet) : "",
+      kgPerPallet: p.kgPerPallet != null ? String(p.kgPerPallet) : "",
       contentAmount: p.contentAmount != null ? String(p.contentAmount) : "",
       contentUnit: p.contentUnit ?? "",
       minimumOrderQuantity: p.minimumOrderQuantity != null ? String(p.minimumOrderQuantity) : "",
@@ -355,6 +367,10 @@ export default function Produkte() {
         unit: form.unit,
         packagingUnit: form.packagingUnit,
         packageQuantity: form.packageQuantity ? num(form.packageQuantity) : null,
+        unitsPerCase: form.unitsPerCase ? num(form.unitsPerCase) : null,
+        kgPerCase: form.kgPerCase ? num(form.kgPerCase) : null,
+        casesPerPallet: form.casesPerPallet ? num(form.casesPerPallet) : null,
+        kgPerPallet: form.kgPerPallet ? num(form.kgPerPallet) : null,
         contentAmount: form.contentAmount ? num(form.contentAmount) : null,
         contentUnit: form.contentUnit,
         minimumOrderQuantity: form.minimumOrderQuantity ? num(form.minimumOrderQuantity) : null,
@@ -531,6 +547,10 @@ export default function Produkte() {
               <View style={styles.row}><View style={{ flex: 1 }}><Text style={styles.label}>Shop-Slug</Text><Input value={form.slug} onChangeText={set("slug")} placeholder="wird automatisch erzeugt" autoCapitalize="none" /></View><View style={{ flex: 1 }}><Text style={styles.label}>Suchbegriffe</Text><Input value={form.searchKeywords} onChangeText={set("searchKeywords")} placeholder="durch Komma getrennt" /></View></View>
 
               <View style={styles.row}><View style={{ flex: 1 }}><Text style={styles.label}>Verpackungseinheit</Text><Input value={form.packagingUnit} onChangeText={set("packagingUnit")} placeholder="z. B. Karton" /></View><View style={{ flex: 1 }}><Text style={styles.label}>Menge je Gebinde</Text><Input value={form.packageQuantity} onChangeText={set("packageQuantity")} keyboardType="decimal-pad" placeholder="z. B. 6" /></View></View>
+              <Text style={styles.label}>Palettenkonfiguration (B2B)</Text>
+              <Muted>Direktes Gewicht je Palette oder Kartongewicht × Kartons je Palette hinterlegen. Fehlende Daten erzwingen eine Freigabe.</Muted>
+              <View style={styles.row}><View style={{ flex: 1 }}><Text style={styles.label}>Einheiten je Karton</Text><Input value={form.unitsPerCase} onChangeText={set("unitsPerCase")} keyboardType="decimal-pad" /></View><View style={{ flex: 1 }}><Text style={styles.label}>kg je Karton</Text><Input value={form.kgPerCase} onChangeText={set("kgPerCase")} keyboardType="decimal-pad" /></View></View>
+              <View style={styles.row}><View style={{ flex: 1 }}><Text style={styles.label}>Kartons je Palette</Text><Input value={form.casesPerPallet} onChangeText={set("casesPerPallet")} keyboardType="decimal-pad" /></View><View style={{ flex: 1 }}><Text style={styles.label}>kg je Palette</Text><Input value={form.kgPerPallet} onChangeText={set("kgPerPallet")} keyboardType="decimal-pad" /></View></View>
               <View style={styles.row}><View style={{ flex: 1 }}><Text style={styles.label}>Inhalt</Text><Input value={form.contentAmount} onChangeText={set("contentAmount")} keyboardType="decimal-pad" placeholder="z. B. 1" /></View><View style={{ flex: 1 }}><Text style={styles.label}>Inhaltseinheit</Text><Input value={form.contentUnit} onChangeText={set("contentUnit")} placeholder="kg, l, Stück" /></View><View style={{ flex: 1 }}><Text style={styles.label}>Mindestmenge</Text><Input value={form.minimumOrderQuantity} onChangeText={set("minimumOrderQuantity")} keyboardType="decimal-pad" /></View></View>
 
               <Text style={styles.label}>Verfügbarkeit & Aktionen</Text>

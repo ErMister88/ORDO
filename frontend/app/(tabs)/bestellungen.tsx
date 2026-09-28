@@ -17,10 +17,10 @@ import { apiGet, apiPost, apiPostIdempotent, fileUrl } from "@/src/api/client";
 import { euro, num, dateDE } from "@/src/lib/format";
 import { ScreenHeader } from "@/src/components/screen-header";
 import { Card, Button, Input, StatusBadge, SectionTitle, EmptyState, Muted } from "@/src/components/ui";
-import { LocalizedText as Text, useI18n } from "@/src/i18n";
+import { LocalizedText as Text, localizedAlert, useI18n } from "@/src/i18n";
 
 export default function Bestellungen() {
-  useI18n();
+  const { tf } = useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
   const { user } = useAuth();
@@ -35,6 +35,8 @@ export default function Bestellungen() {
   const products = useQuery({ queryKey: ["products"], queryFn: () => apiGet("/products") });
   const companies = useQuery({ queryKey: ["companies"], queryFn: () => apiGet("/companies"), enabled: isStaff });
   const addresses = useQuery({ queryKey: ["customer-addresses", companyId], queryFn: () => apiGet(`/companies/${companyId}/addresses`), enabled: Boolean(companyId) });
+  const financialTerms = useQuery({ queryKey: ["financial-terms", companyId], queryFn: () => apiGet(`/companies/${companyId}/financial-terms`), enabled: Boolean(companyId) });
+  const approvals = useQuery({ queryKey: ["financial-approvals"], queryFn: () => apiGet("/financial/approvals"), enabled: isStaff });
 
   const prodMap: Record<string, any> = {};
   (products.data ?? []).forEach((p: any) => (prodMap[p.id] = p));
@@ -90,8 +92,19 @@ export default function Bestellungen() {
         billingAddressId: billingAddressId || null,
         deliveryAddressId: deliveryAddressId || null,
       }),
-    onSuccess: () => {
+    onSuccess: (result: any) => {
       setCart([]);
+      qc.invalidateQueries({ queryKey: ["orders"] });
+      if (result?.financialApproval?.required) {
+        localizedAlert("Bestellung wird geprüft", "Die Bestellung wurde sicher gespeichert und benötigt eine Freigabe.");
+      }
+    },
+  });
+  const decideApproval = useMutation({
+    mutationFn: ({ orderId, decision }: { orderId: string; decision: "approve" | "reject" }) =>
+      apiPost(`/financial/approvals/${orderId}/${decision}`, { note: "" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["financial-approvals"] });
       qc.invalidateQueries({ queryKey: ["orders"] });
     },
   });
@@ -189,12 +202,24 @@ export default function Bestellungen() {
                     <Text style={styles.totalValue}>{euro(cartTotal)}</Text>
                   </View>
                   {cartQuote.error ? <Text style={{ color: colors.error }}>{(cartQuote.error as Error).message}</Text> : null}
-                  {isStaff ? <><Text style={styles.paymentTitle}>Zahlungsart</Text><View style={styles.paymentRow}>{[["bank_transfer", "Überweisung"], ["cash", "Bar"], ["card", "Karte"], ["other", "Sonstige"]].map(([value, label]) => <Pressable key={value} testID={`payment-${value}`} onPress={() => setPaymentMethod(value)} style={[styles.filterChip, paymentMethod === value && styles.filterChipActive]}><Text style={[styles.filterChipText, paymentMethod === value && styles.filterChipTextActive]}>{label}</Text></Pressable>)}</View><Pressable testID="create-invoice-toggle" onPress={() => setCreateInvoice((value) => !value)} style={[styles.invoiceToggle, createInvoice && styles.invoiceToggleActive]}><Text style={[styles.filterChipText, createInvoice && styles.filterChipTextActive]}>{createInvoice ? "✓ Rechnung wird erstellt" : "+ Rechnung optional erstellen"}</Text></Pressable></> : null}
+                  <Text style={styles.paymentTitle}>Zahlungsart</Text>
+                  <View style={styles.paymentRow}>{[["bank_transfer", "Rechnung"], ["cash", "Barzahlung"]].map(([value, label]) => <Pressable key={value} testID={`payment-${value}`} onPress={() => setPaymentMethod(value)} style={[styles.filterChip, paymentMethod === value && styles.filterChipActive]}><Text style={[styles.filterChipText, paymentMethod === value && styles.filterChipTextActive]}>{label}</Text></Pressable>)}</View>
+                  {paymentMethod === "bank_transfer" ? <Muted>{financialTerms.data?.paymentTermsDays != null ? tf("Zahlungsziel: {days} Tage", { days: financialTerms.data.paymentTermsDays }) : "Zahlungsziel wird vor Bestätigung geprüft."}</Muted> : <Muted>Barzahlungen werden ausschließlich durch autorisierte Administratoren bestätigt.</Muted>}
+                  {isStaff ? <Pressable testID="create-invoice-toggle" onPress={() => setCreateInvoice((value) => !value)} style={[styles.invoiceToggle, createInvoice && styles.invoiceToggleActive]}><Text style={[styles.filterChipText, createInvoice && styles.filterChipTextActive]}>{createInvoice ? "✓ Rechnung wird erstellt" : "+ Rechnung optional erstellen"}</Text></Pressable> : null}
                   <Button testID="submit-order" title="Bestellung aufgeben" loading={create.isPending || cartQuote.isLoading} disabled={!cartQuote.data} onPress={() => create.mutate()} />
                 </View>
               )}
             </Card>
           )}
+
+          {isStaff && (approvals.data ?? []).length > 0 ? <>
+            <SectionTitle>Finanzfreigaben</SectionTitle>
+            {(approvals.data ?? []).map((row: any) => <Card key={row.id} testID={`financial-approval-${row.id}`}>
+              <View style={styles.orderTop}><Text style={styles.prodTitle}>{row.id}</Text><StatusBadge status="Freigabe nötig" /></View>
+              <Muted>{(row.approval?.reasons ?? []).map((reason: any) => reason.message).join(" · ")}</Muted>
+              {user?.role === "admin" ? <View style={styles.approvalActions}><Button title="Freigeben" loading={decideApproval.isPending} onPress={() => decideApproval.mutate({ orderId: row.id, decision: "approve" })} /><Button title="Ablehnen" kind="secondary" disabled={decideApproval.isPending} onPress={() => decideApproval.mutate({ orderId: row.id, decision: "reject" })} /></View> : <Muted>Die Freigabe erfolgt durch einen Administrator.</Muted>}
+            </Card>)}
+          </> : null}
 
           <SectionTitle style={{ marginTop: 4 }}>Bestellhistorie</SectionTitle>
           <Input
@@ -311,6 +336,7 @@ const useStyles = makeStyles((c) => ({
   addressChipText: { color: c.onSurfaceSecondary, fontSize: 12, fontWeight: "700" },
   addressChipTextActive: { color: c.onBrandPrimary },
   paymentRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  approvalActions: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 10 },
   invoiceToggle: { borderWidth: 1, borderColor: c.border, borderRadius: 10, padding: 11, alignItems: "center" },
   invoiceToggleActive: { backgroundColor: c.brandPrimary, borderColor: c.brandPrimary },
 }));

@@ -13,6 +13,7 @@ from .orders import order_references_visible
 from ..money import from_minor, require_minor, tax_minor
 from ..snapshots import SNAPSHOT_VERSION, redact_internal_snapshot_fields
 from ..idempotency import IdempotencyService
+from ..accounting import schedule_accounting_sync
 
 
 async def _build_lines(access: TenantBusinessAccess, items):
@@ -81,12 +82,16 @@ async def create_invoice_record(
         await access.orders.update_one(
             {"id": order["id"]}, {"$set": {"invoiceId": existing["id"]}}
         )
+        await schedule_accounting_sync(
+            access, resource_type="invoice", resource_id=existing["id"], actor_id=user["id"],
+        )
         return existing
     lines, net, breakdown, tax_total, gross, net_minor, breakdown_minor, tax_minor_total, gross_minor, currency = await _build_lines(access, order["items"])
     now = datetime.now(timezone.utc)
     seq = await next_seq("invoice")
     inv_no = f"RE-{now.year}-{seq:04d}"
-    payment_term_days = order.get("paymentTermDays")
+    payment_terms_snapshot = order.get("paymentTermsSnapshot") or {}
+    payment_term_days = payment_terms_snapshot.get("paymentTermsDays", order.get("paymentTermDays"))
     due_date = None
     if isinstance(payment_term_days, int) and not isinstance(payment_term_days, bool) and payment_term_days >= 0:
         from datetime import timedelta
@@ -100,6 +105,8 @@ async def create_invoice_record(
         "taxBreakdownMinor": breakdown_minor, "taxTotal": tax_total,
         "taxTotalMinor": tax_minor_total, "amount": gross, "amountMinor": gross_minor,
         "paidAmountMinor": 0, "companySnapshot": order.get("companySnapshot"),
+        "paymentTermsSnapshot": payment_terms_snapshot or {"paymentTermsDays": payment_term_days},
+        "salesChannel": "b2b",
         "billingAddressSnapshot": order.get("billingAddressSnapshot"),
         "deliveryAddressSnapshot": order.get("deliveryAddressSnapshot"),
         "salesAttribution": order.get("salesAttribution"), "status": "Offen",
@@ -118,6 +125,9 @@ async def create_invoice_record(
         invoice = existing
     await access.orders.update_one(
         {"id": order["id"]}, {"$set": {"invoiceId": invoice["id"]}}
+    )
+    await schedule_accounting_sync(
+        access, resource_type="invoice", resource_id=invoice["id"], actor_id=user["id"]
     )
     if invoice["id"] == inv_no:
         await record_customer_activity(

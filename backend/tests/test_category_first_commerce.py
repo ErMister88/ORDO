@@ -33,7 +33,7 @@ def product(product_id="p1", **overrides):
 
 
 def test_migration_15_is_additive_and_registered():
-    assert get_migrations()[-1].version == 15
+    assert get_migrations()[-1].version == 16
     plan = migration15.inspect(None)
     assert plan.expected_changes["documentsChanged"] == 0
     assert plan.expected_changes["indexesToEnsure"] == len(migration15.INDEXES)

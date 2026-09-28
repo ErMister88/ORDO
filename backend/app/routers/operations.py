@@ -136,6 +136,14 @@ async def list_operational_problems(
         "retryAllowed": False, "reviewRequired": row.get("status") == "dead",
     } for row in mail)
 
+    accounting = await access.accounting_syncs.find({"status": "failed"}).sort("updatedAt", -1).to_list(100)
+    problems.extend({
+        "type": "accounting", "id": row.get("id"), "status": row.get("status"),
+        "occurredAt": row.get("updatedAt"), "errorReference": None,
+        "resource": {"type": row.get("resourceType"), "id": row.get("resourceId")},
+        "retryAllowed": True, "reviewRequired": True,
+    } for row in accounting)
+
     errors = await access.technical_errors.find({}).sort("occurredAt", -1).to_list(100)
     problems.extend({"type": "technical_error", "id": row.get("id"), "status": "failed", "occurredAt": row.get("occurredAt"), "errorReference": row.get("id"), "resource": {"operation": row.get("operation")}, "retryAllowed": False, "reviewRequired": True} for row in errors)
 

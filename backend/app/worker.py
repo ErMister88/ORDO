@@ -48,8 +48,23 @@ async def schedule_pending_email_jobs(access: TenantBusinessAccess) -> int:
     return len(rows)
 
 
+async def schedule_pending_accounting_jobs(access: TenantBusinessAccess) -> int:
+    """Recover the narrow gap between sync intent persistence and enqueue."""
+    rows = await access.accounting_syncs.find({"status": "pending"}).sort("createdAt", 1).to_list(200)
+    queue = BackgroundJobQueue(access)
+    for row in rows:
+        await queue.enqueue(
+            "accounting.sync",
+            actor_id="system:accounting-sync",
+            idempotency_key=f"accounting:{row['resourceType']}:{row['resourceId']}",
+            payload={"syncId": row["id"]},
+        )
+    return len(rows)
+
+
 async def run_worker_once(access: TenantBusinessAccess, *, worker_id: str) -> bool:
     await schedule_pending_email_jobs(access)
+    await schedule_pending_accounting_jobs(access)
     return await process_one_job(access, worker_id=worker_id) is not None
 
 

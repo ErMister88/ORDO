@@ -112,6 +112,10 @@ class ProductIn(BaseModel):
     unit: str = "piece"
     packagingUnit: str = Field(default="", max_length=100)
     packageQuantity: Optional[PositiveQuantity] = None
+    unitsPerCase: Optional[PositiveQuantity] = None
+    kgPerCase: Optional[PositiveQuantity] = None
+    casesPerPallet: Optional[PositiveQuantity] = None
+    kgPerPallet: Optional[PositiveQuantity] = None
     contentAmount: Optional[PositiveQuantity] = None
     contentUnit: str = ""
     minimumOrderQuantity: Optional[PositiveQuantity] = None
@@ -368,6 +372,44 @@ class CompanyUpdateIn(BaseModel):
     customerTypeId: Optional[str] = None
     customerTagIds: List[str] = Field(default_factory=list)
     status: Optional[Literal["Lead", "Interessent", "Neukunde", "Aktiv", "Inaktiv", "Gesperrt"]] = None
+
+
+class CompanyFinancialTermsIn(BaseModel):
+    paymentTermsDays: Annotated[int, Field(ge=0, le=3650)]
+    creditLimitMinor: Annotated[int, Field(ge=0)]
+    creditCurrency: Literal["EUR", "CHF"]
+    palletApprovalLimit: Annotated[float, Field(ge=0, le=100_000, allow_inf_nan=False)]
+
+
+class CommissionAgreementIn(BaseModel):
+    salesRepId: str = Field(min_length=1, max_length=200)
+    commissionType: Literal["PER_KG"] = "PER_KG"
+    rateMinor: Annotated[int, Field(gt=0)]
+    currency: Literal["EUR", "CHF"]
+    companyId: Optional[str] = None
+    productId: Optional[str] = None
+    active: bool = True
+    validFrom: Optional[datetime] = None
+    validUntil: Optional[datetime] = None
+
+
+class CommissionSettlementIn(BaseModel):
+    salesRepId: str = Field(min_length=1, max_length=200)
+    currency: Literal["EUR", "CHF"]
+    periodStart: datetime
+    periodEnd: datetime
+
+
+class CommissionPayoutIn(BaseModel):
+    reference: str = Field(min_length=1, max_length=300)
+
+
+class CommissionAdjustmentIn(BaseModel):
+    sourceEntryId: str = Field(min_length=1, max_length=200)
+    amountMinor: Annotated[int, Field(gt=0)]
+    kind: Literal["partial_credit", "full_credit", "refund", "reversal", "cancellation"]
+    reference: str = Field(min_length=1, max_length=300)
+    reason: str = Field(min_length=1, max_length=1_000)
 
 
 class CompanyCreateIn(BaseModel):

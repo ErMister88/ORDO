@@ -160,6 +160,20 @@ def validate_runtime_configuration(environment: dict[str, str] | None = None) ->
     worker_ok = not jobs_enabled or worker_service
     checks.append(ConfigurationCheck("worker", "configured" if jobs_enabled and worker_ok else "not_configured" if not jobs_enabled else "invalid", "Worker-Betrieb konfiguriert" if jobs_enabled and worker_ok else "Background Jobs deaktiviert" if not jobs_enabled else "Background Jobs aktiviert, aber Worker-Service nicht bestätigt", critical=jobs_enabled))
 
+    accounting_provider = _value(env, "ACCOUNTING_PROVIDER").lower()
+    accounting_enabled = accounting_provider == "sevdesk"
+    accounting_ok = accounting_enabled and (
+        _secret_is_safe(_value(env, "SEVDESK_API_TOKEN"), minimum=16)
+        and (not production or _enabled(env, "SEVDESK_PRODUCTION_ENABLED"))
+        and (app_env not in {"stage", "staging"} or _enabled(env, "SEVDESK_STAGING_WRITES_ENABLED"))
+        and jobs_enabled and worker_service
+    )
+    checks.append(ConfigurationCheck(
+        "accounting", "configured" if accounting_ok else "not_configured" if not accounting_provider else "invalid",
+        "Accounting-Provider konfiguriert" if accounting_ok else "Accounting-Provider deaktiviert" if not accounting_provider else "Accounting-Konfiguration unvollständig oder Provider unbekannt",
+        critical=bool(accounting_provider),
+    ))
+
     demo_safe = not production or not any(_enabled(env, name) for name in ("DEMO_SEED_ENABLED", "ALLOW_DEMO_SEED", "TEST_MODE"))
     checks.append(ConfigurationCheck("demo_isolation", "configured" if demo_safe else "invalid", "Demo-/Testpfade in Production gesperrt" if demo_safe else "Demo-/Testmodus ist in Production aktiviert"))
 

@@ -8,6 +8,11 @@ und bestätigt ihren Providerstatus über einen signierten Webhook. Eine
 Browser-Rückleitung oder eine Statusabfrage beim Browser markiert in ORDO keine
 Zahlung als bezahlt.
 
+Stripe ist ausschließlich für B2C-Vorgänge vorgesehen. B2B-Aufträge verwenden
+serverseitig nur Rechnung oder Barzahlung; ein B2B-Rechnungsdokument kann daher
+keinen Stripe-Checkout erzeugen. Diese Trennung wird im Backend geprüft und
+hängt nicht von der sichtbaren Frontend-Seite ab.
+
 Der Ablauf ist:
 
 1. ORDO legt oder lädt einen idempotenten Checkout-Vorgang.

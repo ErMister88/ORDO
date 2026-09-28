@@ -18,6 +18,19 @@ from ..snapshots import items_total_minor, redact_internal_snapshot_fields
 from ..tenant_access import TenantBusinessAccess
 from ..idempotency import IdempotencyClaim, IdempotencyService
 from ..pagination import bounded_list
+from ..financial_operations import FinancialConfigurationError, evaluate_b2b_order, public_approval, validate_b2b_payment_method, company_terms
+from ..commissions import CommissionAmbiguous, create_pending_commission, validate_commission_for_order
+
+
+def _public_order(order: dict, user: dict) -> dict:
+    public = strip_id(redact_internal_snapshot_fields(order))
+    if isinstance(public.get("financialApproval"), dict):
+        public["financialApproval"] = public_approval(
+            public["financialApproval"],
+            admin=user.get("role") == "admin",
+            customer=user.get("role") == "customer",
+        )
+    return public
 
 
 async def order_references_visible(access: TenantBusinessAccess, order: dict) -> bool:
@@ -57,7 +70,7 @@ async def get_orders(
         access.orders.find({"companyId": {"$in": ids}}).sort([("createdAt", -1), ("id", -1)]),
         limit=limit, offset=offset,
     )
-    return [strip_id(redact_internal_snapshot_fields(o)) for o in orders]
+    return [_public_order(o, user) for o in orders]
 
 
 async def _resolve_unit_price(
@@ -84,6 +97,30 @@ async def _resolve_unit_money(
     return quote.final_unit_price_minor, quote.price_source
 
 
+async def _evaluate_stored_order(
+    access: TenantBusinessAccess, order: dict, company: dict,
+) -> dict:
+    order_total_minor = order.get("netTotalMinor")
+    if isinstance(order_total_minor, bool) or not isinstance(order_total_minor, int) or order_total_minor < 0:
+        raise FinancialConfigurationError("Order financial snapshot is invalid")
+    item_products = []
+    for item in order.get("items") or []:
+        product_id = item.get("productId")
+        product = await access.products.find_one({"id": product_id}) if isinstance(product_id, str) else None
+        item_products.append({
+            "product": product or {"id": product_id, "unit": item.get("unit")},
+            "qty": item.get("qty"),
+        })
+    terms_snapshot = order.get("paymentTermsSnapshot") or {}
+    return await evaluate_b2b_order(
+        access, company=company, item_products=item_products,
+        order_total_minor=order_total_minor,
+        currency=order.get("currency", access.context.default_currency),
+        payment_terms_days=terms_snapshot.get("paymentTermsDays", order.get("paymentTermDays")),
+        order_already_in_exposure=True,
+    )
+
+
 async def create_order(
     body: OrderCreate,
     user: Annotated[dict, Depends(current_user)],
@@ -97,8 +134,11 @@ async def create_order(
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
     if not body.items:
         raise HTTPException(status_code=400, detail="Bestellung enthält keine Artikel")
-    if user.get("role") == "customer" and (body.paymentMethod != "bank_transfer" or body.createInvoice):
-        raise HTTPException(status_code=403, detail="Zahlungsart und Rechnungserstellung sind nur für Mitarbeiter verfügbar")
+    validate_b2b_payment_method(body.paymentMethod)
+    if user.get("role") == "customer" and body.createInvoice:
+        raise HTTPException(status_code=403, detail="Rechnungserstellung ist nur für Mitarbeiter verfügbar")
+    if body.paymentTermDays is not None and user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Zahlungsziel darf nur durch Administratoren festgelegt werden")
     items = []
     currency = access.context.default_currency
     company = await access.companies.find_one({"id": body.companyId})
@@ -107,7 +147,7 @@ async def create_order(
     if operation_id:
         existing = await access.orders.find_one({"operationId": operation_id})
         if existing:
-            response = strip_id(redact_internal_snapshot_fields(existing))
+            response = _public_order(existing, user)
             if workflow:
                 await workflow[0].checkpoint(
                     workflow[1], "order_recovered", {"orderId": existing["id"]}
@@ -120,6 +160,7 @@ async def create_order(
                 response["invoice"] = strip_id(redact_internal_snapshot_fields(invoice))
                 response["invoiceId"] = invoice["id"]
             return response
+    item_products = []
     for it in body.items:
         if it.qty <= 0:
             raise HTTPException(status_code=400, detail="Ungültige Menge")
@@ -130,6 +171,14 @@ async def create_order(
         except PricingError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         items.append(quote.snapshot(prod))
+        item_products.append({"product": prod, "qty": it.qty})
+    terms = company_terms(company, default_currency=currency)
+    effective_payment_terms = body.paymentTermDays if body.paymentTermDays is not None else terms.payment_terms_days
+    evaluation = await evaluate_b2b_order(
+        access, company=company, item_products=item_products,
+        order_total_minor=items_total_minor(items, currency=currency), currency=currency,
+        payment_terms_days=effective_payment_terms,
+    )
     now = datetime.now(timezone.utc)
     seq = await next_seq("order")
     order_no = f"B-{now.year}-{seq:05d}"
@@ -137,13 +186,16 @@ async def create_order(
         "id": order_no,
         "companyId": body.companyId,
         "createdBy": user["id"],
-        "status": "Neu",
+        "status": "Freigabe nötig" if evaluation["required"] else "Neu",
         "items": items,
         "currency": currency,
         "netTotalMinor": items_total_minor(items, currency=currency),
         "snapshotVersion": 1,
         "paymentMethod": body.paymentMethod,
-        "paymentTermDays": body.paymentTermDays,
+        "invoiceRequested": body.createInvoice,
+        "paymentTermDays": effective_payment_terms,
+        "paymentTermsSnapshot": evaluation["termsSnapshot"],
+        "financialApproval": evaluation,
         "companySnapshot": company_snapshot(company),
         "billingAddressSnapshot": await resolve_address_snapshot(
             access, body.companyId, body.billingAddressId, preferred_type="billing"
@@ -169,12 +221,14 @@ async def create_order(
         title=f"Bestellung {order_no} erstellt", internal=False,
         reference={"type": "order", "id": order_no},
     )
-    response = strip_id(redact_internal_snapshot_fields(order))
-    if body.createInvoice:
+    response = _public_order(order, user)
+    if body.createInvoice and not evaluation["required"]:
         from .billing import create_invoice_record
         invoice = await create_invoice_record(access, order, user)
         response["invoice"] = strip_id(redact_internal_snapshot_fields(invoice))
         response["invoiceId"] = invoice["id"]
+    elif body.createInvoice and evaluation["required"]:
+        response["invoiceDeferredForApproval"] = True
     return response
 
 
@@ -221,7 +275,7 @@ async def get_order(
     ids = await visible_company_ids(user, access)
     if o["companyId"] not in ids:
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
-    return strip_id(redact_internal_snapshot_fields(o))
+    return _public_order(o, user)
 
 
 @api_router.put("/orders/{order_id}/status")
@@ -239,7 +293,38 @@ async def set_order_status(
     ids = await visible_company_ids(user, access)
     if o["companyId"] not in ids:
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
+    approval = o.get("financialApproval") or {}
+    if body.status == "Bestätigt" and approval.get("status") != "approved":
+        company = await access.companies.find_one({"id": o["companyId"]})
+        if not company:
+            raise HTTPException(status_code=404, detail="Kunde nicht gefunden")
+        try:
+            evaluation = await _evaluate_stored_order(access, o, company)
+        except FinancialConfigurationError as exc:
+            raise HTTPException(
+                status_code=409, detail="Bestellung besitzt keinen verlässlichen Finanz-Snapshot",
+            ) from exc
+        if evaluation["required"]:
+            await access.orders.update_one({"id": order_id}, {"$set": {
+                "status": "Freigabe nötig",
+                "financialApproval": evaluation,
+                "paymentTermsSnapshot": evaluation["termsSnapshot"],
+                "paymentTermDays": evaluation["termsSnapshot"].get("paymentTermsDays"),
+            }})
+            raise HTTPException(status_code=409, detail="Bestellung benötigt zuerst eine Finanzfreigabe")
+        approval = evaluation
+    if body.status == "Bestätigt":
+        try:
+            await validate_commission_for_order(access, o)
+        except CommissionAmbiguous as exc:
+            raise HTTPException(status_code=409, detail="Provisionsvereinbarung ist nicht eindeutig konfiguriert") from exc
     update = {"status": body.status}
+    if body.status == "Bestätigt" and approval.get("status") == "not_required":
+        update.update({
+            "financialApproval": approval,
+            "paymentTermsSnapshot": approval["termsSnapshot"],
+            "paymentTermDays": approval["termsSnapshot"].get("paymentTermsDays"),
+        })
     if body.status == "Versendet" and not o.get("trackingNumber"):
         now = datetime.now(timezone.utc)
         eta = now + timedelta(days=2)
@@ -247,6 +332,8 @@ async def set_order_status(
         update["shippedAt"] = now.isoformat()
         update["estimatedDelivery"] = eta.date().isoformat()
     await access.orders.update_one({"id": order_id}, {"$set": update})
+    if body.status == "Bestätigt":
+        await create_pending_commission(access, order={**o, **update})
     await tenant_audit(access, user, "order.status", order_id, {"status": body.status})
     if body.status == "Versendet":
         try:

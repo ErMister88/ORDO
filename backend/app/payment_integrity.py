@@ -27,6 +27,8 @@ from .emailer import email_shell, send_email
 from .money import MoneyError, amount_minor, currency_code, from_minor
 from .observability import report_operational_failure
 from .tenant_access import TenantBusinessAccess, TenantScopedCollection
+from .accounting import schedule_accounting_sync
+from .commissions import earn_commission_for_payment
 
 
 logger = logging.getLogger("ss.payments")
@@ -865,6 +867,21 @@ async def process_normalized_stripe_event(
             session_id=session_id, payment_intent_id=payment_intent_id,
             event_id=event_id, event_created=event_created,
         )
+        settled_invoice = await collection.find_one({"id": resource_id})
+        records = (settled_invoice or {}).get("paymentRecords") or []
+        provider_payment = next((
+            record for record in records
+            if isinstance(record, Mapping) and record.get("providerSessionId") == session_id
+        ), None)
+        if settled_invoice and provider_payment and isinstance(settled_invoice.get("orderId"), str):
+            await earn_commission_for_payment(
+                access, order_id=settled_invoice["orderId"], invoice_id=resource_id, payment_id=provider_payment["id"],
+                payment_amount_minor=provider_payment["amountMinor"],
+                paid_total_minor=settled_invoice.get("paidAmountMinor", event_amount),
+                document_total_minor=amount_minor(
+                    settled_invoice, "amount", expected_currency=expected_currency
+                ),
+            )
     else:
         changed = await _settle_simple_resource(
             collection, resource, resource_type=resource_type,
@@ -882,6 +899,16 @@ async def process_normalized_stripe_event(
             )
             if settled_resource and settled_by_session:
                 await _send_shop_payment_confirmation_once(access, settled_resource, event_id)
+                try:
+                    await schedule_accounting_sync(
+                        access, resource_type="shop_order", resource_id=resource_id,
+                        actor_id=SYSTEM_ACTOR["id"],
+                    )
+                except Exception:
+                    await report_operational_failure(
+                        access, logger, operation="payment.accounting_schedule",
+                        category="accounting_sync",
+                    )
     if changed:
         try:
             await tenant_audit(

@@ -281,8 +281,8 @@ def test_customer_price_conditions_snapshot_excludes_internal_note_for_sales():
 def test_direct_cash_order_and_invoice_keep_authoritative_price_and_tax(monkeypatch):
     database = AsyncDatabase("direct_cash")
     sales = scoped(database, role="sales", actor="sales")
-    run(sales.companies.insert_one({"id": "c1", "name": "Customer", "assignedSalesRepId": "sales", "active": True}))
-    seed_product(sales)
+    run(sales.companies.insert_one({"id": "c1", "name": "Customer", "assignedSalesRepId": "sales", "active": True, "paymentTermsDays": 14}))
+    seed_product(sales, unitsPerCase=1, casesPerPallet=100)
     async def order_seq(_name): return 1
     async def invoice_seq(_name): return 2
     monkeypatch.setattr(orders, "next_seq", order_seq)

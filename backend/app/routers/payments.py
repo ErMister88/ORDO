@@ -21,6 +21,8 @@ async def create_checkout(
     inv = await access.invoices.find_one({"id": invoice_id})
     if not inv or not await invoice_references_visible(access, inv):
         raise HTTPException(status_code=404, detail="Rechnung nicht gefunden")
+    if inv.get("salesChannel", "b2b") != "b2c":
+        raise HTTPException(status_code=409, detail="B2B-Rechnungen unterstützen keine Online-Zahlung")
     ids = await visible_company_ids(user, access)
     if inv["companyId"] not in ids:
         raise HTTPException(status_code=403, detail="Keine Berechtigung")

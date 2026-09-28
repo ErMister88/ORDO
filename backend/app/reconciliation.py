@@ -75,6 +75,15 @@ async def run_reconciliation(
     payment_events = await access.payment_provider_events.find({}).to_list(MAX_DOCUMENTS_PER_COLLECTION)
     if checkpoint:
         await checkpoint()
+    accounting_syncs = await access.accounting_syncs.find({}).to_list(MAX_DOCUMENTS_PER_COLLECTION)
+    if checkpoint:
+        await checkpoint()
+    commission_entries = await access.commission_entries.find({}).to_list(MAX_DOCUMENTS_PER_COLLECTION)
+    if checkpoint:
+        await checkpoint()
+    commission_settlements = await access.commission_settlements.find({}).to_list(MAX_DOCUMENTS_PER_COLLECTION)
+    if checkpoint:
+        await checkpoint()
 
     order_by_id = {row.get("id"): row for row in orders if isinstance(row.get("id"), str)}
     invoice_by_id = {row.get("id"): row for row in invoices if isinstance(row.get("id"), str)}
@@ -162,9 +171,72 @@ async def run_reconciliation(
                 "Zahlungsereignis und wirtschaftlicher Zahlungsstatus stimmen nicht überein.",
             ))
 
+    commission_by_id = {
+        row.get("id"): row for row in commission_entries if isinstance(row.get("id"), str)
+    }
+    payment_ids = {
+        payment.get("id")
+        for invoice in invoices
+        for payment in (invoice.get("paymentRecords") or [])
+        if isinstance(payment, dict) and isinstance(payment.get("id"), str)
+    }
+    for entry in commission_entries:
+        entry_id = str(entry.get("id") or "unknown")
+        order_id = entry.get("orderId")
+        if isinstance(order_id, str) and order_id not in order_by_id:
+            issues.append(_issue(
+                "commission_order_missing", "ERROR", "commission_entry", entry_id,
+                "Ein Provisions-Ledger-Eintrag verweist auf keine vorhandene Bestellung.",
+            ))
+        payment_id = entry.get("paymentId")
+        if entry.get("status") == "EARNED" and (
+            not isinstance(payment_id, str) or payment_id not in payment_ids
+        ):
+            issues.append(_issue(
+                "commission_payment_missing", "ERROR", "commission_entry", entry_id,
+                "Eine verdiente Provision besitzt keine nachweisbare Zahlung.",
+            ))
+    for row in accounting_syncs:
+        if row.get("status") != "completed":
+            continue
+        resource_type = row.get("resourceType")
+        resource_id = row.get("resourceId")
+        resource = resources.get(resource_type, {}).get(resource_id)
+        if not resource or not row.get("providerInvoiceId"):
+            issues.append(_issue(
+                "accounting_reference_missing", "REQUIRES_REVIEW", "accounting_sync",
+                str(row.get("id") or "unknown"),
+                "Eine abgeschlossene Accounting-Synchronisierung besitzt keine vollständige Referenz.",
+            ))
+        elif resource.get("providerInvoiceId") != row.get("providerInvoiceId"):
+            issues.append(_issue(
+                "accounting_resource_mismatch", "REQUIRES_REVIEW", resource_type,
+                str(resource_id or "unknown"),
+                "Accounting-Synchronisierung und Geschäftsdokument besitzen unterschiedliche Referenzen.",
+            ))
+    for settlement in commission_settlements:
+        settlement_id = str(settlement.get("id") or "unknown")
+        entry_ids = settlement.get("entryIds") or []
+        entries = [commission_by_id.get(entry_id) for entry_id in entry_ids]
+        if any(entry is None for entry in entries):
+            issues.append(_issue(
+                "commission_settlement_entry_missing", "ERROR", "commission_settlement",
+                settlement_id, "Eine Provisionsabrechnung verweist auf fehlende Ledger-Einträge.",
+            ))
+            continue
+        calculated = sum(entry.get("amountMinor", 0) for entry in entries if entry)
+        if calculated != settlement.get("amountMinor"):
+            issues.append(_issue(
+                "commission_settlement_amount_mismatch", "REQUIRES_REVIEW", "commission_settlement",
+                settlement_id, "Abrechnungssumme und Provisions-Ledger stimmen nicht überein.",
+            ))
+
     scan_truncated = any(
         len(rows) >= MAX_DOCUMENTS_PER_COLLECTION
-        for rows in (orders, invoices, shop_orders, machine_requests, operations, payment_events)
+        for rows in (
+            orders, invoices, shop_orders, machine_requests, operations, payment_events,
+            accounting_syncs, commission_entries, commission_settlements,
+        )
     )
     if scan_truncated:
         issues.append(_issue(
@@ -190,6 +262,9 @@ async def run_reconciliation(
             "orders": len(orders), "invoices": len(invoices), "shopOrders": len(shop_orders),
             "machineRequests": len(machine_requests), "idempotencyOperations": len(operations),
             "paymentEvents": len(payment_events),
+            "accountingSyncs": len(accounting_syncs),
+            "commissionEntries": len(commission_entries),
+            "commissionSettlements": len(commission_settlements),
         },
         "retentionClass": "technical_log",
     }

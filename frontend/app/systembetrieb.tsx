@@ -30,6 +30,7 @@ type CommunicationStatus = {
   storage: { errors: number };
   worker: { status: string; lastSeenAt?: string | null };
 };
+type AccountingSync = { id: string; resourceType: string; resourceId: string; status: string; provider?: string; providerInvoiceId?: string; invoiceNumber?: string; updatedAt?: string };
 
 const CAPABILITY_LABELS: Record<string, string> = {
   database: "Datenbank",
@@ -50,11 +51,13 @@ const PROBLEM_LABELS: Record<string, string> = {
   technical_error: "Technischer Fehler",
   reconciliation: "Konsistenzhinweis",
   email: "E-Mail-Zustellung",
+  accounting: "Accounting-Synchronisierung",
 };
 
 const JOB_LABELS: Record<string, string> = {
   "reconcile.tenant": "Konsistenzprüfung",
   "email.deliver": "E-Mail-Zustellung",
+  "accounting.sync": "Accounting-Synchronisierung",
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -86,6 +89,7 @@ export default function Systembetrieb() {
   const jobs = useQuery<Job[]>({ queryKey: ["operations-jobs"], queryFn: () => apiGet("/operations/jobs") });
   const reconciliation = useQuery<Reconciliation>({ queryKey: ["operations-reconciliation"], queryFn: () => apiGet("/operations/reconciliation/latest") });
   const communication = useQuery<CommunicationStatus>({ queryKey: ["operations-communications"], queryFn: () => apiGet("/operations/communications"), refetchInterval: 30000 });
+  const accounting = useQuery<AccountingSync[]>({ queryKey: ["accounting-syncs"], queryFn: () => apiGet("/accounting/syncs"), refetchInterval: 30000 });
 
   const refresh = async () => {
     await Promise.all([
@@ -94,17 +98,19 @@ export default function Systembetrieb() {
       queryClient.invalidateQueries({ queryKey: ["operations-jobs"] }),
       queryClient.invalidateQueries({ queryKey: ["operations-reconciliation"] }),
       queryClient.invalidateQueries({ queryKey: ["operations-communications"] }),
+      queryClient.invalidateQueries({ queryKey: ["accounting-syncs"] }),
     ]);
   };
   const runCheck = useMutation({ mutationFn: () => apiPost("/operations/reconciliation/run"), onSuccess: refresh });
   const retryJob = useMutation({ mutationFn: (id: string) => apiPost(`/operations/jobs/${id}/retry`), onSuccess: refresh });
   const retryPayment = useMutation({ mutationFn: (id: string) => apiPost(`/payment-events/${id}/retry`), onSuccess: refresh });
+  const retryAccounting = useMutation({ mutationFn: (id: string) => apiPost(`/accounting/syncs/${id}/retry`), onSuccess: refresh });
   const formatter = useMemo(() => new Intl.DateTimeFormat(locale, { dateStyle: "short", timeStyle: "short" }), [locale]);
   const date = (value?: string) => value ? formatter.format(new Date(value)) : "–";
   const openProblems = problems.data ?? [];
   const failedJobs = (jobs.data ?? []).filter((job) => job.status === "failed" || job.status === "dead");
-  const loadError = [status.error, problems.error, jobs.error, reconciliation.error, communication.error].find(Boolean);
-  const actionError = runCheck.error || retryJob.error || retryPayment.error;
+  const loadError = [status.error, problems.error, jobs.error, reconciliation.error, communication.error, accounting.error].find(Boolean);
+  const actionError = runCheck.error || retryJob.error || retryPayment.error || retryAccounting.error;
 
   return <View style={styles.root}>
     <View style={styles.header}>
@@ -148,6 +154,9 @@ export default function Systembetrieb() {
         <Card style={styles.capability}><Text style={styles.capabilityTitle}>Tote Jobs</Text><Text style={styles.metric}>{communication.data?.jobs.dead ?? "–"}</Text></Card>
         <Card style={styles.capability}><Text style={styles.capabilityTitle}>Speicherfehler</Text><Text style={styles.metric}>{communication.data?.storage.errors ?? "–"}</Text></Card>
       </View>
+
+      <SectionTitle>Accounting</SectionTitle>
+      {(accounting.data ?? []).length === 0 ? <EmptyState title="Keine Accounting-Vorgänge" subtitle="Der Provider ist nicht aktiviert oder es liegen noch keine Dokumente vor." /> : (accounting.data ?? []).slice(0, 20).map((sync) => <Card key={sync.id}><View style={styles.problemHead}><Text style={styles.problemTitle}>{sync.resourceType} · {sync.resourceId}</Text><Text style={styles.code}>{sync.status}</Text></View><Muted>{sync.invoiceNumber || sync.providerInvoiceId || "Noch keine Provider-Referenz"} · {date(sync.updatedAt)}</Muted>{sync.status === "failed" ? <Button title="Synchronisierung erneut planen" kind="secondary" onPress={() => retryAccounting.mutate(sync.id)} loading={retryAccounting.isPending} style={{ marginTop: 10 }} /> : null}</Card>)}
 
       <View style={styles.sectionRow}><SectionTitle>Konsistenzprüfung</SectionTitle><Button title="Jetzt prüfen" kind="secondary" loading={runCheck.isPending} onPress={() => runCheck.mutate()} /></View>
       <Card testID="reconciliation-summary">

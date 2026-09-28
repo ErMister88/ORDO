@@ -26,6 +26,10 @@ TENANT_SCOPED_BUSINESS_COLLECTIONS = frozenset({
     "commerce_homepages",
     "commerce_regions",
     "commerce_shipping_classes",
+    "accounting_syncs",
+    "commission_agreements",
+    "commission_entries",
+    "commission_settlements",
     "equipment_requests",
     "email_outbox",
     "invoices",
@@ -204,6 +208,10 @@ class TenantBusinessAccess:
         self.commerce_homepages = TenantScopedCollection(database, "commerce_homepages", context)
         self.commerce_regions = TenantScopedCollection(database, "commerce_regions", context)
         self.commerce_shipping_classes = TenantScopedCollection(database, "commerce_shipping_classes", context)
+        self.accounting_syncs = TenantScopedCollection(database, "accounting_syncs", context)
+        self.commission_agreements = TenantScopedCollection(database, "commission_agreements", context)
+        self.commission_entries = TenantScopedCollection(database, "commission_entries", context)
+        self.commission_settlements = TenantScopedCollection(database, "commission_settlements", context)
         self.equipment_requests = TenantScopedCollection(database, "equipment_requests", context)
         self.email_outbox = TenantScopedCollection(database, "email_outbox", context)
         self.products = TenantScopedCollection(database, "products", context)

@@ -14,6 +14,7 @@ from .orders import order_references_visible
 from ..snapshots import redact_internal_snapshot_fields
 from ..idempotency import IdempotencyService
 from ..pagination import bounded_list
+from ..commissions import earn_commission_for_payment
 
 
 async def invoice_references_visible(access: TenantBusinessAccess, invoice: dict) -> bool:
@@ -173,8 +174,34 @@ def _existing_payment_response(invoice: dict, operation_id: str | None) -> dict 
                 "status": invoice.get("status", "Offen"),
                 "paidAmount": from_minor(invoice.get("paidAmountMinor", 0)),
                 "paidAmountMinor": invoice.get("paidAmountMinor", 0),
+                "paymentAmountMinor": payment.get("amountMinor"),
+                "paymentId": payment.get("id"),
             }
     return None
+
+
+async def _earn_recovered_payment_commission(
+    access: TenantBusinessAccess, invoice: dict, recovered: dict,
+) -> None:
+    order_id = invoice.get("orderId")
+    payment_id = recovered.get("paymentId")
+    payment_amount = recovered.get("paymentAmountMinor")
+    if not (
+        isinstance(order_id, str)
+        and isinstance(payment_id, str)
+        and isinstance(payment_amount, int)
+        and not isinstance(payment_amount, bool)
+    ):
+        return
+    total = amount_minor(
+        invoice, "amount",
+        expected_currency=invoice.get("currency", access.context.default_currency),
+    )
+    await earn_commission_for_payment(
+        access, order_id=order_id, invoice_id=invoice["id"], payment_id=payment_id,
+        payment_amount_minor=payment_amount,
+        paid_total_minor=recovered["paidAmountMinor"], document_total_minor=total,
+    )
 
 
 async def _record_payment(
@@ -185,8 +212,16 @@ async def _record_payment(
     *,
     operation_id: str | None = None,
 ) -> dict:
+    if user.get("role") != "admin" and user.get("id") != "system:payment-provider":
+        raise HTTPException(status_code=403, detail="Zahlungen dürfen nur durch autorisierte Administratoren bestätigt werden")
+    sales_channel = invoice.get("salesChannel", "b2b")
+    if sales_channel == "b2c" and user.get("id") != "system:payment-provider":
+        raise HTTPException(status_code=403, detail="B2C-Zahlungen benötigen eine verifizierte Providerbestätigung")
+    if sales_channel != "b2c" and body.method not in {"bank_transfer", "cash"}:
+        raise HTTPException(status_code=400, detail="B2B-Zahlungen unterstützen ausschließlich Rechnung oder Barzahlung")
     recovered = _existing_payment_response(invoice, operation_id)
     if recovered:
+        await _earn_recovered_payment_commission(access, invoice, recovered)
         return recovered
     currency = invoice.get("currency", access.context.default_currency)
     amount_minor_value = to_minor(body.amount)
@@ -232,28 +267,44 @@ async def _record_payment(
             status_code=409,
             detail="Rechnung wurde zwischenzeitlich geändert. Bitte Zahlungsstand neu laden.",
         )
-    await tenant_audit(access, user, "invoice.payment", invoice["id"], {"paymentId": payment["id"], "status": status})
-    return {"ok": True, "status": status, "paidAmount": from_minor(new_paid), "paidAmountMinor": new_paid}
+    audit_details = {"paymentId": payment["id"], "status": status, "method": body.method}
+    if body.method == "cash":
+        await tenant_audit(access, user, "invoice.payment.cash", invoice["id"], audit_details)
+    elif body.method == "bank_transfer":
+        await tenant_audit(access, user, "invoice.payment.bank_transfer", invoice["id"], audit_details)
+    else:
+        await tenant_audit(access, user, "invoice.payment.provider", invoice["id"], audit_details)
+    order_id = invoice.get("orderId")
+    if isinstance(order_id, str):
+        await earn_commission_for_payment(
+            access, order_id=order_id, invoice_id=invoice["id"], payment_id=payment["id"],
+            payment_amount_minor=amount_minor_value,
+            paid_total_minor=new_paid, document_total_minor=invoice_total,
+        )
+    return {"ok": True, "status": status, "paidAmount": from_minor(new_paid), "paidAmountMinor": new_paid, "paymentId": payment["id"]}
 
 
 async def mark_invoice_paid(
     invoice_id: str,
-    user: Annotated[dict, Depends(require_roles("admin", "sales"))],
+    user: Annotated[dict, Depends(require_roles("admin"))],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
 ):
     inv = await _require_manageable_invoice(user, access, invoice_id)
     total = amount_minor(inv, "amount", expected_currency=inv.get("currency", access.context.default_currency))
     paid = inv.get("paidAmountMinor", 0)
+    method = inv.get("paymentMethod")
+    if inv.get("salesChannel", "b2b") != "b2c" and method not in {"bank_transfer", "cash"}:
+        method = "bank_transfer"
     return await _record_payment(user, access, inv, PaymentRecordIn(
-        amount=from_minor(total - paid), method=inv.get("paymentMethod", "other")
-        if inv.get("paymentMethod") in ("bank_transfer", "cash", "card", "other") else "other",
+        amount=from_minor(total - paid),
+        method=method if method in ("bank_transfer", "cash", "card", "other") else "other",
     ))
 
 
 async def record_invoice_payment(
     invoice_id: str,
     body: PaymentRecordIn,
-    user: Annotated[dict, Depends(require_roles("admin", "sales"))],
+    user: Annotated[dict, Depends(require_roles("admin"))],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
 ):
     invoice = await _require_manageable_invoice(user, access, invoice_id)
@@ -286,6 +337,7 @@ async def _idempotent_payment(
         invoice = await _require_manageable_invoice(user, access, invoice_id)
         recovered = _existing_payment_response(invoice, claim.record_id)
         if recovered:
+            await _earn_recovered_payment_commission(access, invoice, recovered)
             response = recovered
         else:
             payment_body = body
@@ -297,11 +349,12 @@ async def _idempotent_payment(
                 paid = invoice.get("paidAmountMinor", 0)
                 if paid >= total or invoice.get("status") in ("Bezahlt", "Storniert"):
                     raise HTTPException(status_code=409, detail="Für diese Rechnung kann keine Zahlung erfasst werden")
+                method = invoice.get("paymentMethod")
+                if invoice.get("salesChannel", "b2b") != "b2c" and method not in {"bank_transfer", "cash"}:
+                    method = "bank_transfer"
                 payment_body = PaymentRecordIn(
                     amount=from_minor(total - paid),
-                    method=invoice.get("paymentMethod", "other")
-                    if invoice.get("paymentMethod") in ("bank_transfer", "cash", "card", "other")
-                    else "other",
+                    method=method if method in ("bank_transfer", "cash", "card", "other") else "other",
                 )
             response = await _record_payment(
                 user, access, invoice, payment_body, operation_id=claim.record_id
@@ -316,7 +369,7 @@ async def _idempotent_payment(
 @api_router.put("/invoices/{invoice_id}/pay")
 async def mark_invoice_paid_endpoint(
     invoice_id: str,
-    user: Annotated[dict, Depends(require_roles("admin", "sales"))],
+    user: Annotated[dict, Depends(require_roles("admin"))],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
     idempotency_key: Annotated[Optional[str], Header(alias="Idempotency-Key")] = None,
 ):
@@ -330,7 +383,7 @@ async def mark_invoice_paid_endpoint(
 async def record_invoice_payment_endpoint(
     invoice_id: str,
     body: PaymentRecordIn,
-    user: Annotated[dict, Depends(require_roles("admin", "sales"))],
+    user: Annotated[dict, Depends(require_roles("admin"))],
     access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
     idempotency_key: Annotated[Optional[str], Header(alias="Idempotency-Key")] = None,
 ):

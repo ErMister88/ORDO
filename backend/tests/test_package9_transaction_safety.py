@@ -152,8 +152,12 @@ def test_order_invoice_partial_failure_recovers_one_order_and_one_invoice(monkey
     database.raw.invoices.create_index([("tenantId", 1), ("orderId", 1)], unique=True)
     access = scoped(database)
     user = principal(access)
-    run(access.companies.insert_one({"id": "c1", "name": "Customer", "active": True}))
-    seed_product(access)
+    run(access.companies.insert_one({
+        "id": "c1", "name": "Customer", "active": True,
+        "paymentTermsDays": 14, "creditLimitMinor": 1_000_000,
+        "creditCurrency": "EUR", "palletApprovalLimit": 1,
+    }))
+    seed_product(access, unit="kg", kgPerPallet=600)
     counters = iter(range(1, 20))
 
     async def sequence(_name):

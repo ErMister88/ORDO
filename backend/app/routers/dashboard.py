@@ -8,6 +8,7 @@ from ..core import api_router, strip_id
 from ..deps import current_user, require_roles, tenant_business_access, visible_company_ids
 from ..tenant_access import TenantBusinessAccess
 from ..money import amount_minor, from_minor, line_total_minor, to_minor
+from ..financial_operations import receivable_due_status, receivable_status
 
 
 @api_router.get("/dashboard")
@@ -92,6 +93,22 @@ async def dashboard(
         from_minor(amount_minor(i, "amount", expected_currency=i.get("currency", access.context.default_currency)))
         for i in open_invoices
     )
+    receivable_totals: dict[str, dict[str, int]] = {}
+    for invoice in invoices:
+        state = receivable_status(invoice, today=now.date())
+        if state in {"PAID", "CANCELLED"}:
+            continue
+        code = invoice.get("currency", access.context.default_currency)
+        total_minor = amount_minor(invoice, "amount", expected_currency=code)
+        paid_minor = invoice.get("paidAmountMinor", 0)
+        outstanding = total_minor - paid_minor
+        bucket = receivable_totals.setdefault(code, {"openMinor": 0, "dueMinor": 0, "overdueMinor": 0})
+        bucket["openMinor"] += outstanding
+        due_state = receivable_due_status(invoice, today=now.date())
+        if due_state == "DUE":
+            bucket["dueMinor"] += outstanding
+        if due_state == "OVERDUE":
+            bucket["overdueMinor"] += outstanding
 
     company_names = {company["id"]: company.get("name", company["id"]) for company in companies}
     last_order_by_company = {}
@@ -231,6 +248,7 @@ async def dashboard(
         "topCustomers": customer_metrics[:10],
         "topSalesReps": top_sales_reps,
         "managementAlerts": alerts,
+        "receivables": receivable_totals,
     }
 
 

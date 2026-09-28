@@ -270,6 +270,7 @@ def test_invoice_checkout_charges_only_server_calculated_remaining_amount(monkey
     run(access.invoices.insert_one({
         "id": "invoice-1", "companyId": "company-1", "status": "Teilweise bezahlt",
         "amount": 20.0, "amountMinor": 2000, "paidAmountMinor": 766, "currency": "EUR",
+        "salesChannel": "b2c",
     }))
     calls = []
 

@@ -7,7 +7,6 @@ import {
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import * as WebBrowser from "expo-web-browser";
 import { ArrowLeft, Phone, EnvelopeSimple, MapPin, Check, PencilSimple, Export, FileText, Package } from "phosphor-react-native";
 
 import { makeStyles, tokens, useTheme } from "@/src/theme";
@@ -43,6 +42,7 @@ export default function KundeDetail() {
   const tasks = useQuery({ queryKey: ["customer-tasks", id], queryFn: () => apiGet(`/companies/${id}/tasks`) });
   const addresses = useQuery({ queryKey: ["customer-addresses", id], queryFn: () => apiGet(`/companies/${id}/addresses`) });
   const contacts = useQuery({ queryKey: ["customer-contacts", id], queryFn: () => apiGet(`/companies/${id}/contacts`) });
+  const credit = useQuery({ queryKey: ["company-credit", id], queryFn: () => apiGet(`/companies/${id}/credit`), enabled: Boolean(id) });
   const salesStaff = useQuery({ queryKey: ["sales-staff"], queryFn: () => apiGet("/staff/sales"), enabled: isAdmin });
   const customerTypes = useQuery({ queryKey: ["config-customer-types"], queryFn: () => apiGet("/business-config/customer-types"), enabled: user?.role === "admin" || user?.role === "sales" });
   const customerTags = useQuery({ queryKey: ["config-customer-tags"], queryFn: () => apiGet("/business-config/customer-tags"), enabled: user?.role === "admin" || user?.role === "sales" });
@@ -87,35 +87,6 @@ export default function KundeDetail() {
       qc.invalidateQueries({ queryKey: ["dashboard"] });
     },
   });
-
-  const [payingId, setPayingId] = useState<string | null>(null);
-  const payOnline = async (invId: string) => {
-    setPayingId(invId);
-    try {
-      const res = await apiPostIdempotent(`/invoices/${invId}/checkout`, {});
-      if (res?.url) {
-        await WebBrowser.openBrowserAsync(res.url);
-        let confirmed = false;
-        for (let i = 0; i < 8; i++) {
-          await new Promise((r) => setTimeout(r, 1500));
-          const st = await apiGet(`/invoices/${invId}/payment-status`);
-          if (st.status === "Bezahlt") {
-            confirmed = true;
-            qc.invalidateQueries({ queryKey: ["invoices"] });
-            qc.invalidateQueries({ queryKey: ["dashboard"] });
-            break;
-          }
-        }
-        if (!confirmed) {
-          localizedAlert("Zahlung wird bestätigt", "ORDO wartet noch auf die sichere Bestätigung des Zahlungsdienstes.");
-        }
-      }
-    } catch (e: any) {
-      localizedAlert("Zahlung", e.message || "Online-Zahlung ist erst nach dem Deploy verfügbar.");
-    } finally {
-      setPayingId(null);
-    }
-  };
 
   const [sammelBusy, setSammelBusy] = useState(false);
   const sammelrechnung = async () => {
@@ -221,6 +192,7 @@ export default function KundeDetail() {
               <KPICard label="Rechnungen" value={num(custInvoices.length)} accent="success" />
               <KPICard label="Verträge" value={num(custContracts.length)} accent="success" />
             </View>
+            {credit.data ? <FinancialTermsCard companyId={id!} data={credit.data} isAdmin={isAdmin} onSaved={() => { qc.invalidateQueries({ queryKey: ["company-credit", id] }); qc.invalidateQueries({ queryKey: ["financial-terms", id] }); }} /> : null}
             <SectionTitle>Verträge & Maschinen</SectionTitle>
             {custContracts.length === 0 && custMachines.length === 0 ? <EmptyState title="Keine Verträge oder Maschinen" /> : null}
             {custContracts.map((ct: any) => (
@@ -324,21 +296,14 @@ export default function KundeDetail() {
                   </Pressable>
                   {inv.status !== "Bezahlt" ? (
                     <>
-                      <Button
-                        testID={`pay-online-${inv.id}`}
-                        title="Online bezahlen (Karte)"
-                        loading={payingId === inv.id}
-                        onPress={() => payOnline(inv.id)}
-                        style={{ marginTop: 8 }}
-                      />
-                      {(isAdmin || user?.role === "sales") ? <Button
+                      {isAdmin ? <Button
                           testID={`pay-invoice-${inv.id}`}
                           title="Als bezahlt markieren"
                           kind="secondary"
                           loading={payInvoice.isPending && payInvoice.variables === inv.id}
                           onPress={() => payInvoice.mutate(inv.id)}
                           style={{ marginTop: 8 }}
-                        /> : null}
+                      /> : null}
                     </>
                   ) : null}
                 </Card>
@@ -584,6 +549,44 @@ function PriceEditorRow({
       {feedback ? <Text style={[styles.savedTxt, { color: colors.warning }]}>{feedback}</Text> : null}
     </Card>
   );
+}
+
+
+function FinancialTermsCard({ companyId, data, isAdmin, onSaved }: { companyId: string; data: any; isAdmin: boolean; onSaved: () => void }) {
+  const styles = useStyles();
+  const { tf } = useI18n();
+  const [editing, setEditing] = useState(false);
+  const [paymentTermsDays, setPaymentTermsDays] = useState(String(data.paymentTermsDays ?? ""));
+  const [creditLimit, setCreditLimit] = useState(String((data.creditLimitMinor ?? 0) / 100));
+  const [currency, setCurrency] = useState(data.creditCurrency ?? data.currency ?? "EUR");
+  const [palletLimit, setPalletLimit] = useState(String(data.palletApprovalLimit ?? 1));
+  const save = useMutation({
+    mutationFn: () => apiPut(`/companies/${companyId}/financial-terms`, {
+      paymentTermsDays: Number(paymentTermsDays),
+      creditLimitMinor: Math.round(Number(creditLimit) * 100),
+      creditCurrency: currency,
+      palletApprovalLimit: Number(palletLimit),
+    }),
+    onSuccess: () => { setEditing(false); onSaved(); },
+    onError: (error: any) => localizedAlert("Finanzkonditionen", error.message || "Speichern fehlgeschlagen"),
+  });
+  const money = (minor: number | undefined) => `${((minor ?? 0) / 100).toFixed(2)} ${data.currency ?? currency}`;
+  return <Card testID="customer-financial-terms">
+    <SectionTitle>Finanzkonditionen & Forderungen</SectionTitle>
+    <InfoRow label="Zahlungsziel" value={data.paymentTermsDays != null ? tf("{days} Tage", { days: data.paymentTermsDays }) : "Nicht festgelegt"} />
+    {isAdmin ? <InfoRow label="Kreditlimit" value={money(data.creditLimitMinor)} /> : null}
+    <InfoRow label="Offene Forderungen" value={money(data.openMinor)} />
+    <InfoRow label="Überfällige Forderungen" value={money(data.overdueMinor)} />
+    {isAdmin ? <><InfoRow label="Verfügbare Kreditlinie" value={money(data.availableMinor)} /><InfoRow label="Palettenlimit" value={`${data.palletApprovalLimit ?? 1}`} /></> : null}
+    {isAdmin && !editing ? <Button title="Finanzkonditionen bearbeiten" kind="secondary" onPress={() => setEditing(true)} /> : null}
+    {isAdmin && editing ? <View style={{ gap: 8 }}>
+      <Input value={paymentTermsDays} onChangeText={setPaymentTermsDays} placeholder="Zahlungsziel in Tagen" keyboardType="number-pad" />
+      <Input value={creditLimit} onChangeText={setCreditLimit} placeholder="Kreditlimit" keyboardType="decimal-pad" />
+      <View style={styles.controlChips}>{["EUR", "CHF"].map((value) => <Pressable key={value} onPress={() => setCurrency(value)} style={[styles.controlChip, currency === value && styles.controlChipActive]}><Text style={[styles.controlChipText, currency === value && styles.controlChipTextActive]}>{value}</Text></Pressable>)}</View>
+      <Input value={palletLimit} onChangeText={setPalletLimit} placeholder="Palettenlimit" keyboardType="decimal-pad" />
+      <View style={{ flexDirection: "row", gap: 8 }}><Button title="Abbrechen" kind="secondary" onPress={() => setEditing(false)} /><Button title="Speichern" loading={save.isPending} disabled={!paymentTermsDays || Number(creditLimit) < 0 || Number(palletLimit) < 0} onPress={() => save.mutate()} /></View>
+    </View> : null}
+  </Card>;
 }
 
 

@@ -97,6 +97,27 @@ async def capability_snapshot(database) -> dict[str, Any]:
         "Background-Worker nicht aktiviert" if not jobs_enabled else
         "Kein aktueller Worker-Heartbeat",
     )
+    accounting_provider = (os.getenv("ACCOUNTING_PROVIDER") or "").strip().lower()
+    accounting_token = (os.getenv("SEVDESK_API_TOKEN") or "").strip()
+    accounting_environment = (os.getenv("APP_ENV") or "").strip().lower()
+    accounting_write_gate = (
+        (os.getenv("SEVDESK_STAGING_WRITES_ENABLED") or "").strip().lower() in {"1", "true", "yes", "on"}
+        if accounting_environment in {"stage", "staging"}
+        else (os.getenv("SEVDESK_PRODUCTION_ENABLED") or "").strip().lower() in {"1", "true", "yes", "on"}
+        if accounting_environment in {"prod", "production"}
+        else accounting_environment in {"dev", "development", "test", "testing"}
+    )
+    accounting_ready = (
+        accounting_provider == "sevdesk" and bool(accounting_token)
+        and accounting_write_gate and jobs_enabled and worker_active
+    )
+    capabilities["accounting"] = _status(
+        "available" if accounting_ready else
+        "not_configured" if not accounting_provider else "degraded",
+        "Accounting-Synchronisierung aktiv" if accounting_ready else
+        "Accounting-Provider nicht aktiviert" if not accounting_provider else
+        "Accounting-Konfiguration oder Worker unvollständig",
+    )
     backup_tools = bool(shutil.which("mongodump") and shutil.which("mongorestore"))
     backup_destination = bool((os.getenv("BACKUP_DIRECTORY") or "").strip())
     capabilities["backups"] = _status(

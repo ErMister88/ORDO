@@ -72,6 +72,26 @@ test("final review terminology is professionally localized without raw German", 
   assert.equal(catalog["Angebotsempfänger"].it, "Destinatario dell'offerta");
 });
 
+test("financial operations UI is translated for Italian and English", () => {
+  for (const source of [
+    "Finanzkonditionen & Forderungen",
+    "Finanzfreigaben",
+    "Bestellung wird geprüft",
+    "Die Bestellung wurde sicher gespeichert und benötigt eine Freigabe.",
+    "Verfügbare Kreditlinie",
+    "Palettenkonfiguration (B2B)",
+    "Accounting-Synchronisierung",
+    "Provisions-Ledger",
+    "Provisionsabrechnungen",
+    "Vereinbarung anlegen",
+    "Als ausgezahlt markieren",
+  ]) {
+    assert.ok(catalog[source], `missing financial translation: ${source}`);
+    assert.notEqual(catalog[source].it, source);
+    assert.notEqual(catalog[source].en, source);
+  }
+});
+
 test("language switching is persistent and outside session/cart providers", async () => {
   const i18n = await readFile(new URL("../src/i18n/index.tsx", import.meta.url), "utf8");
   const layout = await readFile(new URL("../app/_layout.tsx", import.meta.url), "utf8");
