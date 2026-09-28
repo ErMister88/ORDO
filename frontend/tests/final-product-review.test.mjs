@@ -54,4 +54,7 @@ test("user administration never renders or consumes generated passwords", async 
   assert.doesNotMatch(users, /initialPassword|cred-password|einmalig sichtbar/);
   assert.match(users, /invitationQueued/);
   assert.match(users, /assignedCustomerCount/);
+  assert.match(users, /\["admin", "sales", "customer"\]/);
+  assert.match(users, /apiPut\(`\/users\/\$\{id\}\/status`/);
+  assert.match(users, /u\.id !== user\?\.id/);
 });

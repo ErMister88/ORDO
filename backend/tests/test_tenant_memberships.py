@@ -18,7 +18,7 @@ os.environ["APP_ENV"] = "test"
 from app import auth_security, deps
 from app.auth_security import decode_access_token, issue_shop_token, issue_tenant_token
 from app.core import hash_pw
-from app.models import CompanyUpdateIn, CreateUserIn
+from app.models import CompanyUpdateIn, CreateUserIn, UserStatusIn
 from app.routers import auth, companies, users
 from app.tenant_access import TenantBusinessAccess
 from app.tenancy import (
@@ -525,6 +525,141 @@ def test_create_sales_reuses_global_identity_without_password_disclosure(monkeyp
     membership = database.raw.tenant_memberships.find_one({"userId": "shared"})
     assert membership["role"] == "sales"
     assert membership["status"] == "active"
+
+
+def test_create_additional_admin_uses_tenant_membership_without_password_disclosure(
+    monkeypatch,
+):
+    database = AsyncDatabase("membership_create_admin")
+    access_a, admin_a = tenant_access(database, TENANT_A)
+    monkeypatch.setattr(users, "db", database)
+
+    async def no_side_effect(*_args, **_kwargs):
+        return {"queued": True}
+
+    monkeypatch.setattr(users, "global_audit", no_side_effect)
+    monkeypatch.setattr(users, "tenant_audit", no_side_effect)
+    monkeypatch.setattr(users, "_queue_account_invitation", no_side_effect)
+
+    result = run(users.create_user(
+        CreateUserIn(
+            name="Second Admin", email="admin2@example.test", role="admin",
+        ),
+        admin_a,
+        access_a,
+    ))
+
+    identity = database.raw.users.find_one({"id": result["id"]})
+    membership = database.raw.tenant_memberships.find_one({"userId": result["id"]})
+    assert identity["role"] == "admin"
+    assert membership["role"] == "admin"
+    assert membership["companyId"] is None
+    assert result["invitationQueued"] is True
+    assert "initialPassword" not in result
+
+
+def test_admin_can_deactivate_and_reactivate_tenant_user_idempotently(monkeypatch):
+    database = AsyncDatabase("membership_user_status")
+    access_a, admin_a = tenant_access(database, TENANT_A)
+    run(access_a.tenant_memberships.insert_one(
+        membership_document("mbr-admin", TENANT_A, "admin-a", "admin")
+    ))
+    run(access_a.tenant_memberships.insert_one(
+        membership_document("mbr-sales", TENANT_A, "sales-a", "sales")
+    ))
+    database.raw.users.insert_one({
+        "id": "sales-a", "email": "sales@example.test", "active": True,
+    })
+    monkeypatch.setattr(users, "db", database)
+
+    async def no_audit(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(users, "tenant_audit", no_audit)
+
+    disabled = run(users.update_user_membership_status(
+        "sales-a", UserStatusIn(status="inactive"), admin_a, access_a,
+    ))
+    replay = run(users.update_user_membership_status(
+        "sales-a", UserStatusIn(status="inactive"), admin_a, access_a,
+    ))
+    enabled = run(users.update_user_membership_status(
+        "sales-a", UserStatusIn(status="active"), admin_a, access_a,
+    ))
+
+    assert disabled["idempotentReplay"] is False
+    assert replay["idempotentReplay"] is True
+    assert enabled["status"] == "active"
+    assert database.raw.tenant_memberships.find_one({"id": "mbr-sales"})["status"] == "active"
+
+
+def test_membership_status_is_tenant_scoped_and_protects_admin_access(monkeypatch):
+    database = AsyncDatabase("membership_status_guard")
+    access_a, admin_a = tenant_access(database, TENANT_A)
+    access_b, _admin_b = tenant_access(database, TENANT_B, user_id="admin-b")
+    run(access_a.tenant_memberships.insert_one(
+        membership_document("mbr-admin-a", TENANT_A, "admin-a", "admin")
+    ))
+    run(access_b.tenant_memberships.insert_one(
+        membership_document("mbr-foreign", TENANT_B, "foreign", "sales")
+    ))
+    monkeypatch.setattr(users, "db", database)
+
+    with pytest.raises(HTTPException) as own:
+        run(users.update_user_membership_status(
+            "admin-a", UserStatusIn(status="inactive"), admin_a, access_a,
+        ))
+    assert own.value.status_code == 409
+
+    with pytest.raises(HTTPException) as foreign:
+        run(users.update_user_membership_status(
+            "foreign", UserStatusIn(status="inactive"), admin_a, access_a,
+        ))
+    assert foreign.value.status_code == 404
+
+
+def test_parallel_admin_deactivation_cannot_leave_tenant_without_active_admin(
+    monkeypatch,
+):
+    database = AsyncDatabase("membership_admin_status_race")
+    access_a, admin_a = tenant_access(database, TENANT_A)
+    run(access_a.tenant_memberships.insert_one(
+        membership_document("mbr-admin-a", TENANT_A, "admin-a", "admin")
+    ))
+    run(access_a.tenant_memberships.insert_one(
+        membership_document("mbr-admin-b", TENANT_A, "admin-b", "admin")
+    ))
+    monkeypatch.setattr(users, "db", database)
+
+    original_update = access_a.tenant_memberships.update_one
+    update_count = 0
+
+    async def concurrent_update(*args, **kwargs):
+        nonlocal update_count
+        result = await original_update(*args, **kwargs)
+        update_count += 1
+        if update_count == 1:
+            database.raw.tenant_memberships.update_one(
+                {"id": "mbr-admin-a"}, {"$set": {"status": "inactive"}},
+            )
+        return result
+
+    async def no_audit(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(access_a.tenant_memberships, "update_one", concurrent_update)
+    monkeypatch.setattr(users, "tenant_audit", no_audit)
+
+    with pytest.raises(HTTPException) as blocked:
+        run(users.update_user_membership_status(
+            "admin-b", UserStatusIn(status="inactive"), admin_a, access_a,
+        ))
+
+    assert blocked.value.status_code == 409
+    assert database.raw.tenant_memberships.find_one({"id": "mbr-admin-b"})["status"] == "active"
+    assert database.raw.tenant_memberships.count_documents({
+        "tenantId": TENANT_A, "role": "admin", "status": "active",
+    }) == 1
 
 
 def test_create_user_compensates_identity_and_new_company_when_membership_fails(

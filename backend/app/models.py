@@ -564,9 +564,13 @@ class PaymentRecordIn(BaseModel):
 class CreateUserIn(BaseModel):
     name: str
     email: str
-    role: Literal["sales", "customer"]
+    role: Literal["admin", "sales", "customer"]
     companyId: Optional[str] = None
     newCompany: Optional[NewCompanyIn] = None
+
+
+class UserStatusIn(BaseModel):
+    status: Literal["active", "inactive"]
 
 
 class ForgotPwIn(BaseModel):

@@ -16,7 +16,7 @@ from ..auth_security import (
 )
 from ..core import api_router, db, gen_reset_code, hash_pw, random_password
 from ..deps import require_roles, tenant_business_access
-from ..models import CreateUserIn
+from ..models import CreateUserIn, UserStatusIn
 from ..tenant_access import TenantBusinessAccess
 from ..tenancy import MongoMembershipDirectory
 from ..emailer import email_shell, send_email
@@ -284,3 +284,59 @@ async def admin_reset_password(
         "id": user_id, "email": identity["email"],
         "invitationQueued": bool(invitation),
     }
+
+
+@api_router.put("/users/{user_id}/status")
+async def update_user_membership_status(
+    user_id: str,
+    body: UserStatusIn,
+    admin: Annotated[dict, Depends(require_roles("admin"))],
+    access: Annotated[TenantBusinessAccess, Depends(tenant_business_access)],
+):
+    membership = await access.tenant_memberships.find_one({"userId": user_id})
+    if not membership:
+        raise HTTPException(status_code=404, detail="Benutzer nicht gefunden")
+    if body.status == "inactive" and user_id == admin["id"]:
+        raise HTTPException(status_code=409, detail="Das eigene Administratorkonto kann nicht deaktiviert werden")
+    if body.status == "inactive" and membership.get("role") == "admin":
+        active_admins = await access.tenant_memberships.find({
+            "role": "admin", "status": "active",
+        }).to_list(2)
+        if len(active_admins) <= 1:
+            raise HTTPException(status_code=409, detail="Der letzte aktive Administrator kann nicht deaktiviert werden")
+    if body.status == "active":
+        identity = await db.users.find_one({"id": user_id})
+        if not identity or identity.get("active") is False:
+            raise HTTPException(status_code=409, detail="Die globale Identität ist nicht aktiv")
+    if membership.get("status") == body.status:
+        return {"ok": True, "id": user_id, "status": body.status, "idempotentReplay": True}
+    now = datetime.now(timezone.utc).isoformat()
+    updated = await access.tenant_memberships.update_one(
+        {"id": membership["id"], "status": membership.get("status")},
+        {"$set": {"status": body.status, "updatedAt": now}},
+    )
+    if updated.modified_count != 1:
+        raise HTTPException(status_code=409, detail="Benutzerstatus wurde parallel geändert")
+    if body.status == "inactive" and membership.get("role") == "admin":
+        remaining_admin = await access.tenant_memberships.find_one({
+            "role": "admin", "status": "active",
+        })
+        if remaining_admin is None:
+            rollback = await access.tenant_memberships.update_one(
+                {"id": membership["id"], "status": "inactive"},
+                {"$set": {"status": "active", "updatedAt": now}},
+            )
+            if rollback.modified_count != 1:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Administratorstatus konnte nicht sicher aktualisiert werden",
+                )
+            raise HTTPException(
+                status_code=409,
+                detail="Der letzte aktive Administrator kann nicht deaktiviert werden",
+            )
+    await tenant_audit(
+        access, admin, "membership.status.update", membership["id"],
+        {"userId": user_id, "status": body.status},
+    )
+    return {"ok": True, "id": user_id, "status": body.status, "idempotentReplay": False}

@@ -62,19 +62,28 @@ async def capability_snapshot(database) -> dict[str, Any]:
         "appliedVersion": latest_applied,
     }
 
+    payments_enabled = (os.getenv("PAYMENTS_ENABLED") or "").strip().lower() in {"1", "true", "yes", "on"}
     stripe_key = (os.getenv("STRIPE_API_KEY") or "").strip()
     webhook_secret = (os.getenv("STRIPE_WEBHOOK_SECRET") or "").strip()
-    if not stripe_key and not webhook_secret:
+    if not payments_enabled:
         capabilities["payments"] = _status("not_configured", "Zahlungen nicht konfiguriert")
     elif stripe_key.startswith(("sk_test_", "sk_live_")) and webhook_secret.startswith("whsec_"):
         capabilities["payments"] = _status("available", "Zahlungsanbindung konfiguriert")
     else:
         capabilities["payments"] = _status("degraded", "Zahlungskonfiguration unvollständig")
 
-    email_status, email_message = email_configuration_status()
-    capabilities["email"] = _status(email_status, email_message)
-    storage_status, storage_message = storage_configuration_status()
-    capabilities["storage"] = _status(storage_status, storage_message)
+    email_enabled = (os.getenv("EMAIL_ENABLED") or "").strip().lower() in {"1", "true", "yes", "on"}
+    if email_enabled:
+        email_status, email_message = email_configuration_status()
+        capabilities["email"] = _status(email_status, email_message)
+    else:
+        capabilities["email"] = _status("not_configured", "E-Mail-Versand nicht aktiviert")
+    storage_enabled = (os.getenv("STORAGE_ENABLED") or "").strip().lower() in {"1", "true", "yes", "on"}
+    if storage_enabled:
+        storage_status, storage_message = storage_configuration_status()
+        capabilities["storage"] = _status(storage_status, storage_message)
+    else:
+        capabilities["storage"] = _status("not_configured", "Dateispeicher nicht aktiviert")
 
     jobs_enabled = (os.getenv("BACKGROUND_JOBS_ENABLED") or "").strip().lower() in {"1", "true", "yes"}
     worker_active = False

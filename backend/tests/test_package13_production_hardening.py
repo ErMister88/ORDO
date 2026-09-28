@@ -15,6 +15,7 @@ os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("TENANCY_MODE", "single")
 os.environ.setdefault("DEFAULT_TENANT_ID", "tnt_ss_0001")
 
+from app.capabilities import capability_snapshot
 from app.migrations.registry import get_migrations
 from app.migrations.versions import v0013_production_hardening as migration13
 from app.pagination import bounded_list, validate_page
@@ -25,7 +26,11 @@ from app.tenant_access import TenantBusinessAccess, TenantScopeViolation
 from app.tenancy import TenantContext, TenantResolutionSource
 from test_customer_commerce_platform import AsyncCollection, AsyncCursor, run
 from test_package11_operational_reliability import CapabilityDatabase
-from scripts.validate_production import build_report
+from scripts.validate_production import (
+    build_release_gate,
+    build_report,
+    report_is_ready_for_environment,
+)
 
 
 class AggregationCollection(AsyncCollection):
@@ -213,6 +218,134 @@ def test_complete_validator_includes_database_and_exact_schema(monkeypatch):
     assert report["status"] == "READY"
     assert report["runtime"]["capabilities"]["schema"]["expectedVersion"] == 17
     assert report["runtime"]["capabilities"]["schema"]["appliedVersion"] == 17
+
+
+def test_release_gate_separates_staging_from_production_requirements():
+    configuration = {"ready": True}
+    runtime = {
+        "ready": True,
+        "capabilities": {
+            name: {"status": "not_configured"}
+            for name in (
+                "payments", "storage", "email", "background_jobs", "accounting", "backups",
+            )
+        },
+    }
+
+    gate = build_release_gate(
+        configuration, runtime, {"APP_ENV": " staging "},
+    )
+
+    assert gate["staging"] == {"status": "READY", "ready": True}
+    assert gate["production"]["status"] == "NOT_READY"
+    assert set(gate["production"]["missingCapabilities"]) == {
+        "payments", "storage", "email", "background_jobs", "accounting", "backups",
+    }
+
+
+def test_production_release_gate_requires_all_providers_and_operator_acceptance():
+    capabilities = {
+        name: {"status": "available"}
+        for name in (
+            "payments", "storage", "email", "background_jobs", "accounting", "backups",
+        )
+    }
+    environment = production_environment()
+    configuration = {
+        "ready": True,
+        "checks": [
+            {"name": name, "status": "configured"}
+            for name in ("payments", "storage", "email", "worker", "accounting")
+        ],
+    }
+    gate = build_release_gate(
+        configuration, {"ready": True, "capabilities": capabilities}, environment,
+    )
+    assert gate["production"]["status"] == "NOT_READY"
+    assert gate["production"]["missingCapabilities"] == []
+    assert set(gate["production"]["acknowledgements"].values()) == {False}
+
+    environment.update({
+        "PRODUCTION_ACCOUNTING_DECISIONS_CONFIRMED": "true",
+        "PRODUCTION_RESTORE_VERIFIED": "true",
+        "PRODUCTION_MONITORING_ENABLED": "true",
+    })
+    ready = build_release_gate(
+        configuration, {"ready": True, "capabilities": capabilities}, environment,
+    )
+    assert ready["production"]["status"] == "READY"
+    assert ready["production"]["ready"] is True
+
+
+def test_release_gate_never_reports_wrong_environment_or_degraded_runtime_ready():
+    capabilities = {
+        name: {"status": "available"}
+        for name in (
+            "payments", "storage", "email", "background_jobs", "accounting", "backups",
+        )
+    }
+    acknowledgements = {
+        "PRODUCTION_ACCOUNTING_DECISIONS_CONFIRMED": "true",
+        "PRODUCTION_RESTORE_VERIFIED": "true",
+        "PRODUCTION_MONITORING_ENABLED": "true",
+    }
+    configuration = {
+        "ready": True,
+        "checks": [
+            {"name": name, "status": "configured"}
+            for name in ("payments", "storage", "email", "worker", "accounting")
+        ],
+    }
+    for app_env, runtime_ready in (("production-now", True), ("production", False)):
+        gate = build_release_gate(
+            configuration,
+            {"ready": runtime_ready, "capabilities": capabilities},
+            {"APP_ENV": app_env, **acknowledgements},
+        )
+        assert gate["staging"]["ready"] is False
+        assert gate["production"]["ready"] is False
+
+
+def test_validator_exit_status_uses_environment_specific_release_gate():
+    report = {
+        "ready": True,
+        "releaseGate": {
+            "staging": {"ready": True},
+            "production": {"ready": False},
+        },
+    }
+    assert report_is_ready_for_environment(report, {"APP_ENV": "staging"}) is True
+    assert report_is_ready_for_environment(report, {"APP_ENV": "production"}) is False
+    assert report_is_ready_for_environment(report, {"APP_ENV": "test"}) is True
+
+
+def test_runtime_capabilities_do_not_activate_providers_from_credentials_alone(
+    monkeypatch,
+):
+    database = CapabilityDatabase("package14_provider_flags")
+    for migration in get_migrations():
+        database.raw.schema_migrations.insert_one({
+            "version": migration.version, "status": "completed", "checksum": migration.checksum,
+        })
+    monkeypatch.setenv("STRIPE_API_KEY", "sk_test_" + "a" * 48)
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_" + "b" * 32)
+    monkeypatch.setenv("STORAGE_BACKEND", "s3")
+    monkeypatch.setenv("S3_BUCKET", "ordo-test")
+    monkeypatch.setenv("S3_REGION", "eu-central-1")
+    monkeypatch.setenv("S3_ACCESS_KEY_ID", "A" * 20)
+    monkeypatch.setenv("S3_SECRET_ACCESS_KEY", "c" * 40)
+    monkeypatch.setenv("EMAIL_BACKEND", "smtp")
+    monkeypatch.setenv("SMTP_HOST", "smtp.ordo.example")
+    monkeypatch.setenv("SMTP_FROM_EMAIL", "no-reply@ordo.example")
+    for name in ("PAYMENTS_ENABLED", "STORAGE_ENABLED", "EMAIL_ENABLED"):
+        monkeypatch.setenv(name, "false")
+
+    result = run(capability_snapshot(database))
+
+    assert {
+        result["capabilities"][name]["status"]
+        for name in ("payments", "storage", "email")
+    } == {"not_configured"}
 
 
 def test_pagination_bounds_and_offset_are_enforced_without_unbounded_reads():

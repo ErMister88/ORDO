@@ -12,14 +12,16 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArrowLeft, Plus, Key, CaretDown } from "phosphor-react-native";
 
 import { makeStyles, useTheme } from "@/src/theme";
-import { apiGet, apiPost } from "@/src/api/client";
+import { apiGet, apiPost, apiPut } from "@/src/api/client";
+import { useAuth } from "@/src/auth/auth";
 import { Card, Input, Button, SectionTitle, Muted } from "@/src/components/ui";
 import { LocalizedText as Text, useI18n } from "@/src/i18n";
 
-type Role = "sales" | "customer";
+type Role = "admin" | "sales" | "customer";
 type CompanyMode = "existing" | "new";
 
 export default function Benutzer() {
+  const { user } = useAuth();
   const { tf } = useI18n();
   const styles = useStyles();
   const { colors } = useTheme();
@@ -75,6 +77,13 @@ export default function Benutzer() {
     onSuccess: (r: any) => setMsg(r.invitationQueued ? "Sicherer Passwortreset wurde vorgemerkt." : "Passwort wurde gesperrt; die Einladung konnte nicht vorgemerkt werden."),
   });
 
+  const updateStatus = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: "active" | "inactive" }) =>
+      apiPut(`/users/${id}/status`, { status }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["users"] }),
+    onError: (e: any) => setMsg(e.message || "Status konnte nicht geändert werden"),
+  });
+
   const submit = () => {
     setMsg("");
     if (!name.trim()) return setMsg("Bitte Name eingeben");
@@ -122,7 +131,7 @@ export default function Benutzer() {
 
               <Text style={styles.label}>Kontotyp</Text>
               <View style={styles.segment}>
-                {(["sales", "customer"] as Role[]).map((r) => (
+                {(["admin", "sales", "customer"] as Role[]).map((r) => (
                   <Pressable
                     key={r}
                     testID={`role-${r}`}
@@ -130,7 +139,7 @@ export default function Benutzer() {
                     onPress={() => setRole(r)}
                   >
                     <Text style={[styles.segText, role === r && styles.segTextActive]}>
-                      {r === "sales" ? "Vertrieb" : "Kunde"}
+                      {roleLabel(r)}
                     </Text>
                   </Pressable>
                 ))}
@@ -222,17 +231,31 @@ export default function Benutzer() {
                   </Muted>
                   <Muted>{u.identityActive && u.status === "active" ? "Aktiv" : "Inaktiv"}{u.role === "sales" ? ` · ${tf("{count} zugewiesene Kunden", { count: u.assignedCustomerCount ?? 0 })}` : ""}</Muted>
                 </View>
-                {u.role !== "admin" && (
-                  <Pressable
-                    testID={`reset-user-${u.id}`}
-                    style={styles.resetBtn}
-                    onPress={() => resetPw.mutate(u.id)}
-                    hitSlop={6}
-                  >
-                    <Key size={16} color={colors.brandPrimary} weight="bold" />
-                    <Text style={styles.resetText}>Passwort</Text>
-                  </Pressable>
-                )}
+                <View style={styles.userActions}>
+                  {u.id !== user?.id && (
+                    <Pressable
+                      testID={`reset-user-${u.id}`}
+                      style={styles.resetBtn}
+                      onPress={() => resetPw.mutate(u.id)}
+                      hitSlop={6}
+                    >
+                      <Key size={16} color={colors.brandPrimary} weight="bold" />
+                      <Text style={styles.resetText}>Passwort</Text>
+                    </Pressable>
+                  )}
+                  {u.id !== user?.id && (
+                    <Button
+                      testID={`status-user-${u.id}`}
+                      title={u.status === "active" ? "Deaktivieren" : "Aktivieren"}
+                      kind="secondary"
+                      loading={updateStatus.isPending && updateStatus.variables?.id === u.id}
+                      onPress={() => updateStatus.mutate({
+                        id: u.id,
+                        status: u.status === "active" ? "inactive" : "active",
+                      })}
+                    />
+                  )}
+                </View>
               </View>
             </Card>
           ))}
@@ -280,7 +303,8 @@ const useStyles = makeStyles((c) => ({
   selectText: { fontSize: 15, fontWeight: "600", color: c.onSurface },
   option: { backgroundColor: c.surfaceTertiary, borderRadius: 10, paddingHorizontal: 16, paddingVertical: 12, marginTop: 4 },
   optionText: { fontSize: 15, color: c.onSurfaceSecondary },
-  userRow: { flexDirection: "row", alignItems: "center", gap: 12 },
+  userRow: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 12 },
+  userActions: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 8 },
   userName: { fontSize: 15, fontWeight: "800", color: c.onSurface },
   resetBtn: {
     flexDirection: "row",

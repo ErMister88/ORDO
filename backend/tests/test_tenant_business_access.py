@@ -1781,6 +1781,7 @@ def test_audit_callsites_are_explicitly_classified():
         ("shop.py", "shop_order_status"),
         ("users.py", "membership.create"),
         ("users.py", "membership.identity_reset"),
+        ("users.py", "membership.status.update"),
     ])
     assert sorted(global_calls) == sorted([
         ("auth.py", "login"),
